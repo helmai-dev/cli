@@ -11,7 +11,7 @@ export interface ProjectMeta {
 
 export function ensureProjectSlug(cwd: string): ProjectMeta {
   const helmDir = path.join(cwd, '.helm');
-  const metaPath = path.join(helmDir, 'project.json');
+  const metaPath = path.join(helmDir, 'manifest.json');
 
   // If already present, keep stable
   if (fs.existsSync(metaPath)) {
@@ -44,7 +44,7 @@ export function ensureProjectSlug(cwd: string): ProjectMeta {
 
 export function loadProjectSlug(cwd: string): string | null {
   try {
-    const metaPath = path.join(cwd, '.helm', 'project.json');
+    const metaPath = path.join(cwd, '.helm', 'manifest.json');
     if (!fs.existsSync(metaPath)) return null;
     const parsed = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as ProjectMeta;
     return parsed?.project_slug ?? null;
@@ -55,7 +55,7 @@ export function loadProjectSlug(cwd: string): string | null {
 
 export function loadProjectMeta(cwd: string): ProjectMeta | null {
   try {
-    const metaPath = path.join(cwd, '.helm', 'project.json');
+    const metaPath = path.join(cwd, '.helm', 'manifest.json');
     if (!fs.existsSync(metaPath)) return null;
     const parsed = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as ProjectMeta;
     return parsed?.project_slug ? parsed : null;
@@ -69,7 +69,7 @@ export function saveProjectMeta(cwd: string, meta: ProjectMeta): void {
   if (!fs.existsSync(helmDir)) {
     fs.mkdirSync(helmDir, { recursive: true });
   }
-  fs.writeFileSync(path.join(helmDir, 'project.json'), JSON.stringify(meta, null, 2));
+  fs.writeFileSync(path.join(helmDir, 'manifest.json'), JSON.stringify(meta, null, 2));
 }
 
 export function deriveProjectSlug(cwd: string): { slug: string; source: 'git-remote' | 'dir' } {

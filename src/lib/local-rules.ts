@@ -36,7 +36,7 @@ for (const [primary, synonyms] of Object.entries(SYNONYM_MAP)) {
 }
 
 export function findRulesFile(cwd: string): string | null {
-  const helmRules = path.join(cwd, '.helm', 'rules.md');
+  const helmRules = path.join(cwd, '.helm', 'standing-orders.md');
   if (fs.existsSync(helmRules)) return helmRules;
 
   const claude = path.join(cwd, 'CLAUDE.md');

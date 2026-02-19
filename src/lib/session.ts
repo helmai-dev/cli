@@ -14,7 +14,7 @@ interface SessionState {
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 function getStatePath(cwd: string): string {
-  return path.join(cwd, '.helm', 'state.json');
+  return path.join(cwd, '.helm', 'bearing.json');
 }
 
 function loadState(cwd: string): SessionState | null {

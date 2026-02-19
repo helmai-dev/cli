@@ -9,8 +9,8 @@ if command -v helm >/dev/null 2>&1; then
   helm qc --staged || exit $?
 elif [ -x "./node_modules/.bin/helm" ]; then
   ./node_modules/.bin/helm qc --staged || exit $?
-elif [ -x ".helm/quality-gate" ]; then
-  HELM_STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACMR)" ./.helm/quality-gate || exit $?
+elif [ -x ".helm/inspection" ]; then
+  HELM_STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACMR)" ./.helm/inspection || exit $?
 fi
 ${END_MARKER}`;
 

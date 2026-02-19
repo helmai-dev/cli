@@ -151,7 +151,7 @@ program
 const rule = program.command('rule').description('Manage project rules');
 
 rule.command('add')
-    .description('Add a rule to .helm/rules.md')
+    .description('Add a rule to .helm/standing-orders.md')
     .argument('<text>', 'The rule text to add')
     .option(
         '--section <section>',

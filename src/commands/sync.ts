@@ -31,14 +31,14 @@ async function pullSync(cwd: string): Promise<void> {
   try {
     const data = await api.sync();
 
-    // Cache to .helm/cloud-rules.json
+    // Cache to .helm/fleet-orders.json
     const helmDir = path.join(cwd, '.helm');
     if (!fs.existsSync(helmDir)) {
       fs.mkdirSync(helmDir, { recursive: true });
     }
 
     fs.writeFileSync(
-      path.join(helmDir, 'cloud-rules.json'),
+      path.join(helmDir, 'fleet-orders.json'),
       JSON.stringify(data, null, 2),
     );
 
@@ -61,7 +61,7 @@ async function pullSync(cwd: string): Promise<void> {
       console.log(chalk.gray(`  Projects: ${data.projects.map(p => p.name).join(', ')}`));
     }
 
-    console.log(chalk.gray(`  Cached to .helm/cloud-rules.json`));
+    console.log(chalk.gray(`  Cached to .helm/fleet-orders.json`));
   } catch (error) {
     spinner.fail('Sync failed');
     console.log(chalk.red(`  ${error instanceof Error ? error.message : 'Unknown error'}`));
@@ -70,10 +70,10 @@ async function pullSync(cwd: string): Promise<void> {
 }
 
 async function pushRules(cwd: string): Promise<void> {
-  const rulesPath = path.join(cwd, '.helm', 'rules.md');
+  const rulesPath = path.join(cwd, '.helm', 'standing-orders.md');
 
   if (!fs.existsSync(rulesPath)) {
-    console.log(chalk.red('No .helm/rules.md found. Run `helm init` first.'));
+    console.log(chalk.red('No .helm/standing-orders.md found. Run `helm init` first.'));
     process.exit(1);
   }
 

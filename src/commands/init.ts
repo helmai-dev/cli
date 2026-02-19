@@ -349,7 +349,7 @@ async function runOnboardingIfNeeded(
     nonInteractive: boolean,
 ): Promise<void> {
     const helmDir = path.join(cwd, '.helm');
-    const hasOnboarding = fs.existsSync(path.join(helmDir, 'onboarding.json'));
+    const hasOnboarding = fs.existsSync(path.join(helmDir, 'embark.json'));
 
     if (!hasOnboarding) {
         await pullCloudCache(cwd);
@@ -387,13 +387,13 @@ async function buildRulesAndScan(cwd: string, stack: string[]): Promise<void> {
         default_skills: suggestSkills(stack),
     };
     fs.writeFileSync(
-        path.join(helmDir, 'scan.json'),
+        path.join(helmDir, 'sounding.json'),
         JSON.stringify(scan, null, 2),
     );
 
     const codebaseMap = scanCodebase(cwd);
     fs.writeFileSync(
-        path.join(helmDir, 'codebase-map.json'),
+        path.join(helmDir, 'cartography.json'),
         JSON.stringify(codebaseMap, null, 2),
     );
     mapSpinner.succeed(`Indexed ${codebaseMap.file_count} files`);
@@ -413,7 +413,7 @@ async function buildRulesAndScan(cwd: string, stack: string[]): Promise<void> {
     }
 
     // Write onboarding stub (no interactive questions in streamlined flow)
-    const onboardingPath = path.join(helmDir, 'onboarding.json');
+    const onboardingPath = path.join(helmDir, 'embark.json');
     if (!fs.existsSync(onboardingPath)) {
         fs.writeFileSync(
             onboardingPath,
@@ -421,8 +421,8 @@ async function buildRulesAndScan(cwd: string, stack: string[]): Promise<void> {
         );
     }
 
-    // Create rules.md from detected stack
-    const rulesPath = path.join(helmDir, 'rules.md');
+    // Create standing-orders.md from detected stack
+    const rulesPath = path.join(helmDir, 'standing-orders.md');
     const template = buildOpinionatedRules({
         stack,
         scan: { scripts },
@@ -431,7 +431,7 @@ async function buildRulesAndScan(cwd: string, stack: string[]): Promise<void> {
     });
     fs.writeFileSync(rulesPath, template);
 
-    console.log(chalk.green('✓ Generated .helm/rules.md from detected stack'));
+    console.log(chalk.green('✓ Generated .helm/standing-orders.md from detected stack'));
 }
 
 function printInitSummary(options: {
@@ -475,7 +475,7 @@ function printInitSummary(options: {
     if (rulesExists) {
         console.log(
             chalk.green(
-                `  ✓ Rules file created: .helm/rules.md (${rulesLines} lines)`,
+                `  ✓ Rules file created: .helm/standing-orders.md (${rulesLines} lines)`,
             ),
         );
     }
@@ -612,9 +612,9 @@ async function handleTeamInit(
     }
 
     // Backup existing rules if present
-    const rulesPath = path.join(helmDir, 'rules.md');
+    const rulesPath = path.join(helmDir, 'standing-orders.md');
     if (fs.existsSync(rulesPath)) {
-        const backupPath = path.join(helmDir, `rules.backup.${Date.now()}.md`);
+        const backupPath = path.join(helmDir, `standing-orders.backup.${Date.now()}.md`);
         fs.copyFileSync(rulesPath, backupPath);
         console.log(
             chalk.gray(
@@ -626,9 +626,9 @@ async function handleTeamInit(
     // Write team rules from the invite config (no per-item confirmation — admin pre-approved)
     const teamRulesContent = buildTeamRulesContent(teamData);
     fs.writeFileSync(rulesPath, teamRulesContent);
-    console.log(chalk.green(`✓ Written team rules to .helm/rules.md`));
+    console.log(chalk.green(`✓ Written team rules to .helm/standing-orders.md`));
 
-    // Save cloud-sync.json with the team config
+    // Save harbor.json with the team config
     const cloudSync = {
         organization: {
             ulid: teamData.organization.slug,
@@ -641,7 +641,7 @@ async function handleTeamInit(
         synced_at: new Date().toISOString(),
     };
     fs.writeFileSync(
-        path.join(helmDir, 'cloud-sync.json'),
+        path.join(helmDir, 'harbor.json'),
         JSON.stringify(cloudSync, null, 2),
     );
 
@@ -676,15 +676,49 @@ async function handleTeamInit(
         detectedIDEs,
         stack,
     );
-    const onboardingTasks = await seedAdmiralOnboardingTasksIfNeeded(
-        cwd,
-        stack,
-        projectMeta,
-        {
-            enabled: options.onboardingTasks !== false,
-            force: Boolean(options.forceOnboardingTasks),
-        },
-    );
+
+    // Link project to server — server creates onboarding tasks
+    let serverTaskIds: string[] = [];
+    try {
+        const scripts = findProjectScripts(cwd);
+        const qualityHints = detectQualityToolHints(cwd, scripts);
+        const hasAgentInstructions = hasAgentInstructionsFile(cwd);
+        const existingRulesFileNames = scanExistingRulesFiles(cwd).map(
+            (f) => f.name,
+        );
+
+        const linkResult = await api.linkProject({
+            name: path.basename(cwd),
+            slug: projectMeta.project_slug,
+            stack: stack.length > 0 ? stack : undefined,
+            quality_hints:
+                qualityHints.length > 0 ? qualityHints : undefined,
+            has_agent_instructions: hasAgentInstructions,
+            scripts:
+                Object.keys(scripts).length > 0 ? scripts : undefined,
+            existing_rules_files:
+                existingRulesFileNames.length > 0
+                    ? existingRulesFileNames
+                    : undefined,
+        });
+        serverTaskIds = linkResult.onboarding_tasks ?? [];
+    } catch {
+        // Non-fatal — server may be unreachable
+    }
+
+    // Fall back to local task creation if server didn't create them
+    const onboardingTasks =
+        serverTaskIds.length > 0
+            ? { createdTaskIds: serverTaskIds, skippedReason: null }
+            : await seedAdmiralOnboardingTasksIfNeeded(
+                  cwd,
+                  stack,
+                  projectMeta,
+                  {
+                      enabled: options.onboardingTasks !== false,
+                      force: Boolean(options.forceOnboardingTasks),
+                  },
+              );
 
     // Print team summary
     const teamName = teamData.organization.name;
@@ -708,7 +742,7 @@ async function handleTeamInit(
     if (onboardingTasks.createdTaskIds.length > 0) {
         console.log(
             chalk.green(
-                `  ✓ Admiral onboarding tasks created: ${onboardingTasks.createdTaskIds.length}`,
+                `  ✓ ${onboardingTasks.createdTaskIds.length} onboarding task(s) ready in Admiral`,
             ),
         );
     }
@@ -722,7 +756,7 @@ async function handleTeamInit(
 }
 
 /**
- * Build a rules.md content string from the team invite config.
+ * Build a standing-orders.md content string from the team invite config.
  * Concatenates all rule sections into a single markdown document.
  */
 function buildTeamRulesContent(
@@ -794,7 +828,7 @@ async function askScopeQuestion(nonInteractive = false): Promise<void> {
 
 function populateProjectsCacheFromSync(cwd: string): void {
     try {
-        const syncPath = path.join(cwd, '.helm', 'cloud-sync.json');
+        const syncPath = path.join(cwd, '.helm', 'harbor.json');
         if (!fs.existsSync(syncPath)) return;
 
         const syncData = JSON.parse(fs.readFileSync(syncPath, 'utf-8')) as {
@@ -832,7 +866,7 @@ async function pullCloudCache(cwd: string): Promise<void> {
         }
 
         fs.writeFileSync(
-            path.join(helmDir, 'cloud-sync.json'),
+            path.join(helmDir, 'harbor.json'),
             JSON.stringify(data, null, 2),
         );
         spinner.succeed(`Synced from ${data.organization.name}`);
@@ -848,15 +882,15 @@ async function pullCloudCache(cwd: string): Promise<void> {
 
 function suggestSkills(stack: string[]): string[] {
     const skills: string[] = [];
-    if (stack.includes('laravel')) skills.push('laravel-12');
     if (stack.includes('pest')) skills.push('pest-testing');
     if (stack.includes('inertia') || stack.includes('react'))
-        skills.push('inertia-react');
-    if (stack.includes('tailwind')) skills.push('tailwindcss');
+        skills.push('inertia-react-development');
+    if (stack.includes('tailwind')) skills.push('tailwindcss-development');
+    if (stack.includes('wayfinder')) skills.push('wayfinder-development');
     return skills;
 }
 
-function findProjectScripts(cwd: string): Record<string, string> {
+export function findProjectScripts(cwd: string): Record<string, string> {
     const scripts: Record<string, string> = {};
     const pkg = path.join(cwd, 'package.json');
     if (fs.existsSync(pkg)) {
@@ -916,7 +950,7 @@ async function seedAdmiralOnboardingTasksIfNeeded(
     }
 
     const helmDir = path.join(cwd, '.helm');
-    const statePath = path.join(helmDir, 'onboarding-tasks.json');
+    const statePath = path.join(helmDir, 'voyage.json');
 
     if (!options.force && fs.existsSync(statePath)) {
         try {
@@ -952,9 +986,9 @@ async function seedAdmiralOnboardingTasksIfNeeded(
             template: 'investigation' as const,
             profile: 'strong_thinking' as const,
             priority: 1 as const,
-            title: 'Onboarding: map architecture into .helm/reality.md',
+            title: 'Onboarding: map architecture into .helm/chart.md',
             description: [
-                'Explore the codebase and create `.helm/reality.md` as a concise architecture quick reference.',
+                'Explore the codebase and create `.helm/chart.md` as a concise architecture quick reference.',
                 '',
                 'Include:',
                 '- Architecture overview (how requests/flows move through the system)',
@@ -972,20 +1006,20 @@ async function seedAdmiralOnboardingTasksIfNeeded(
             template: 'chore' as const,
             profile: 'implementation' as const,
             priority: 2 as const,
-            title: 'Onboarding: generate .helm/setup.sh and .helm/run.yml',
+            title: 'Onboarding: generate .helm/rig.sh and .helm/crew.yml',
             description: [
                 'Investigate local dev setup/run patterns and generate:',
-                '- `.helm/setup.sh` (idempotent bootstrap script)',
-                '- `.helm/run.yml` (long-lived process definitions)',
+                '- `.helm/rig.sh` (idempotent bootstrap script)',
+                '- `.helm/crew.yml` (long-lived process definitions)',
                 '',
                 'Look for existing patterns first: `README.md`, `package.json` scripts, `composer.json` scripts, `Makefile`, `docker-compose*`, `Procfile`, CI workflows.',
                 '',
-                'Requirements for `.helm/setup.sh`:',
+                'Requirements for `.helm/rig.sh`:',
                 '- Safe to run repeatedly',
                 '- Installs dependencies and performs one-time app setup',
                 '- Echoes key URLs/paths at the end for machine detection',
                 '',
-                'Requirements for `.helm/run.yml`:',
+                'Requirements for `.helm/crew.yml`:',
                 '- Includes all processes needed for a usable dev environment',
                 '- Commands should be production-like but local-friendly',
             ].join('\n'),
@@ -995,9 +1029,9 @@ async function seedAdmiralOnboardingTasksIfNeeded(
             template: 'chore' as const,
             profile: 'implementation' as const,
             priority: 2 as const,
-            title: 'Onboarding: generate .helm/quality-gate and harden helm qc',
+            title: 'Onboarding: generate .helm/inspection and harden helm qc',
             description: [
-                'Detect quality tools used by this project and create `.helm/quality-gate`.',
+                'Detect quality tools used by this project and create `.helm/inspection`.',
                 '',
                 'Use only tools that actually exist. Auto-fix first, then fail only on remaining issues. Scope checks to staged files where possible, then re-stage fixed files.',
                 '',
@@ -1085,7 +1119,7 @@ async function seedAdmiralOnboardingTasksIfNeeded(
     };
 }
 
-function hasAgentInstructionsFile(cwd: string): boolean {
+export function hasAgentInstructionsFile(cwd: string): boolean {
     const candidates = [
         'AGENTS.md',
         'CLAUDE.md',
@@ -1102,7 +1136,7 @@ function hasAgentInstructionsFile(cwd: string): boolean {
     return false;
 }
 
-function detectQualityToolHints(
+export function detectQualityToolHints(
     cwd: string,
     scripts: Record<string, string>,
 ): string[] {
@@ -1218,7 +1252,7 @@ function buildOpinionatedRules(input: {
 }
 
 async function offerRulesUpload(cwd: string): Promise<void> {
-    const rulesPath = path.join(cwd, '.helm', 'rules.md');
+    const rulesPath = path.join(cwd, '.helm', 'standing-orders.md');
 
     if (!fs.existsSync(rulesPath)) {
         return;
@@ -1231,7 +1265,7 @@ async function offerRulesUpload(cwd: string): Promise<void> {
 
     const lineCount = content.split('\n').length;
     console.log(
-        chalk.cyan(`\n📋 Found existing .helm/rules.md (${lineCount} lines)\n`),
+        chalk.cyan(`\n📋 Found existing .helm/standing-orders.md (${lineCount} lines)\n`),
     );
 
     const { upload } = await inquirer.prompt<{ upload: boolean }>([

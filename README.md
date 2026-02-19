@@ -46,7 +46,7 @@ This detects your IDE and coding agents, authenticates via browser, and connects
 
 | Command | Description |
 |---|---|
-| `helm rule add <text>` | Add a rule to `.helm/rules.md` |
+| `helm rule add <text>` | Add a rule to `.helm/standing-orders.md` |
 | `helm save [title]` | Save a knowledge snippet for context injection |
 | `helm sync` | Pull rules from your organization |
 | `helm sync --push` | Push local rules to your organization |

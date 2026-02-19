@@ -10,10 +10,10 @@ interface RuleAddOptions {
 export async function ruleAddCommand(ruleText: string, options: RuleAddOptions = {}): Promise<void> {
   const cwd = process.cwd();
   const helmDir = path.join(cwd, '.helm');
-  const rulesPath = path.join(helmDir, 'rules.md');
+  const rulesPath = path.join(helmDir, 'standing-orders.md');
   const sectionId = options.section ?? 'workflow';
 
-  // Bootstrap .helm/rules.md if it doesn't exist
+  // Bootstrap .helm/standing-orders.md if it doesn't exist
   if (!fs.existsSync(helmDir)) {
     fs.mkdirSync(helmDir, { recursive: true });
   }
@@ -43,10 +43,10 @@ export async function ruleAddCommand(ruleText: string, options: RuleAddOptions =
       '',
     ].join('\n');
     fs.writeFileSync(rulesPath, markdown.trimEnd() + '\n' + newSection + '\n');
-    console.log(chalk.green(`✓ Added rule to new section "${sectionId}" in .helm/rules.md`));
+    console.log(chalk.green(`✓ Added rule to new section "${sectionId}" in .helm/standing-orders.md`));
   } else {
     fs.writeFileSync(rulesPath, updated);
-    console.log(chalk.green(`✓ Added rule to "${sectionId}" section in .helm/rules.md`));
+    console.log(chalk.green(`✓ Added rule to "${sectionId}" section in .helm/standing-orders.md`));
   }
 
   // Auto-push to cloud if credentials exist

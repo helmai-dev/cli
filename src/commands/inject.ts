@@ -112,7 +112,7 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
         }
 
         // Initial cloud-sync if no local cache exists yet (non-blocking best-effort)
-        const cloudSyncPath = path.join(cwd, '.helm', 'cloud-sync.json');
+        const cloudSyncPath = path.join(cwd, '.helm', 'harbor.json');
         if (!fs.existsSync(cloudSyncPath)) {
             refreshCloudSyncIfStale(cwd).catch(() => {});
         }
@@ -131,7 +131,7 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
         let keyFiles:
             | Array<{ path: string; type: string; name: string }>
             | undefined;
-        const cloudMapPath = path.join(cwd, '.helm', 'codebase-map.json');
+        const cloudMapPath = path.join(cwd, '.helm', 'cartography.json');
         if (fs.existsSync(cloudMapPath)) {
             try {
                 const cloudMap = JSON.parse(
@@ -212,7 +212,7 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
             // Don't break injection if we can't write metadata
         }
 
-        // Update cloud-sync.json in the background when config_version changes
+        // Update harbor.json in the background when config_version changes
         if (result.config) {
             updateCloudSyncFromInjectResponse(cwd, result).catch(() => {});
         }
@@ -402,7 +402,7 @@ async function autoLinkProject(
 }
 
 async function refreshCloudSyncIfStale(cwd: string): Promise<void> {
-    const cloudSyncPath = path.join(cwd, '.helm', 'cloud-sync.json');
+    const cloudSyncPath = path.join(cwd, '.helm', 'harbor.json');
 
     if (fs.existsSync(cloudSyncPath)) {
         try {
@@ -449,7 +449,7 @@ function loadCloudSync(cwd: string): {
     config_version?: number;
     synced_at?: string;
 } | null {
-    const filePath = path.join(cwd, '.helm', 'cloud-sync.json');
+    const filePath = path.join(cwd, '.helm', 'harbor.json');
     if (!fs.existsSync(filePath)) {
         return null;
     }
@@ -468,7 +468,7 @@ function loadCloudSync(cwd: string): {
 }
 
 /**
- * Update cloud-sync.json from inject response config when config_version changes.
+ * Update harbor.json from inject response config when config_version changes.
  * Runs in background (caller should .catch(() => {})).
  */
 async function updateCloudSyncFromInjectResponse(
@@ -508,7 +508,7 @@ async function updateCloudSyncFromInjectResponse(
 
     fs.mkdirSync(path.join(cwd, '.helm'), { recursive: true });
     fs.writeFileSync(
-        path.join(cwd, '.helm', 'cloud-sync.json'),
+        path.join(cwd, '.helm', 'harbor.json'),
         JSON.stringify(updated, null, 2),
     );
 

@@ -15,7 +15,7 @@ interface OnboardingState {
 
 export function trackOnboardingProgress(cwd: string): OnboardingProgress {
   const helmDir = path.join(cwd, '.helm');
-  const statePath = path.join(helmDir, 'onboarding-state.json');
+  const statePath = path.join(helmDir, 'embark-state.json');
 
   try {
     if (!fs.existsSync(helmDir)) {

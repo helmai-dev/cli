@@ -132,7 +132,7 @@ export interface InjectResponse {
         active_sessions: number;
         top_rule_fired: string | null;
     };
-    /** Full team config for local caching; update cloud-sync.json when config_version changes */
+    /** Full team config for local caching; update harbor.json when config_version changes */
     config?: {
         config_version: number;
         rules: Array<{

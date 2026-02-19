@@ -199,7 +199,7 @@ To manually clear stale sessions: remove files from \`.helm/sessions/\`.`,
       title: 'Helm Features Overview',
       content: `Helm enhances AI coding agents with project-aware context injection. Key features:
 
-- **Rules**: Project-specific coding standards injected into every prompt. Managed via \`helm rule add\` or \`.helm/rules.md\`.
+- **Rules**: Project-specific coding standards injected into every prompt. Managed via \`helm rule add\` or \`.helm/standing-orders.md\`.
 - **Knowledge**: Reusable context snippets (global in \`~/.helm/knowledge.json\`, project in \`.helm/knowledge/*.md\`).
 - **Concurrent session detection**: Automatically warns when multiple agents work on the same branch.
 - **Capability routing**: Detects prompt intent (testing, frontend, browser automation) and activates specialist behaviors.
