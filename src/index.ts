@@ -10,6 +10,7 @@ import { cleanCommand } from './commands/clean.js';
 import { initCommand } from './commands/init.js';
 import { injectCommand } from './commands/inject.js';
 import { linkCommand } from './commands/link.js';
+import { projectCommand } from './commands/project.js';
 import {
     mcpsConfigureCommand,
     mcpsInstallCommand,
@@ -100,17 +101,25 @@ program
 
 program
     .command('sync')
-    .description('Sync rules with Helm Cloud')
-    .option('--push', 'Push local rules to Helm Cloud', false)
+    .description('Sync rules with your Helm organization')
+    .option('--push', 'Push local rules to your organization', false)
     .action(async (options: { push?: boolean }) => {
         await syncCommand(options);
     });
 
 program
     .command('link')
-    .description('Link this project to Helm Cloud')
+    .description('Link this project to Helm')
     .action(async () => {
         await linkCommand();
+    });
+
+program
+    .command('project')
+    .description('Create or link a project to Helm Admiral')
+    .option('--link <slug>', 'Link to an existing Admiral project by slug or ULID')
+    .action(async (options: { link?: string }) => {
+        await projectCommand(options);
     });
 
 program
@@ -299,7 +308,7 @@ program
         const apiUrl = getApiUrl();
 
         if (!credentials) {
-            console.log(chalk.yellow('\nNot connected to Helm Cloud.'));
+            console.log(chalk.yellow('\nNot connected to Helm.'));
             console.log(chalk.white('Run `helm init` to get started.\n'));
             return;
         }

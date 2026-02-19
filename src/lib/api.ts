@@ -329,3 +329,60 @@ export async function createAdmiralTask(
         body: JSON.stringify(data),
     });
 }
+
+export interface DeviceCodeResponse {
+    device_code: string;
+    user_code: string;
+    verification_url: string;
+    expires_in: number;
+    interval: number;
+}
+
+export async function createDeviceCode(): Promise<DeviceCodeResponse> {
+    return request<DeviceCodeResponse>(
+        '/auth/device',
+        {
+            method: 'POST',
+        },
+        false,
+    );
+}
+
+export interface DeviceTokenResponse {
+    api_key: string;
+    user: { id: string; name: string; email: string };
+    organization: { id: string; name: string; slug: string };
+}
+
+export interface DeviceTokenPendingResponse {
+    error: 'authorization_pending' | 'expired_token' | 'invalid_device_code';
+}
+
+export async function pollDeviceToken(
+    deviceCode: string,
+): Promise<DeviceTokenResponse | DeviceTokenPendingResponse> {
+    const apiUrl = getApiUrl();
+    const url = `${apiUrl}/api/v1/auth/token`;
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+        },
+        body: JSON.stringify({ device_code: deviceCode }),
+    });
+
+    return response.json() as Promise<
+        DeviceTokenResponse | DeviceTokenPendingResponse
+    >;
+}
+
+export async function saveUserAgents(
+    agents: string[],
+): Promise<{ agents: string[] }> {
+    return request<{ agents: string[] }>('/users/agents', {
+        method: 'POST',
+        body: JSON.stringify({ agents }),
+    });
+}

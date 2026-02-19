@@ -162,4 +162,7 @@ echo "Installed $HELM_BIN_NAME v$resolved_version to $install_dir/$HELM_BIN_NAME
 if [[ "$platform" == "windows" ]] && [[ ":$PATH:" != *":$install_dir:"* ]]; then
   echo "Tip: add $install_dir to PATH to run helm from anywhere."
 fi
-echo "Tip: export HELM_INSTALL_SOURCE=curl to keep update routing explicit."
+
+echo ""
+echo "Running initial setup..."
+HELM_INSTALL_SOURCE=curl "$install_dir/$HELM_BIN_NAME" init

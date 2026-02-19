@@ -26,7 +26,7 @@ export async function syncCommand(options: SyncOptions): Promise<void> {
 }
 
 async function pullSync(cwd: string): Promise<void> {
-  const spinner = ora('Syncing from Helm Cloud...').start();
+  const spinner = ora('Syncing from your organization...').start();
 
   try {
     const data = await api.sync();
@@ -77,7 +77,7 @@ async function pushRules(cwd: string): Promise<void> {
     process.exit(1);
   }
 
-  const spinner = ora('Pushing local rules to Helm Cloud...').start();
+  const spinner = ora('Pushing local rules to your organization...').start();
 
   try {
     const content = fs.readFileSync(rulesPath, 'utf-8');
@@ -99,7 +99,7 @@ async function pushRules(cwd: string): Promise<void> {
       throw new Error(`Push failed: ${response.status}`);
     }
 
-    spinner.succeed('Pushed local rules to Helm Cloud');
+    spinner.succeed('Pushed local rules to your organization');
     console.log(chalk.gray('  Your team can now access these rules.'));
   } catch (error) {
     spinner.fail('Push failed');

@@ -28,7 +28,7 @@ Also works with `pnpm add -g @helmai/cli` and `bun add -g @helmai/cli`.
 helm init
 ```
 
-This detects your IDE, installs the prompt hooks, and connects to [Helm Cloud](https://tryhelm.ai) for team rule sync and Admiral agent orchestration.
+This detects your IDE and coding agents, authenticates via browser, and connects to [Helm](https://tryhelm.ai) for team rule sync and Admiral agent orchestration.
 
 ## Commands
 
@@ -38,7 +38,7 @@ This detects your IDE, installs the prompt hooks, and connects to [Helm Cloud](h
 |---|---|
 | `helm init` | Set up Helm in your project or globally |
 | `helm status` | Show current config, detected IDEs, and stack |
-| `helm dashboard` | Open the Helm Cloud dashboard |
+| `helm dashboard` | Open the Helm dashboard |
 | `helm update` | Update to the latest version |
 | `helm logout` | Clear saved credentials |
 
@@ -48,9 +48,10 @@ This detects your IDE, installs the prompt hooks, and connects to [Helm Cloud](h
 |---|---|
 | `helm rule add <text>` | Add a rule to `.helm/rules.md` |
 | `helm save [title]` | Save a knowledge snippet for context injection |
-| `helm sync` | Pull rules from Helm Cloud |
-| `helm sync --push` | Push local rules to Helm Cloud |
-| `helm link` | Link this project to Helm Cloud |
+| `helm sync` | Pull rules from your organization |
+| `helm sync --push` | Push local rules to your organization |
+| `helm link` | Link this project to Helm |
+| `helm project` | Create or link a project to Helm Admiral |
 
 ### MCPs
 

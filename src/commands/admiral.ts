@@ -24,7 +24,7 @@ export async function admiralPickupCommand(
 
     if (!credentials) {
         console.log(
-            chalk.yellow('Not connected to Helm Cloud. Run `helm init` first.'),
+            chalk.yellow('Not connected to Helm. Run `helm init` first.'),
         );
         process.exit(1);
     }
@@ -60,7 +60,7 @@ export async function admiralHandoffCommand(
 
     if (!credentials) {
         console.log(
-            chalk.yellow('Not connected to Helm Cloud. Run `helm init` first.'),
+            chalk.yellow('Not connected to Helm. Run `helm init` first.'),
         );
         process.exit(1);
     }

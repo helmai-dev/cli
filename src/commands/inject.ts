@@ -83,7 +83,7 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
     }
 
     if (!credentials) {
-        stderrInfo('Run `helm init` to connect to Helm Cloud');
+        stderrInfo('Run `helm init` to connect to Helm');
         console.log(prompt);
         process.exit(0);
     }
@@ -100,7 +100,7 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
             if (!linked) {
                 if (!hasHintedLinkForSlug(slug)) {
                     stderrInfo(
-                        'Could not auto-link this project to Helm Cloud. Run "helm link" to connect it manually.',
+                        'Could not auto-link this project. Run "helm project" to connect it manually.',
                     );
                     markLinkHintShown(slug);
                 }
@@ -231,7 +231,7 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
             installNewMcpsInBackground(result.config.mcps).catch(() => {});
         }
     } catch {
-        stderrWarn('Helm Cloud injection failed — passing prompt through unchanged.');
+        stderrWarn('Helm injection failed — passing prompt through unchanged.');
         console.log(prompt);
     }
 
@@ -392,7 +392,7 @@ async function autoLinkProject(
         }
 
         stderrSuccess(
-            `Auto-linked project "${response.project.name}" to Helm Cloud`,
+            `Auto-linked project "${response.project.name}" to Helm`,
         );
 
         return true;

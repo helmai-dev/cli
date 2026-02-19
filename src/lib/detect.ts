@@ -151,6 +151,12 @@ export function detectAgentRuntimes(): AgentRuntime[] {
             commands: ['gemini'],
             paths: [path.join(home, '.gemini')],
         },
+        {
+            key: 'amp',
+            label: 'Amp',
+            commands: ['amp'],
+            paths: [path.join(home, '.config', 'amp')],
+        },
     ];
 
     return candidates.map((candidate) => {

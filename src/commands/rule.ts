@@ -104,7 +104,7 @@ async function tryCloudSync(rulesPath: string): Promise<void> {
     });
 
     if (response.ok) {
-      console.log(chalk.green('  ↑ Synced to Helm Cloud'));
+      console.log(chalk.green('  ↑ Synced to your organization'));
     } else {
       console.log(chalk.yellow('  ⚠ Cloud sync failed — push later with `helm sync --push`'));
     }

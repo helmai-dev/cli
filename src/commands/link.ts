@@ -18,7 +18,7 @@ export async function linkCommand(): Promise<void> {
   const cwd = process.cwd();
   const derived = deriveProjectSlug(cwd);
 
-  console.log(chalk.cyan.bold('\n  ⎈ Link Project to Helm Cloud\n'));
+  console.log(chalk.cyan.bold('\n  ⎈ Link Project\n'));
   console.log(chalk.gray(`  Detected slug: ${derived.slug} (from ${derived.source})\n`));
 
   // Fetch org projects
@@ -72,7 +72,7 @@ export async function linkCommand(): Promise<void> {
       }]);
 
       const stack = detectStack(cwd);
-      const createSpinner = ora('Creating project in Helm Cloud...').start();
+      const createSpinner = ora('Creating project...').start();
 
       try {
         const result = await api.linkProject({
@@ -142,8 +142,8 @@ export async function linkCommand(): Promise<void> {
   // Ensure .gitignore has .helm/
   ensureGitignore(cwd);
 
-  console.log(chalk.green('\n✓ Project linked to Helm Cloud.'));
-  console.log(chalk.gray('  Cloud rules and analytics are now active for this project.'));
+  console.log(chalk.green('\n✓ Project linked to Helm.'));
+  console.log(chalk.gray('  Organization rules and analytics are now active for this project.'));
   console.log(chalk.gray('  Run `helm sync` to pull the latest rules.\n'));
 }
 

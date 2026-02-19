@@ -2,11 +2,13 @@ import chalk from 'chalk';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import inquirer from 'inquirer';
+import open from 'open';
 import ora from 'ora';
 import * as os from 'os';
 import * as path from 'path';
 import * as api from '../lib/api.js';
 import { printBanner } from '../lib/branding.js';
+import { browserAuth } from '../lib/browser-auth.js';
 import { scanCodebase } from '../lib/codebase-scan.js';
 import {
     detectInstallSourceFromEnvironment,
@@ -49,14 +51,13 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
     printBanner();
 
     const nonInteractive = Boolean(options.yes);
-    const cwd = process.cwd();
 
     const inferredInstallSource = detectInstallSourceFromEnvironment();
     if (inferredInstallSource !== 'unknown') {
         setInstallSource(inferredInstallSource);
     }
 
-    // Step 1: Detect IDEs, agent runtimes, and stack
+    // Step 1: Detect IDEs and agent runtimes
     const spinner = ora('Detecting your environment...').start();
     const ides = detectIDEs();
     const detectedIDEs = ides.filter((ide) => ide.detected);
@@ -64,7 +65,6 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
     const detectedAgentRuntimes = agentRuntimes.filter(
         (runtime) => runtime.detected,
     );
-    const stack = detectStack(cwd);
     spinner.succeed('Environment detected');
 
     // Show detected IDEs
@@ -101,173 +101,107 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
         nonInteractive,
     );
 
-    // Step 2: Confirm detected stack (1 prompt)
-    if (stack.length > 0) {
-        const stackLabel = stack
-            .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
-            .join(' + ');
-        console.log('');
-
-        let stackConfirmed = true;
-        if (!nonInteractive) {
-            const { confirm } = await inquirer.prompt<{ confirm: boolean }>([
-                {
-                    type: 'confirm',
-                    name: 'confirm',
-                    message: `We detected: ${stackLabel}. Correct?`,
-                    default: true,
-                },
-            ]);
-            stackConfirmed = confirm;
-        } else {
-            console.log(chalk.gray(`  Stack: ${stackLabel} (auto-confirmed)`));
-        }
-
-        if (!stackConfirmed) {
-            console.log(
-                chalk.gray(
-                    '  Stack detection skipped. Rules will use generic defaults.',
-                ),
-            );
-        }
-    } else {
-        console.log(
-            chalk.yellow(
-                '   No specific stack detected. Using generic rules template.',
-            ),
-        );
-    }
-
-    // Step 3: Check for existing credentials
+    // Step 2: Authenticate via browser (or use existing credentials)
     const existingCredentials = loadCredentials();
     if (existingCredentials) {
-        const useExisting = nonInteractive ? true : await promptUseExisting();
+        console.log(chalk.green('\n  ✓ Already authenticated with Helm.'));
 
-        if (useExisting) {
-            const existingConfig = loadConfig();
-            if (!existingConfig.installationScope) {
-                await askScopeQuestion(nonInteractive);
-            }
+        // Still sync agent runtimes
+        await syncAdmiralMachineCapabilities(
+            selectedAgentRuntimes,
+            detectedIDEs,
+            [],
+        );
 
-            const installedHooks = await installIDEHooks(detectedIDEs);
-            const gitHook = installGitPreCommitHook(cwd);
-            await runOnboardingIfNeeded(cwd, stack, nonInteractive);
-            ensureGitignore(cwd);
-            const projectMeta = ensureProjectSlug(cwd);
-            await syncAdmiralMachineCapabilities(
-                selectedAgentRuntimes,
-                detectedIDEs,
-                stack,
-            );
-            const onboardingTasks = await seedAdmiralOnboardingTasksIfNeeded(
-                cwd,
-                stack,
-                projectMeta,
-                {
-                    enabled: options.onboardingTasks !== false,
-                    force: Boolean(options.forceOnboardingTasks),
-                },
-            );
-
-            printInitSummary({
-                ideHooks: installedHooks,
-                stack,
-                rulesPath: path.join(cwd, '.helm', 'rules.md'),
-                cwd,
-                gitHookInstalled: gitHook.installed,
-                onboardingTasksCreated: onboardingTasks.createdTaskIds.length,
-                mcpsInstalled: [],
-            });
-            return;
+        // Save agents to user profile
+        try {
+            await api.saveUserAgents(selectedAgentRuntimes);
+        } catch {
+            // Non-fatal
         }
+
+        // Install IDE hooks globally
+        const installedHooks = await installIDEHooks(detectedIDEs);
+        if (installedHooks.length > 0) {
+            for (const ide of installedHooks) {
+                console.log(chalk.green(`  ✓ IDE hooks installed: ${ide}`));
+            }
+        }
+
+        printInitNextSteps();
+        await openAdmiral();
+        return;
     }
 
-    // Step 4: Connect to Helm Cloud
+    // Browser-based authentication
+    console.log(chalk.cyan('\n  🔑 Connect to your Helm account\n'));
 
-    // Ask scope (installation scope)
-    await askScopeQuestion(nonInteractive);
-
-    let mcpsInstalled: string[] = [];
-
-    // Step 5: Authenticate (email + password = 2 prompts, or combined as one block)
-    console.log(chalk.cyan('\n🔑 Connect to Helm Cloud:\n'));
-
-    let authChoice: 'register' | 'login' = 'register';
-    if (!nonInteractive) {
-        const result = await inquirer.prompt<{
-            authChoice: 'register' | 'login';
-        }>([
-            {
-                type: 'list',
-                name: 'authChoice',
-                message: 'How would you like to connect?',
-                choices: [
-                    { name: 'Create new account', value: 'register' },
-                    { name: 'I have a Helm account', value: 'login' },
-                ],
-            },
-        ]);
-        authChoice = result.authChoice;
-    }
-
-    if (authChoice === 'register') {
-        await handleRegister(nonInteractive);
-    } else {
+    if (nonInteractive) {
+        // Non-interactive falls back to email/password
         await handleLogin(nonInteractive);
+    } else {
+        await browserAuth();
     }
 
-    // Pull org data to local cache
-    await pullCloudCache(cwd);
-    populateProjectsCacheFromSync(cwd);
-
-    // Build rules + scan codebase (no prompts needed)
-    await buildRulesAndScan(cwd, stack);
-
-    // Fetch and install recommended MCPs for this stack
-    mcpsInstalled = await installRecommendedMcps(
-        stack,
-        detectedIDEs,
-        nonInteractive,
-    );
-
-    // Offer rules upload (skip in non-interactive, or auto-upload)
-    if (!nonInteractive) {
-        await offerRulesUpload(cwd);
+    // Step 3: Save agent runtimes to user profile
+    try {
+        await api.saveUserAgents(selectedAgentRuntimes);
+        console.log(
+            chalk.green('  ✓ Agent runtimes saved to your Helm profile'),
+        );
+    } catch {
+        // Non-fatal
     }
 
+    // Step 4: Sync machine capabilities with Admiral
     await syncAdmiralMachineCapabilities(
         selectedAgentRuntimes,
         detectedIDEs,
-        stack,
+        [],
     );
 
-    // Install IDE hooks automatically
+    // Step 5: Install IDE hooks globally
     const installedHooks = await installIDEHooks(detectedIDEs);
-    const gitHook = installGitPreCommitHook(cwd);
+    if (installedHooks.length > 0) {
+        for (const ide of installedHooks) {
+            console.log(chalk.green(`  ✓ IDE hooks installed: ${ide}`));
+        }
+    }
 
-    // Ensure .helm/ is in .gitignore
-    ensureGitignore(cwd);
-    const projectMeta = ensureProjectSlug(cwd);
-    const onboardingTasks = await seedAdmiralOnboardingTasksIfNeeded(
-        cwd,
-        stack,
-        projectMeta,
-        {
-            enabled: options.onboardingTasks !== false,
-            force: Boolean(options.forceOnboardingTasks),
-        },
+    // Step 6: Direct to Helm Admiral
+    printInitNextSteps();
+    await openAdmiral();
+}
+
+function printInitNextSteps(): void {
+    console.log('');
+    console.log(chalk.cyan.bold('  ⎈ Helm is ready.'));
+    console.log('');
+    console.log(chalk.white('  Next steps:'));
+    console.log(
+        chalk.white(
+            '  1. Create a project in Helm Admiral (opening in browser...)',
+        ),
     );
+    console.log(
+        chalk.white(
+            '  2. Run `helm project` in your project directory to link it',
+        ),
+    );
+    console.log('');
+}
 
-    // Print summary
-    printInitSummary({
-        ideHooks: installedHooks,
-        stack,
-        rulesPath: path.join(cwd, '.helm', 'rules.md'),
-        cwd,
-        gitHookInstalled: gitHook.installed,
-        onboardingTasksCreated: onboardingTasks.createdTaskIds.length,
-        mcpsInstalled,
-    });
+async function openAdmiral(): Promise<void> {
+    const apiUrl = getApiUrl();
+    const admiralUrl = `${apiUrl}/projects/create`;
+
+    console.log(chalk.cyan(`  Opening Helm Admiral: ${admiralUrl}\n`));
+
+    try {
+        await open(admiralUrl, { wait: false });
+    } catch {
+        console.log(chalk.white(`  Open manually: ${admiralUrl}`));
+    }
 }
 
 async function promptUseExisting(): Promise<boolean> {
@@ -572,25 +506,17 @@ function printInitSummary(options: {
     }
 
     // Mode
-    console.log(chalk.green(`  ✓ Mode: Helm Cloud`));
+    console.log(chalk.green(`  ✓ Connected to Helm`));
 
     console.log('');
     console.log(chalk.white('  Next steps:'));
-    console.log(chalk.white('  1. Open Claude Code or Cursor in this project'));
+    console.log(
+        chalk.white(
+            '  1. Run `helm project` in your project directory to link it',
+        ),
+    );
     console.log(
         chalk.white('  2. Start coding — Helm injects context automatically'),
-    );
-    console.log('');
-    console.log(
-        chalk.gray("  Every prompt is now enhanced with your project's rules,"),
-    );
-    console.log(
-        chalk.gray('  knowledge, and structure. No extra steps needed.'),
-    );
-    console.log('');
-    console.log(
-        chalk.cyan('  Try: ') +
-            chalk.white('"Help me understand this codebase"'),
     );
     console.log('');
 }
@@ -637,30 +563,12 @@ async function handleTeamInit(
     // Authenticate (or use existing credentials)
     const existingCredentials = loadCredentials();
     if (!existingCredentials) {
-        console.log(chalk.cyan('\n🔑 Create or connect your Helm account:\n'));
+        console.log(chalk.cyan('\n  🔑 Connect to your Helm account\n'));
 
-        let authChoice: 'register' | 'login' = 'register';
-        if (!nonInteractive) {
-            const result = await inquirer.prompt<{
-                authChoice: 'register' | 'login';
-            }>([
-                {
-                    type: 'list',
-                    name: 'authChoice',
-                    message: 'How would you like to connect?',
-                    choices: [
-                        { name: 'Create new account', value: 'register' },
-                        { name: 'I have a Helm account', value: 'login' },
-                    ],
-                },
-            ]);
-            authChoice = result.authChoice;
-        }
-
-        if (authChoice === 'register') {
-            await handleRegister(nonInteractive);
-        } else {
+        if (nonInteractive) {
             await handleLogin(nonInteractive);
+        } else {
+            await browserAuth();
         }
     } else {
         console.log(chalk.green('✓ Using existing Helm credentials'));
@@ -1330,7 +1238,7 @@ async function offerRulesUpload(cwd: string): Promise<void> {
         {
             type: 'confirm',
             name: 'upload',
-            message: 'Upload your local rules to Helm Cloud?',
+            message: 'Upload your local rules to your organization?',
             default: true,
         },
     ]);
@@ -1364,7 +1272,7 @@ async function offerRulesUpload(cwd: string): Promise<void> {
             throw new Error(`Upload failed: ${response.status}`);
         }
 
-        spinner.succeed('Local rules uploaded to Helm Cloud');
+        spinner.succeed('Local rules uploaded to your organization');
         console.log(
             chalk.gray(
                 '  Your team can now access these rules via `helm sync`.',
