@@ -33,7 +33,6 @@ import { ensureProjectSlug, type ProjectMeta } from '../lib/project.js';
 import type { Credentials, IDE, McpDefinition } from '../types.js';
 
 interface InitOptions {
-    upgrade?: boolean;
     yes?: boolean;
     team?: string;
     onboardingTasks?: boolean;
@@ -41,11 +40,6 @@ interface InitOptions {
 }
 
 export async function initCommand(options: InitOptions = {}): Promise<void> {
-    if (options.upgrade) {
-        await handleUpgrade(options);
-        return;
-    }
-
     // Team invite flow
     if (options.team) {
         await handleTeamInit(options.team, options);
@@ -176,7 +170,6 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
             );
 
             printInitSummary({
-                mode: 'cloud',
                 ideHooks: installedHooks,
                 stack,
                 rulesPath: path.join(cwd, '.helm', 'rules.md'),
@@ -189,93 +182,64 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
         }
     }
 
-    // Step 4: Choose mode (1 prompt)
-    let mode: 'local' | 'cloud' = 'cloud';
-    if (!nonInteractive) {
-        const result = await inquirer.prompt<{ mode: 'local' | 'cloud' }>([
-            {
-                type: 'list',
-                name: 'mode',
-                message: 'How do you want to run Helm?',
-                choices: [
-                    {
-                        name: 'Connect to Helm Cloud (recommended) — sync rules across your org',
-                        value: 'cloud',
-                    },
-                    {
-                        name: 'Local-only — no account required',
-                        value: 'local',
-                    },
-                ],
-                default: 'cloud',
-            },
-        ]);
-        mode = result.mode;
-    } else {
-        console.log(chalk.gray('  Mode: Helm Cloud (auto-selected)'));
-    }
+    // Step 4: Connect to Helm Cloud
 
     // Ask scope (installation scope)
     await askScopeQuestion(nonInteractive);
 
     let mcpsInstalled: string[] = [];
 
-    if (mode === 'cloud') {
-        // Step 5: Authenticate (email + password = 2 prompts, or combined as one block)
-        console.log(chalk.cyan('\n🔑 Connect to Helm Cloud:\n'));
+    // Step 5: Authenticate (email + password = 2 prompts, or combined as one block)
+    console.log(chalk.cyan('\n🔑 Connect to Helm Cloud:\n'));
 
-        let authChoice: 'register' | 'login' = 'register';
-        if (!nonInteractive) {
-            const result = await inquirer.prompt<{
-                authChoice: 'register' | 'login';
-            }>([
-                {
-                    type: 'list',
-                    name: 'authChoice',
-                    message: 'How would you like to connect?',
-                    choices: [
-                        { name: 'Create new account', value: 'register' },
-                        { name: 'I have a Helm account', value: 'login' },
-                    ],
-                },
-            ]);
-            authChoice = result.authChoice;
-        }
-
-        if (authChoice === 'register') {
-            await handleRegister(nonInteractive);
-        } else {
-            await handleLogin(nonInteractive);
-        }
-
-        // Pull org data to local cache
-        await pullCloudCache(cwd);
-        populateProjectsCacheFromSync(cwd);
-
-        // Build rules + scan codebase (no prompts needed)
-        await buildRulesAndScan(cwd, stack);
-
-        // Fetch and install recommended MCPs for this stack
-        mcpsInstalled = await installRecommendedMcps(
-            stack,
-            detectedIDEs,
-            nonInteractive,
-        );
-
-        // Offer rules upload (skip in non-interactive, or auto-upload)
-        if (!nonInteractive) {
-            await offerRulesUpload(cwd);
-        }
-
-        await syncAdmiralMachineCapabilities(
-            selectedAgentRuntimes,
-            detectedIDEs,
-            stack,
-        );
-    } else {
-        console.log(chalk.green('✓ Local-only mode enabled'));
-        await ensureProjectRulesTemplate(cwd, stack);
+    let authChoice: 'register' | 'login' = 'register';
+    if (!nonInteractive) {
+        const result = await inquirer.prompt<{
+            authChoice: 'register' | 'login';
+        }>([
+            {
+                type: 'list',
+                name: 'authChoice',
+                message: 'How would you like to connect?',
+                choices: [
+                    { name: 'Create new account', value: 'register' },
+                    { name: 'I have a Helm account', value: 'login' },
+                ],
+            },
+        ]);
+        authChoice = result.authChoice;
     }
+
+    if (authChoice === 'register') {
+        await handleRegister(nonInteractive);
+    } else {
+        await handleLogin(nonInteractive);
+    }
+
+    // Pull org data to local cache
+    await pullCloudCache(cwd);
+    populateProjectsCacheFromSync(cwd);
+
+    // Build rules + scan codebase (no prompts needed)
+    await buildRulesAndScan(cwd, stack);
+
+    // Fetch and install recommended MCPs for this stack
+    mcpsInstalled = await installRecommendedMcps(
+        stack,
+        detectedIDEs,
+        nonInteractive,
+    );
+
+    // Offer rules upload (skip in non-interactive, or auto-upload)
+    if (!nonInteractive) {
+        await offerRulesUpload(cwd);
+    }
+
+    await syncAdmiralMachineCapabilities(
+        selectedAgentRuntimes,
+        detectedIDEs,
+        stack,
+    );
 
     // Install IDE hooks automatically
     const installedHooks = await installIDEHooks(detectedIDEs);
@@ -284,22 +248,18 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
     // Ensure .helm/ is in .gitignore
     ensureGitignore(cwd);
     const projectMeta = ensureProjectSlug(cwd);
-    const onboardingTasks =
-        mode === 'cloud'
-            ? await seedAdmiralOnboardingTasksIfNeeded(
-                  cwd,
-                  stack,
-                  projectMeta,
-                  {
-                      enabled: options.onboardingTasks !== false,
-                      force: Boolean(options.forceOnboardingTasks),
-                  },
-              )
-            : { createdTaskIds: [], skippedReason: 'local mode' };
+    const onboardingTasks = await seedAdmiralOnboardingTasksIfNeeded(
+        cwd,
+        stack,
+        projectMeta,
+        {
+            enabled: options.onboardingTasks !== false,
+            force: Boolean(options.forceOnboardingTasks),
+        },
+    );
 
     // Print summary
     printInitSummary({
-        mode,
         ideHooks: installedHooks,
         stack,
         rulesPath: path.join(cwd, '.helm', 'rules.md'),
@@ -541,7 +501,6 @@ async function buildRulesAndScan(cwd: string, stack: string[]): Promise<void> {
 }
 
 function printInitSummary(options: {
-    mode: 'local' | 'cloud';
     ideHooks: string[];
     stack: string[];
     rulesPath: string;
@@ -613,8 +572,7 @@ function printInitSummary(options: {
     }
 
     // Mode
-    const modeLabel = options.mode === 'cloud' ? 'Helm Cloud' : 'Local-only';
-    console.log(chalk.green(`  ✓ Mode: ${modeLabel}`));
+    console.log(chalk.green(`  ✓ Mode: Helm Cloud`));
 
     console.log('');
     console.log(chalk.white('  Next steps:'));
@@ -954,53 +912,6 @@ function populateProjectsCacheFromSync(cwd: string): void {
     }
 }
 
-async function handleUpgrade(options: InitOptions = {}): Promise<void> {
-    const nonInteractive = Boolean(options.yes);
-    console.log(chalk.cyan.bold('\n  ⎈ Upgrade to Helm Cloud\n'));
-
-    const existingCredentials = loadCredentials();
-    if (existingCredentials) {
-        console.log(chalk.green('✓ Already connected to Helm Cloud.'));
-        if (!nonInteractive) {
-            await offerRulesUpload(process.cwd());
-        }
-        return;
-    }
-
-    let authChoice: 'register' | 'login' = 'register';
-    if (!nonInteractive) {
-        const result = await inquirer.prompt<{
-            authChoice: 'register' | 'login';
-        }>([
-            {
-                type: 'list',
-                name: 'authChoice',
-                message: 'How would you like to connect?',
-                choices: [
-                    { name: 'Create new account', value: 'register' },
-                    { name: 'I have a Helm account', value: 'login' },
-                ],
-            },
-        ]);
-        authChoice = result.authChoice;
-    }
-
-    if (authChoice === 'register') {
-        await handleRegister(nonInteractive);
-    } else {
-        await handleLogin(nonInteractive);
-    }
-
-    if (!nonInteractive) {
-        await offerRulesUpload(process.cwd());
-    }
-
-    console.log(
-        chalk.green(
-            '\n✅ Upgrade complete! Your rules now sync with Helm Cloud.\n',
-        ),
-    );
-}
 
 async function pullCloudCache(cwd: string): Promise<void> {
     const spinner = ora('Syncing organization data...').start();
@@ -1596,53 +1507,6 @@ async function handleLogin(nonInteractive = false): Promise<void> {
     void nonInteractive;
 }
 
-async function ensureProjectRulesTemplate(
-    cwd: string,
-    stack: string[],
-): Promise<void> {
-    const helmDir = path.join(cwd, '.helm');
-    const rulesPath = path.join(helmDir, 'rules.md');
-
-    if (!fs.existsSync(helmDir)) {
-        fs.mkdirSync(helmDir, { recursive: true });
-    }
-
-    if (!fs.existsSync(rulesPath)) {
-        const foundFiles = scanExistingRulesFiles(cwd);
-        let importedContent = '';
-
-        if (foundFiles.length > 0) {
-            const result = mergeFoundRules(foundFiles);
-            importedContent = result.markdown;
-            console.log(
-                chalk.green(
-                    `   ✓ Imported ${result.stats.sectionsImported} sections from ${result.stats.filesProcessed} file(s)`,
-                ),
-            );
-        }
-
-        let template = buildStackAwareTemplate(stack);
-
-        if (importedContent.trim()) {
-            // Prepend imported content after the first heading
-            const headingEnd = template.indexOf('\n\n');
-            if (headingEnd !== -1) {
-                template =
-                    template.slice(0, headingEnd + 2) +
-                    importedContent.trim() +
-                    '\n\n' +
-                    template.slice(headingEnd + 2);
-            } else {
-                template = importedContent + '\n' + template;
-            }
-        }
-
-        fs.writeFileSync(rulesPath, template);
-        console.log(
-            chalk.green('✓ Generated .helm/rules.md from detected stack'),
-        );
-    }
-}
 
 function buildStackAwareTemplate(stack: string[]): string {
     const sections: string[] = [];

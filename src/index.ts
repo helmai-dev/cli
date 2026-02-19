@@ -33,7 +33,6 @@ program
 program
     .command('init')
     .description('Set up Helm in your environment')
-    .option('--upgrade', 'Upgrade from local-only to cloud mode', false)
     .option('--yes', 'Non-interactive mode: auto-confirm all prompts', false)
     .option('--team <token>', 'Join a team using an invite token')
     .option(
@@ -47,7 +46,6 @@ program
     )
     .action(
         async (options: {
-            upgrade?: boolean;
             yes?: boolean;
             team?: string;
             onboardingTasks?: boolean;
@@ -61,12 +59,9 @@ program
     .command('inject')
     .description('Inject context into a prompt (used by IDE hooks)')
     .option('--format <format>', 'Output format (claude, cursor)', 'claude')
-    .option('--local', 'Force local-only injection (no network)', false)
-    .action(
-        async (options: { format?: 'claude' | 'cursor'; local?: boolean }) => {
-            await injectCommand(options);
-        },
-    );
+    .action(async (options: { format?: 'claude' | 'cursor' }) => {
+        await injectCommand(options);
+    });
 
 program
     .command('capture')

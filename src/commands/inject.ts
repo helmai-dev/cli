@@ -2,29 +2,17 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as api from '../lib/api.js';
 import {
-    injectionFooter,
-    injectionPreamble,
     stderrHeader,
     stderrInfo,
     stderrSuccess,
     stderrWarn,
 } from '../lib/branding.js';
 import {
-    getRecommendations,
     persistCapabilities,
     routeCapabilities,
     type RoutedCapability,
 } from '../lib/capability-router.js';
-import {
-    generateStructureSummary,
-    matchRelevantFiles,
-    type CodebaseMap,
-} from '../lib/codebase-scan.js';
-import { detectComplexity } from '../lib/complexity.js';
-import {
-    detectConcurrentSessions,
-    writeSessionHeartbeat,
-} from '../lib/concurrent.js';
+import { type CodebaseMap } from '../lib/codebase-scan.js';
 import {
     hasHintedLinkForSlug,
     loadConfig,
@@ -34,17 +22,6 @@ import {
     saveProjectsCache,
 } from '../lib/config.js';
 import { detectIDEs, detectStack, getCurrentBranch } from '../lib/detect.js';
-import {
-    loadBuiltinKnowledge,
-    loadKnowledge,
-    loadProjectKnowledge,
-    selectRelevantKnowledge,
-} from '../lib/knowledge.js';
-import {
-    findRulesFile,
-    parseRuleSections,
-    selectRelevantSections,
-} from '../lib/local-rules.js';
 import { installMcpIntoIde, isMcpInstalled } from '../lib/mcp-installer.js';
 import {
     trackOnboardingProgress,
@@ -55,17 +32,14 @@ import {
     loadProjectSlug,
     saveProjectMeta,
 } from '../lib/project.js';
-import { getOrCreateSession, getSessionState } from '../lib/session.js';
+import { getOrCreateSession } from '../lib/session.js';
 import { checkForUpdate } from '../lib/update-check.js';
 import type { InjectResponse, McpDefinition } from '../types.js';
 
 interface InjectOptions {
     format?: 'claude' | 'cursor';
-    local?: boolean;
 }
 
-const NUDGE_THRESHOLD = 50;
-const NUDGE_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000; // 1 week
 const CLOUD_SYNC_TTL_MS = 10 * 60 * 1000;
 
 export async function injectCommand(options: InjectOptions): Promise<void> {
@@ -102,24 +76,16 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
     persistCapabilities(cwd, routedCapabilities);
 
     const credentials = loadCredentials();
-    const forceLocal = Boolean(options.local) || !credentials;
 
     // In project mode, ensure stable project identity
     if (installScope === 'project') {
         ensureProjectSlug(cwd);
     }
 
-    if (forceLocal) {
-        const enhanced = buildLocalEnhancedPrompt({
-            cwd,
-            prompt,
-            capabilities: routedCapabilities,
-            onboarding,
-        });
-        console.log(enhanced);
-        maybeNudgeUpgrade(cwd);
-        checkForUpdate();
-        return;
+    if (!credentials) {
+        stderrInfo('Run `helm init` to connect to Helm Cloud');
+        console.log(prompt);
+        process.exit(0);
     }
 
     // Global mode: ensure project is linked to Cloud automatically
@@ -139,13 +105,7 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
                     markLinkHintShown(slug);
                 }
 
-                const enhanced = buildLocalEnhancedPrompt({
-                    cwd,
-                    prompt,
-                    capabilities: routedCapabilities,
-                    onboarding,
-                });
-                console.log(enhanced);
+                console.log(prompt);
                 checkForUpdate();
                 return;
             }
@@ -163,9 +123,6 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
         ensureProjectSlug(cwd);
         const branch = getCurrentBranch(cwd);
         const sessionId = getOrCreateSession(cwd, branch);
-
-        // Write heartbeat for concurrent session detection
-        writeSessionHeartbeat(cwd, sessionId, branch);
 
         const projectSlug =
             loadProjectSlug(cwd) ?? ensureProjectSlug(cwd).project_slug;
@@ -274,14 +231,8 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
             installNewMcpsInBackground(result.config.mcps).catch(() => {});
         }
     } catch {
-        // fallback to local injection rather than passthrough
-        const enhanced = buildLocalEnhancedPrompt({
-            cwd,
-            prompt,
-            capabilities: routedCapabilities,
-            onboarding,
-        });
-        console.log(enhanced);
+        stderrWarn('Helm Cloud injection failed — passing prompt through unchanged.');
+        console.log(prompt);
     }
 
     checkForUpdate();
@@ -616,250 +567,6 @@ async function installNewMcpsInBackground(
     }
 }
 
-function buildLocalEnhancedPrompt(input: {
-    cwd: string;
-    prompt: string;
-    capabilities: RoutedCapability[];
-    onboarding: OnboardingProgress;
-}): string {
-    // Session heartbeat + concurrent detection
-    const branch = getCurrentBranch(input.cwd);
-    const sessionId = getOrCreateSession(input.cwd, branch);
-    writeSessionHeartbeat(input.cwd, sessionId, branch);
-    const concurrent = detectConcurrentSessions(input.cwd, sessionId);
-
-    const rulesFile = findRulesFile(input.cwd);
-    let sectionsText = '';
-    let injectedSectionIds: string[] = [];
-
-    if (rulesFile) {
-        try {
-            const raw = fs.readFileSync(rulesFile, 'utf-8');
-            const sections = parseRuleSections(raw);
-            const relevant = selectRelevantSections(input.prompt, sections, 4);
-
-            if (relevant.length > 0) {
-                injectedSectionIds = relevant.map((s) => s.id);
-                sectionsText = relevant
-                    .map((s) => `### ${s.id}\n${s.content.trim()}`)
-                    .join('\n\n');
-            }
-        } catch {
-            // ignore
-        }
-    }
-
-    // Merge built-in + project + global knowledge, dedupe by title
-    const builtinKnowledge = loadBuiltinKnowledge();
-    const globalKnowledge = loadKnowledge();
-    const projectKnowledge = loadProjectKnowledge(input.cwd);
-    const seen = new Set<string>();
-    const allKnowledge = [
-        ...projectKnowledge,
-        ...globalKnowledge,
-        ...builtinKnowledge,
-    ].filter((k) => {
-        const key = k.title.toLowerCase();
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
-
-    const knowledge = selectRelevantKnowledge(input.prompt, allKnowledge, 3);
-    const knowledgeText = knowledge
-        .map(
-            (k) =>
-                `### ${k.title}${k.tags.length ? ` (tags: ${k.tags.join(', ')})` : ''}\n${k.content.trim()}`,
-        )
-        .join('\n\n');
-
-    // Load codebase map if available
-    let structureSummary = '';
-    let codebaseMap: CodebaseMap | null = null;
-    const mapPath = path.join(input.cwd, '.helm', 'codebase-map.json');
-    if (fs.existsSync(mapPath)) {
-        try {
-            codebaseMap = JSON.parse(
-                fs.readFileSync(mapPath, 'utf-8'),
-            ) as CodebaseMap;
-            structureSummary = generateStructureSummary(codebaseMap);
-        } catch {
-            // ignore
-        }
-    }
-
-    // Smart file matching — find files most relevant to this prompt
-    const relevantFiles = codebaseMap
-        ? matchRelevantFiles(
-              input.prompt,
-              input.capabilities.map((c) => c.id),
-              codebaseMap,
-          )
-        : [];
-
-    // Complexity detection
-    const complexity = detectComplexity(input.prompt, input.capabilities);
-
-    // Diagnostic output on stderr (visible to user in terminal)
-    const parts: string[] = [];
-    if (injectedSectionIds.length > 0) {
-        parts.push(`${injectedSectionIds.length} rule(s)`);
-    }
-    if (knowledge.length > 0) {
-        parts.push(`${knowledge.length} knowledge snippet(s)`);
-    }
-    if (structureSummary) {
-        parts.push('project map');
-    }
-    if (relevantFiles.length > 0) {
-        parts.push(`${relevantFiles.length} relevant file(s)`);
-    }
-    if (input.capabilities.length > 0) {
-        parts.push(`${input.capabilities.length} capability(ies)`);
-    }
-    if (complexity.level !== 'moderate') {
-        parts.push(`complexity:${complexity.level}`);
-    }
-    if (input.onboarding.stage_id && input.onboarding.stage_title) {
-        parts.push(`onboarding:${input.onboarding.stage_title.toLowerCase()}`);
-    }
-    if (concurrent) {
-        stderrWarn(`${concurrent.count} concurrent session(s) detected`);
-    }
-    if (parts.length > 0) {
-        stderrSuccess(`Injected ${parts.join(' + ')}`);
-    }
-
-    const blocks: string[] = [];
-
-    // Concurrent session warning — injected FIRST so the agent sees it immediately
-    if (concurrent) {
-        const sessionDescriptions = concurrent.sessions
-            .map((s) => {
-                const parts = [s.ide ?? 'unknown IDE'];
-                if (s.branch) parts.push(`on branch ${s.branch}`);
-                if (s.user) parts.push(`(${s.user})`);
-                return parts.join(' ');
-            })
-            .join('; ');
-
-        const sameBranch = concurrent.sessions.some((s) => s.branch === branch);
-
-        let directive: string;
-        if (sameBranch) {
-            directive = `⚠ **CONCURRENT SESSION DETECTED**: ${concurrent.count} other agent(s) are currently active on this project (${sessionDescriptions}), working on the SAME branch (\`${branch ?? 'unknown'}\`).
-
-**You MUST create a new git worktree or branch before making any changes.** Do not work directly on \`${branch ?? 'main'}\` — you will conflict with the other session(s).
-
-Run: \`git worktree add ../worktree-<short-description> -b helm/<short-description>\` or at minimum \`git checkout -b helm/<short-description>\` before writing any code.`;
-        } else {
-            directive = `ℹ **Concurrent sessions active**: ${concurrent.count} other agent(s) are working on this project (${sessionDescriptions}). They are on different branches, so no action needed — just be aware.`;
-        }
-
-        blocks.push(`## Session\n${directive}`);
-    }
-
-    // Recommendations — actionable steps the agent should take for this prompt
-    const recommendations = getRecommendations(input.capabilities);
-    if (recommendations.length > 0) {
-        const recLines = recommendations
-            .map((r) => {
-                const icon =
-                    r.type === 'skill'
-                        ? '⚡'
-                        : r.type === 'tool'
-                          ? '🔧'
-                          : r.type === 'file'
-                            ? '📄'
-                            : '⌨️';
-                return `- ${icon} **${r.action}** — ${r.reason}`;
-            })
-            .join('\n');
-        blocks.push(
-            `## Before You Start\nHelm detected this prompt needs specific setup. Do these first:\n${recLines}`,
-        );
-    }
-
-    if (input.capabilities.length > 0) {
-        const capabilityLines = input.capabilities
-            .map(
-                (capability) =>
-                    `- **${capability.title}**: ${capability.reason}`,
-            )
-            .join('\n');
-        blocks.push(`## Active Capabilities\n${capabilityLines}`);
-    }
-
-    if (
-        input.onboarding.stage_id &&
-        input.onboarding.stage_title &&
-        input.onboarding.stage_instruction
-    ) {
-        blocks.push(
-            `## Onboarding (${input.onboarding.stage_title})\n- ${input.onboarding.stage_instruction}`,
-        );
-    }
-
-    if (relevantFiles.length > 0) {
-        const fileLines = relevantFiles
-            .map((f) => `- \`${f.path}\` (${f.type}) — ${f.reason}`)
-            .join('\n');
-        blocks.push(
-            `## Relevant Files\nThese files are most likely relevant to this prompt. Read them before starting:\n${fileLines}`,
-        );
-    }
-    if (complexity.level !== 'moderate') {
-        blocks.push(`## Complexity\n${complexity.guidance}`);
-    }
-    if (structureSummary) {
-        blocks.push(`## Project Structure\n${structureSummary}`);
-    }
-    if (sectionsText) {
-        blocks.push(`## Rules\n${sectionsText}`);
-    }
-    if (knowledgeText) {
-        blocks.push(`## Knowledge\n${knowledgeText}`);
-    }
-
-    if (blocks.length === 0) {
-        return input.prompt;
-    }
-
-    const preamble = injectionPreamble();
-    const footer = injectionFooter();
-
-    return `<helm>\n${preamble}\n\n${blocks.join('\n\n')}\n\n${footer}\n</helm>\n\n${input.prompt}`;
-}
-
-function maybeNudgeUpgrade(cwd: string): void {
-    try {
-        const state = getSessionState(cwd);
-        if (!state) return;
-
-        if (state.inject_count < NUDGE_THRESHOLD) return;
-
-        // Check cooldown
-        if (state.last_nudge_at) {
-            const elapsed =
-                Date.now() - new Date(state.last_nudge_at).getTime();
-            if (elapsed < NUDGE_COOLDOWN_MS) return;
-        }
-
-        stderrInfo(
-            `${state.inject_count}+ prompts enhanced locally. Cloud adds team rules, summaries, and analytics. Run "helm init" to upgrade.`,
-        );
-
-        // Update last_nudge_at in state.json
-        const statePath = `${cwd}/.helm/state.json`;
-        if (fs.existsSync(statePath)) {
-            const raw = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
-            raw.last_nudge_at = new Date().toISOString();
-            fs.writeFileSync(statePath, JSON.stringify(raw, null, 2));
-        }
-    } catch {
-        // Never break injection for a nudge
-    }
-}
 
 async function readStdin(): Promise<string> {
     return new Promise((resolve) => {
