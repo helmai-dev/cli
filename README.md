@@ -83,9 +83,13 @@ helm init --team <invite-token>  # Join an existing team
 - **Claude Code**
 - **Cursor**
 
-## Helm Cloud
+## Features
 
-[Helm Cloud](https://tryhelm.ai) provides team rule sync, project linking, Admiral agent orchestration, and a web dashboard.
+- **Context injection** — Automatically injects project rules, knowledge, and team context into every AI prompt
+- **Team rule sync** — Share and sync rules across your organization
+- **Admiral** — Orchestrate multiple AI coding agents from a single dashboard
+- **MCP management** — Install, configure, and manage Model Context Protocol servers
+- **Quality checks** — Run pre-commit quality checks powered by your project rules
 
 ## License
 
