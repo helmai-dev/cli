@@ -7,6 +7,8 @@ import * as api from '../lib/api.js';
 import { loadCredentials, loadProjectsCache, saveProjectsCache } from '../lib/config.js';
 import { deriveProjectSlug, saveProjectMeta, loadProjectMeta, type ProjectMeta } from '../lib/project.js';
 import { detectStack } from '../lib/detect.js';
+import { detectQualityToolHints, findProjectScripts, hasAgentInstructionsFile } from './init.js';
+import { scanExistingRulesFiles } from '../lib/local-rules.js';
 
 export async function linkCommand(): Promise<void> {
   const credentials = loadCredentials();
@@ -72,6 +74,10 @@ export async function linkCommand(): Promise<void> {
       }]);
 
       const stack = detectStack(cwd);
+      const scripts = findProjectScripts(cwd);
+      const qualityHints = detectQualityToolHints(cwd, scripts);
+      const hasAgentInstructions = hasAgentInstructionsFile(cwd);
+      const existingRulesFileNames = scanExistingRulesFiles(cwd).map(f => f.name);
       const createSpinner = ora('Creating project...').start();
 
       try {
@@ -79,9 +85,17 @@ export async function linkCommand(): Promise<void> {
           name: projectName,
           slug: derived.slug,
           stack: stack.length > 0 ? stack : undefined,
+          quality_hints: qualityHints.length > 0 ? qualityHints : undefined,
+          has_agent_instructions: hasAgentInstructions,
+          scripts: Object.keys(scripts).length > 0 ? scripts : undefined,
+          existing_rules_files: existingRulesFileNames.length > 0 ? existingRulesFileNames : undefined,
         });
 
         createSpinner.succeed(`Created project "${result.project.name}"`);
+
+        if (result.onboarding_tasks && result.onboarding_tasks.length > 0) {
+          console.log(chalk.green(`  ✓ ${result.onboarding_tasks.length} onboarding task(s) ready in Admiral`));
+        }
 
         const meta: ProjectMeta = {
           project_slug: derived.slug,

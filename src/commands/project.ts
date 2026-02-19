@@ -5,7 +5,7 @@ import ora from 'ora';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as api from '../lib/api.js';
-import { loadCredentials, getApiUrl, loadProjectsCache, saveProjectsCache } from '../lib/config.js';
+import { loadCredentials, getApiUrl, loadProjectsCache, saveProjectsCache, registerProjectPath } from '../lib/config.js';
 import { deriveProjectSlug, saveProjectMeta, loadProjectMeta, type ProjectMeta } from '../lib/project.js';
 import { detectIDEs, detectStack } from '../lib/detect.js';
 import { installHooks } from '../lib/hooks.js';
@@ -40,7 +40,7 @@ export async function projectCommand(options: ProjectOptions = {}): Promise<void
         }]);
 
         if (!relink) {
-            const projectUrl = `${apiUrl}/projects/${existingMeta.cloud_project_id}`;
+            const projectUrl = `${apiUrl}/dashboard?project=${existingMeta.project_slug}`;
             console.log(chalk.cyan(`\n  Opening Admiral: ${projectUrl}\n`));
             try { await open(projectUrl, { wait: false }); } catch { /* */ }
             return;
@@ -215,6 +215,9 @@ async function saveAndFinish(
     // Save project metadata
     saveProjectMeta(cwd, meta);
 
+    // Register in project-paths registry for daemon heartbeat
+    registerProjectPath(meta.project_slug, cwd);
+
     // Update projects cache
     const cache = loadProjectsCache() ?? { projects: [], synced_at: '' };
     if (!cache.projects.some(p => p.slug === meta.project_slug)) {
@@ -252,7 +255,7 @@ async function saveAndFinish(
     console.log('');
 
     // Open Admiral
-    const projectUrl = `${apiUrl}/projects/${projectUlid}`;
+    const projectUrl = `${apiUrl}/dashboard?project=${meta.project_slug}`;
     console.log(chalk.cyan(`  Opening Helm Admiral: ${projectUrl}`));
     console.log('');
 

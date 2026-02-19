@@ -130,6 +130,7 @@ export interface SyncResponse {
         ulid: string;
         name: string;
         slug: string;
+        repository_url: string | null;
         stack: string[] | null;
     }>;
     rules: Array<{
@@ -165,10 +166,15 @@ export interface LinkProjectRequest {
     name: string;
     slug: string;
     stack?: string[];
+    quality_hints?: string[];
+    has_agent_instructions?: boolean;
+    scripts?: Record<string, string>;
+    existing_rules_files?: string[];
 }
 
 export interface LinkProjectResponse {
     project: { ulid: string; name: string; slug: string };
+    onboarding_tasks?: string[];
 }
 
 export async function linkProject(
@@ -385,4 +391,79 @@ export async function saveUserAgents(
         method: 'POST',
         body: JSON.stringify({ agents }),
     });
+}
+
+export interface QualityTool {
+    name: string;
+    command: string;
+    file_types: string[];
+    auto_fix: boolean;
+}
+
+export interface QualityChecksResponse {
+    quality_checks: Array<{
+        identifier: string;
+        title: string;
+        content: string;
+        relevant_skills: string[];
+        relevant_mcps: string[];
+        severity: string;
+    }>;
+    quality_tools: QualityTool[];
+    generated_at: string | null;
+}
+
+export async function getQualityChecks(
+    projectSlug: string,
+): Promise<QualityChecksResponse> {
+    return request<QualityChecksResponse>(
+        `/projects/${encodeURIComponent(projectSlug)}/quality-checks`,
+    );
+}
+
+export interface HeartbeatMachineRequest {
+    local_projects?: Array<{
+        slug: string;
+        local_path?: string | null;
+    }>;
+}
+
+export interface HeartbeatMachineResponse {
+    machine: {
+        id: number;
+        is_online: boolean;
+        last_heartbeat_at: string | null;
+    };
+}
+
+export async function heartbeatMachine(
+    machineId: number,
+    data: HeartbeatMachineRequest = {},
+): Promise<HeartbeatMachineResponse> {
+    return request<HeartbeatMachineResponse>(
+        `/admiral/machines/${machineId}/heartbeat`,
+        {
+            method: 'POST',
+            body: JSON.stringify(data),
+        },
+    );
+}
+
+export interface ProjectSetupInfoResponse {
+    project: {
+        ulid: string;
+        name: string;
+        slug: string;
+        repository_url: string | null;
+        stack: string[] | null;
+        settings: Record<string, unknown> | null;
+    };
+}
+
+export async function getProjectSetupInfo(
+    slug: string,
+): Promise<ProjectSetupInfoResponse> {
+    return request<ProjectSetupInfoResponse>(
+        `/projects/${encodeURIComponent(slug)}/setup-info`,
+    );
 }

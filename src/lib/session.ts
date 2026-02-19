@@ -9,6 +9,7 @@ interface SessionState {
   prompt_count: number;
   inject_count: number;
   last_nudge_at?: string;
+  admiral_task_ulid?: string | null;
 }
 
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
@@ -69,4 +70,17 @@ export function getOrCreateSession(cwd: string, branch: string | null): string {
 
 export function getSessionState(cwd: string): SessionState | null {
   return loadState(cwd);
+}
+
+export function getAdmiralTaskUlid(cwd: string): string | null {
+  const state = loadState(cwd);
+  return state?.admiral_task_ulid ?? null;
+}
+
+export function updateAdmiralTaskUlid(cwd: string, ulid: string): void {
+  const state = loadState(cwd);
+  if (state) {
+    state.admiral_task_ulid = ulid;
+    saveState(cwd, state);
+  }
 }

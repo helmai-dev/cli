@@ -17,6 +17,7 @@ import {
     loadCredentials,
     saveConfig,
     saveCredentials,
+    saveMachineIdentity,
     saveProjectsCache,
     setInstallSource,
 } from '../lib/config.js';
@@ -168,7 +169,20 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
         }
     }
 
-    // Step 6: Direct to Helm Admiral
+    // Step 6: Start daemon for heartbeat
+    try {
+        const { startDaemon } = await import('./daemon.js');
+        const daemonResult = startDaemon();
+        if (daemonResult.started) {
+            console.log(chalk.green('  ✓ Background daemon started (heartbeat every 30s)'));
+        } else if (daemonResult.alreadyRunning) {
+            console.log(chalk.gray('  ℹ Background daemon already running'));
+        }
+    } catch {
+        console.log(chalk.yellow('  Could not start background daemon (continuing).'));
+    }
+
+    // Step 7: Direct to Helm Admiral
     printInitNextSteps();
     await openAdmiral();
 }
@@ -180,7 +194,7 @@ function printInitNextSteps(): void {
     console.log(chalk.white('  Next steps:'));
     console.log(
         chalk.white(
-            '  1. Create a project in Helm Admiral (opening in browser...)',
+            '  1. Create a project on the dashboard (opening in browser...)',
         ),
     );
     console.log(
@@ -193,7 +207,7 @@ function printInitNextSteps(): void {
 
 async function openAdmiral(): Promise<void> {
     const apiUrl = getApiUrl();
-    const admiralUrl = `${apiUrl}/projects/create`;
+    const admiralUrl = `${apiUrl}/dashboard`;
 
     console.log(chalk.cyan(`  Opening Helm Admiral: ${admiralUrl}\n`));
 
@@ -305,7 +319,7 @@ async function syncAdmiralMachineCapabilities(
         .digest('hex');
 
     try {
-        await api.connectAdmiralMachine({
+        const result = await api.connectAdmiralMachine({
             name: machineName,
             fingerprint,
             capabilities: {
@@ -314,6 +328,14 @@ async function syncAdmiralMachineCapabilities(
                 stack,
             },
         });
+
+        saveMachineIdentity({
+            id: result.machine.id,
+            ulid: result.machine.ulid,
+            name: result.machine.name,
+            fingerprint: result.machine.fingerprint,
+        });
+
         console.log(chalk.green('✓ Synced runtime capabilities with Admiral'));
     } catch {
         console.log(

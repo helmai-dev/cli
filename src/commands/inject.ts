@@ -32,7 +32,11 @@ import {
     loadProjectSlug,
     saveProjectMeta,
 } from '../lib/project.js';
-import { getOrCreateSession } from '../lib/session.js';
+import {
+    getAdmiralTaskUlid,
+    getOrCreateSession,
+    updateAdmiralTaskUlid,
+} from '../lib/session.js';
 import { checkForUpdate } from '../lib/update-check.js';
 import type { InjectResponse, McpDefinition } from '../types.js';
 
@@ -145,6 +149,8 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
             }
         }
 
+        const admiralTaskUlid = getAdmiralTaskUlid(cwd);
+
         const result = await api.inject({
             prompt,
             context: {
@@ -158,14 +164,21 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
                 branch: branch || undefined,
                 project_slug: projectSlug,
                 key_files: keyFiles,
+                admiral_task_ulid: admiralTaskUlid ?? undefined,
             },
         });
+
+        if (result.admiral_task_ulid) {
+            updateAdmiralTaskUlid(cwd, result.admiral_task_ulid);
+        }
 
         const memoryMatches = (result.analysis?.injection_matches ?? []).filter(
             (match) =>
                 !match.source.startsWith('rule:') &&
                 !match.source.startsWith('stack:'),
         );
+
+        const currentTaskUlid = result.admiral_task_ulid ?? admiralTaskUlid;
 
         void api
             .streamAdmiralRunEvent({
@@ -183,6 +196,7 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
                     memory_sources: memoryMatches
                         .map((match) => match.source)
                         .slice(0, 5),
+                    admiral_task_ulid: currentTaskUlid ?? undefined,
                 },
             })
             .catch(() => {});

@@ -2,6 +2,10 @@ import chalk from 'chalk';
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 
+import type { QualityTool } from '../lib/api.js';
+import { getQualityChecks } from '../lib/api.js';
+import { loadProjectSlug } from '../lib/project.js';
+
 interface QcOptions {
     staged?: boolean;
 }
@@ -16,50 +20,36 @@ export async function qcCommand(options: QcOptions = {}): Promise<void> {
         return;
     }
 
-    const phpFiles = stagedFiles.filter((file) => file.endsWith('.php'));
-    const jsTsFiles = stagedFiles.filter((file) =>
-        /\.(js|jsx|ts|tsx|mjs|cjs)$/i.test(file),
-    );
+    const tools = await resolveQualityTools(stagedFiles);
 
     let toolsRun = 0;
 
-    if (phpFiles.length > 0 && fs.existsSync('./vendor/bin/pint')) {
-        console.log(
-            chalk.cyan(`→ Running Pint on ${phpFiles.length} PHP file(s)...`),
+    for (const tool of tools) {
+        const matchingFiles = stagedFiles.filter((file) =>
+            tool.file_types.some((ext) => file.endsWith(ext)),
         );
-        runOrFail('./vendor/bin/pint', phpFiles);
-        stageFiles(phpFiles);
-        toolsRun += 1;
-    }
 
-    if (phpFiles.length > 0 && fs.existsSync('./vendor/bin/rector')) {
-        console.log(
-            chalk.cyan(`→ Running Rector on ${phpFiles.length} PHP file(s)...`),
-        );
-        run('./vendor/bin/rector', ['process', ...phpFiles], true);
-        stageFiles(phpFiles);
-        toolsRun += 1;
-    }
+        if (matchingFiles.length === 0) {
+            continue;
+        }
 
-    if (jsTsFiles.length > 0 && fs.existsSync('./node_modules/.bin/prettier')) {
         console.log(
             chalk.cyan(
-                `→ Running Prettier on ${jsTsFiles.length} JS/TS file(s)...`,
+                `→ Running ${tool.name} on ${matchingFiles.length} file(s)...`,
             ),
         );
-        runOrFail('./node_modules/.bin/prettier', ['--write', ...jsTsFiles]);
-        stageFiles(jsTsFiles);
-        toolsRun += 1;
-    }
 
-    if (jsTsFiles.length > 0 && fs.existsSync('./node_modules/.bin/eslint')) {
-        console.log(
-            chalk.cyan(
-                `→ Running ESLint on ${jsTsFiles.length} JS/TS file(s)...`,
-            ),
-        );
-        runOrFail('./node_modules/.bin/eslint', [...jsTsFiles, '--fix']);
-        stageFiles(jsTsFiles);
+        const parts = tool.command.split(/\s+/);
+        const cmd = parts[0];
+        const baseArgs = parts.slice(1);
+
+        if (tool.auto_fix) {
+            runOrFail(cmd, [...baseArgs, ...matchingFiles]);
+        } else {
+            run(cmd, [...baseArgs, ...matchingFiles], true);
+        }
+
+        stageFiles(matchingFiles);
         toolsRun += 1;
     }
 
@@ -71,6 +61,67 @@ export async function qcCommand(options: QcOptions = {}): Promise<void> {
     }
 
     console.log(chalk.green('✓ Helm quality checks passed'));
+}
+
+async function resolveQualityTools(
+    stagedFiles: string[],
+): Promise<QualityTool[]> {
+    const slug = loadProjectSlug(process.cwd());
+
+    if (slug) {
+        try {
+            const response = await getQualityChecks(slug);
+            if (response.quality_tools && response.quality_tools.length > 0) {
+                return response.quality_tools;
+            }
+        } catch {
+            // API unreachable or failed — fall back to local detection
+        }
+    }
+
+    return detectLocalTools();
+}
+
+function detectLocalTools(): QualityTool[] {
+    const tools: QualityTool[] = [];
+
+    if (fs.existsSync('./vendor/bin/pint')) {
+        tools.push({
+            name: 'Pint',
+            command: './vendor/bin/pint',
+            file_types: ['.php'],
+            auto_fix: true,
+        });
+    }
+
+    if (fs.existsSync('./vendor/bin/rector')) {
+        tools.push({
+            name: 'Rector',
+            command: './vendor/bin/rector process',
+            file_types: ['.php'],
+            auto_fix: false,
+        });
+    }
+
+    if (fs.existsSync('./node_modules/.bin/prettier')) {
+        tools.push({
+            name: 'Prettier',
+            command: './node_modules/.bin/prettier --write',
+            file_types: ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'],
+            auto_fix: true,
+        });
+    }
+
+    if (fs.existsSync('./node_modules/.bin/eslint')) {
+        tools.push({
+            name: 'ESLint',
+            command: './node_modules/.bin/eslint --fix',
+            file_types: ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'],
+            auto_fix: true,
+        });
+    }
+
+    return tools;
 }
 
 function getStagedFilesFromEnv(): string[] | null {

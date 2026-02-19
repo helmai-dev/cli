@@ -4,13 +4,20 @@ import { Command } from 'commander';
 import {
     admiralHandoffCommand,
     admiralPickupCommand,
+    admiralStartCommand,
 } from './commands/admiral.js';
 import { captureCommand } from './commands/capture.js';
 import { cleanCommand } from './commands/clean.js';
+import {
+    daemonStartCommand,
+    daemonStatusCommand,
+    daemonStopCommand,
+} from './commands/daemon.js';
 import { initCommand } from './commands/init.js';
 import { injectCommand } from './commands/inject.js';
 import { linkCommand } from './commands/link.js';
 import { projectCommand } from './commands/project.js';
+import { projectsSetupCommand } from './commands/projects.js';
 import {
     mcpsConfigureCommand,
     mcpsInstallCommand,
@@ -120,6 +127,49 @@ program
     .option('--link <slug>', 'Link to an existing Admiral project by slug or ULID')
     .action(async (options: { link?: string }) => {
         await projectCommand(options);
+    });
+
+const projects = program
+    .command('projects')
+    .description('Manage projects across your machine');
+
+projects
+    .command('setup')
+    .description('Clone and configure a project from your organization')
+    .argument('[slug]', 'Project slug to set up (interactive if omitted)')
+    .option('-d, --directory <path>', 'Target directory for clone')
+    .action(
+        async (
+            slug: string | undefined,
+            options: { directory?: string },
+        ) => {
+            await projectsSetupCommand(slug, options);
+        },
+    );
+
+const daemon = program
+    .command('daemon')
+    .description('Manage the Helm background daemon');
+
+daemon
+    .command('start')
+    .description('Start the background heartbeat daemon')
+    .action(async () => {
+        await daemonStartCommand();
+    });
+
+daemon
+    .command('stop')
+    .description('Stop the background heartbeat daemon')
+    .action(async () => {
+        await daemonStopCommand();
+    });
+
+daemon
+    .command('status')
+    .description('Show daemon status')
+    .action(async () => {
+        await daemonStatusCommand();
     });
 
 program
@@ -326,6 +376,42 @@ program
 const admiral = program
     .command('admiral')
     .description('Admiral task workflow commands');
+
+admiral
+    .command('start')
+    .description('Create a new Admiral task for the current session')
+    .argument('<description>', 'Task description')
+    .option(
+        '--template <template>',
+        'Task template (feature, bug, planning, chore, investigation)',
+        'feature',
+    )
+    .option(
+        '--profile <profile>',
+        'Agent profile (planning, implementation, strong_thinking, bugfix, review)',
+        'implementation',
+    )
+    .action(
+        async (
+            description: string,
+            options: {
+                template?:
+                    | 'feature'
+                    | 'bug'
+                    | 'planning'
+                    | 'chore'
+                    | 'investigation';
+                profile?:
+                    | 'planning'
+                    | 'implementation'
+                    | 'strong_thinking'
+                    | 'bugfix'
+                    | 'review';
+            },
+        ) => {
+            await admiralStartCommand(description, options);
+        },
+    );
 
 admiral
     .command('pickup')

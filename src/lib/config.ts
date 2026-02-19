@@ -225,3 +225,91 @@ export function markLinkHintShown(slug: string): void {
     hints.link_hinted_slugs[slug] = new Date().toISOString();
     fs.writeFileSync(HINTS_FILE, JSON.stringify(hints, null, 2));
 }
+
+// --- Machine identity (global, ~/.helm/machine.json) ---
+
+const MACHINE_FILE = path.join(HELM_DIR, 'machine.json');
+
+export interface MachineIdentity {
+    id: number;
+    ulid: string;
+    name: string;
+    fingerprint: string;
+}
+
+export function saveMachineIdentity(machine: MachineIdentity): void {
+    ensureHelmDir();
+    fs.writeFileSync(MACHINE_FILE, JSON.stringify(machine, null, 2));
+}
+
+export function loadMachineIdentity(): MachineIdentity | null {
+    if (!fs.existsSync(MACHINE_FILE)) {
+        return null;
+    }
+
+    try {
+        const content = fs.readFileSync(MACHINE_FILE, 'utf-8');
+        return JSON.parse(content) as MachineIdentity;
+    } catch {
+        return null;
+    }
+}
+
+// --- Project paths registry (global, ~/.helm/project-paths.json) ---
+
+const PROJECT_PATHS_FILE = path.join(HELM_DIR, 'project-paths.json');
+
+export interface ProjectPathEntry {
+    slug: string;
+    localPath: string;
+    linkedAt: string;
+}
+
+export function loadProjectPaths(): ProjectPathEntry[] {
+    if (!fs.existsSync(PROJECT_PATHS_FILE)) {
+        return [];
+    }
+
+    try {
+        const content = fs.readFileSync(PROJECT_PATHS_FILE, 'utf-8');
+        return JSON.parse(content) as ProjectPathEntry[];
+    } catch {
+        return [];
+    }
+}
+
+export function saveProjectPaths(entries: ProjectPathEntry[]): void {
+    ensureHelmDir();
+    fs.writeFileSync(PROJECT_PATHS_FILE, JSON.stringify(entries, null, 2));
+}
+
+export function registerProjectPath(slug: string, localPath: string): void {
+    const entries = loadProjectPaths();
+    const existing = entries.findIndex(e => e.slug === slug);
+
+    if (existing >= 0) {
+        entries[existing].localPath = localPath;
+        entries[existing].linkedAt = new Date().toISOString();
+    } else {
+        entries.push({ slug, localPath, linkedAt: new Date().toISOString() });
+    }
+
+    saveProjectPaths(entries);
+}
+
+// --- Daemon PID (global, ~/.helm/daemon.pid) ---
+
+const DAEMON_PID_FILE = path.join(HELM_DIR, 'daemon.pid');
+const DAEMON_LOG_FILE = path.join(HELM_DIR, 'daemon.log');
+
+export function getDaemonPidPath(): string {
+    return DAEMON_PID_FILE;
+}
+
+export function getDaemonLogPath(): string {
+    return DAEMON_LOG_FILE;
+}
+
+export function getHelmDir(): string {
+    return HELM_DIR;
+}

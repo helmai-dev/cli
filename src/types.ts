@@ -62,12 +62,14 @@ export interface InjectRequest {
         branch?: string;
         project_slug?: string;
         key_files?: Array<{ path: string; type: string; name: string }>;
+        admiral_task_ulid?: string;
     };
 }
 
 export interface InjectResponse {
     prompt_id: string;
     enhanced_prompt: string;
+    admiral_task_ulid?: string | null;
     injections: Array<{
         source: string;
         content: string;
