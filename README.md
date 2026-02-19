@@ -6,17 +6,21 @@ Helm hooks into Claude Code and Cursor to automatically inject your project rule
 
 ## Installation
 
+### macOS / Linux
+
 ```bash
 curl -fsSL https://tryhelm.ai/install | bash
 ```
 
-Or via npm:
+### All platforms (macOS, Linux, Windows)
 
 ```bash
 npm install -g @helmai/cli
 ```
 
-**Requirements:** macOS or Linux (arm64 / x64), Node.js 18+
+Also works with `pnpm add -g @helmai/cli` and `bun add -g @helmai/cli`.
+
+**Requirements:** Node.js 18+ (npm install only)
 
 ## Getting Started
 
@@ -24,7 +28,7 @@ npm install -g @helmai/cli
 helm init
 ```
 
-This detects your IDE, installs the prompt hooks, and optionally connects to [Helm Cloud](https://tryhelm.ai) for team rule sync.
+This detects your IDE, installs the prompt hooks, and connects to [Helm Cloud](https://tryhelm.ai) for team rule sync and Admiral agent orchestration.
 
 ## Commands
 
@@ -71,7 +75,6 @@ This detects your IDE, installs the prompt hooks, and optionally connects to [He
 ```bash
 helm init                        # Interactive setup
 helm init --yes                  # Non-interactive, auto-confirm
-helm init --upgrade              # Upgrade local-only to cloud mode
 helm init --team <invite-token>  # Join an existing team
 ```
 
@@ -82,7 +85,7 @@ helm init --team <invite-token>  # Join an existing team
 
 ## Helm Cloud
 
-[Helm Cloud](https://tryhelm.ai) adds team rule sync, project linking, and a web dashboard on top of the local CLI. It's optional — Helm works fully offline with a local `.helm/rules.md` file.
+[Helm Cloud](https://tryhelm.ai) provides team rule sync, project linking, Admiral agent orchestration, and a web dashboard.
 
 ## License
 
