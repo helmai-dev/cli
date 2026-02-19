@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'bin/**'
+      - 'package.json'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Read version
+        id: ver
+        run: echo "value=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Skip if already published
+        id: guard
+        run: |
+          if npm view "@helmai/cli@${{ steps.ver.outputs.value }}" version 2>/dev/null | grep -qF "${{ steps.ver.outputs.value }}"; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Version ${{ steps.ver.outputs.value }} already published — skipping."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install dependencies
+        if: steps.guard.outputs.skip == 'false'
+        run: npm ci
+
+      - name: Build (for npm publish)
+        if: steps.guard.outputs.skip == 'false'
+        run: npm run build
+
+      - name: Build standalone binaries
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          declare -A targets=(
+            [darwin-arm64]="bun-darwin-arm64"
+            [darwin-x64]="bun-darwin-x64"
+            [linux-arm64]="bun-linux-arm64"
+            [linux-x64]="bun-linux-x64"
+          )
+
+          for platform_arch in "${!targets[@]}"; do
+            bun_target="${targets[$platform_arch]}"
+            echo "Building for $platform_arch ($bun_target)..."
+            bun build --compile --target="$bun_target" src/index.ts --outfile helm
+            tar -czf "helm-${platform_arch}.tar.gz" helm
+            rm helm
+          done
+
+      - name: Generate releases.json
+        if: steps.guard.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.ver.outputs.value }}
+        run: |
+          REPO="helmai-dev/cli"
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          get_sha() { sha256sum "$1" | awk '{print $1}'; }
+
+          SHA_DARWIN_ARM64=$(get_sha "helm-darwin-arm64.tar.gz")
+          SHA_DARWIN_X64=$(get_sha "helm-darwin-x64.tar.gz")
+          SHA_LINUX_ARM64=$(get_sha "helm-linux-arm64.tar.gz")
+          SHA_LINUX_X64=$(get_sha "helm-linux-x64.tar.gz")
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg now "$NOW" \
+            --arg repo "$REPO" \
+            --arg sha_darwin_arm64 "$SHA_DARWIN_ARM64" \
+            --arg sha_darwin_x64 "$SHA_DARWIN_X64" \
+            --arg sha_linux_arm64 "$SHA_LINUX_ARM64" \
+            --arg sha_linux_x64 "$SHA_LINUX_X64" \
+            '{
+              latest: $version,
+              versions: {
+                ($version): {
+                  published_at: $now,
+                  artifacts: {
+                    "darwin-arm64": {
+                      url: "https://github.com/\($repo)/releases/download/v\($version)/helm-darwin-arm64.tar.gz",
+                      sha256: $sha_darwin_arm64
+                    },
+                    "darwin-x64": {
+                      url: "https://github.com/\($repo)/releases/download/v\($version)/helm-darwin-x64.tar.gz",
+                      sha256: $sha_darwin_x64
+                    },
+                    "linux-arm64": {
+                      url: "https://github.com/\($repo)/releases/download/v\($version)/helm-linux-arm64.tar.gz",
+                      sha256: $sha_linux_arm64
+                    },
+                    "linux-x64": {
+                      url: "https://github.com/\($repo)/releases/download/v\($version)/helm-linux-x64.tar.gz",
+                      sha256: $sha_linux_x64
+                    }
+                  }
+                }
+              }
+            }' > releases.json
+
+      - name: Create GitHub Release
+        if: steps.guard.outputs.skip == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.value }}
+          name: v${{ steps.ver.outputs.value }}
+          generate_release_notes: true
+          files: |
+            helm-darwin-arm64.tar.gz
+            helm-darwin-x64.tar.gz
+            helm-linux-arm64.tar.gz
+            helm-linux-x64.tar.gz
+            releases.json
+
+      - name: Publish to npm
+        if: steps.guard.outputs.skip == 'false'
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

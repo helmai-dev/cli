@@ -1,0 +1,26 @@
+{
+    "latest": "1.0.22",
+    "versions": {
+        "1.0.22": {
+            "published_at": "2026-02-18T00:00:00Z",
+            "artifacts": {
+                "darwin-arm64": {
+                    "url": "https://tryhelm.ai/releases/cli/1.0.22/helm-darwin-arm64.tar.gz",
+                    "sha256": "REPLACE_WITH_SHA256"
+                },
+                "darwin-x64": {
+                    "url": "https://tryhelm.ai/releases/cli/1.0.22/helm-darwin-x64.tar.gz",
+                    "sha256": "REPLACE_WITH_SHA256"
+                },
+                "linux-arm64": {
+                    "url": "https://tryhelm.ai/releases/cli/1.0.22/helm-linux-arm64.tar.gz",
+                    "sha256": "REPLACE_WITH_SHA256"
+                },
+                "linux-x64": {
+                    "url": "https://tryhelm.ai/releases/cli/1.0.22/helm-linux-x64.tar.gz",
+                    "sha256": "REPLACE_WITH_SHA256"
+                }
+            }
+        }
+    }
+}
