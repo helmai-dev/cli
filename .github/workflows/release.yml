@@ -54,14 +54,21 @@ jobs:
             [darwin-x64]="bun-darwin-x64"
             [linux-arm64]="bun-linux-arm64"
             [linux-x64]="bun-linux-x64"
+            [windows-x64]="bun-windows-x64"
           )
 
           for platform_arch in "${!targets[@]}"; do
             bun_target="${targets[$platform_arch]}"
             echo "Building for $platform_arch ($bun_target)..."
             bun build --compile --target="$bun_target" src/index.ts --outfile helm
-            tar -czf "helm-${platform_arch}.tar.gz" helm
-            rm helm
+
+            if [[ "$platform_arch" == windows-* ]]; then
+              zip "helm-${platform_arch}.zip" helm.exe
+              rm helm.exe
+            else
+              tar -czf "helm-${platform_arch}.tar.gz" helm
+              rm helm
+            fi
           done
 
       - name: Generate releases.json
@@ -78,6 +85,7 @@ jobs:
           SHA_DARWIN_X64=$(get_sha "helm-darwin-x64.tar.gz")
           SHA_LINUX_ARM64=$(get_sha "helm-linux-arm64.tar.gz")
           SHA_LINUX_X64=$(get_sha "helm-linux-x64.tar.gz")
+          SHA_WINDOWS_X64=$(get_sha "helm-windows-x64.zip")
 
           jq -n \
             --arg version "$VERSION" \
@@ -87,6 +95,7 @@ jobs:
             --arg sha_darwin_x64 "$SHA_DARWIN_X64" \
             --arg sha_linux_arm64 "$SHA_LINUX_ARM64" \
             --arg sha_linux_x64 "$SHA_LINUX_X64" \
+            --arg sha_windows_x64 "$SHA_WINDOWS_X64" \
             '{
               latest: $version,
               versions: {
@@ -108,6 +117,10 @@ jobs:
                     "linux-x64": {
                       url: "https://github.com/\($repo)/releases/download/v\($version)/helm-linux-x64.tar.gz",
                       sha256: $sha_linux_x64
+                    },
+                    "windows-x64": {
+                      url: "https://github.com/\($repo)/releases/download/v\($version)/helm-windows-x64.zip",
+                      sha256: $sha_windows_x64
                     }
                   }
                 }
@@ -126,6 +139,7 @@ jobs:
             helm-darwin-x64.tar.gz
             helm-linux-arm64.tar.gz
             helm-linux-x64.tar.gz
+            helm-windows-x64.zip
             releases.json
 
       - name: Publish to npm
