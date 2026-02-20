@@ -195,6 +195,25 @@ export function getUpdateCommandForSource(source: InstallSource): string {
     }
 }
 
+export function getUninstallCommandForSource(source: InstallSource): string {
+    switch (source) {
+        case 'curl':
+            return 'sudo rm /usr/local/bin/helm';
+        case 'npm':
+            return 'npm uninstall -g @helmai/cli';
+        case 'pnpm':
+            return 'pnpm remove -g @helmai/cli';
+        case 'bun':
+            return 'bun remove -g @helmai/cli';
+        case 'brew':
+            return 'brew uninstall helm';
+        case 'paru':
+            return 'paru -R helm-cli';
+        default:
+            return 'npm uninstall -g @helmai/cli';
+    }
+}
+
 // --- Projects cache (global, ~/.helm/projects-cache.json) ---
 
 const PROJECTS_CACHE_FILE = path.join(HELM_DIR, 'projects-cache.json');

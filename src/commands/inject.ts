@@ -37,7 +37,6 @@ import {
     getOrCreateSession,
     updateAdmiralTaskUlid,
 } from '../lib/session.js';
-import { checkForUpdate } from '../lib/update-check.js';
 import type { InjectResponse, McpDefinition } from '../types.js';
 
 interface InjectOptions {
@@ -110,7 +109,7 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
                 }
 
                 console.log(prompt);
-                checkForUpdate();
+
                 return;
             }
         }
@@ -249,7 +248,6 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
         console.log(prompt);
     }
 
-    checkForUpdate();
 }
 
 function printCloudInjectionReceipt(

@@ -31,13 +31,18 @@ import { saveCommand } from './commands/save.js';
 import { promoteSkillCommand } from './commands/skills.js';
 import { syncCommand } from './commands/sync.js';
 import { uninstallCommand } from './commands/uninstall.js';
+import { checkForUpdate } from './lib/update-check.js';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
+const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
 
 const program = new Command();
 
 program
     .name('helm')
     .description('Intelligent context injection for AI coding assistants')
-    .version('0.1.0');
+    .version(pkg.version);
 
 program
     .command('init')
@@ -495,4 +500,5 @@ program
         await uninstallCommand(options);
     });
 
+checkForUpdate();
 program.parse();

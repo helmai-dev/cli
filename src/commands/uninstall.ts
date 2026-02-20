@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import inquirer from 'inquirer';
 import { cleanCommand } from './clean.js';
+import { getInstallSource, getUninstallCommandForSource } from '../lib/config.js';
 
 export async function uninstallCommand(options: { yes?: boolean } = {}): Promise<void> {
     console.log(chalk.cyan.bold('\n  ⎈ Helm Uninstall\n'));
@@ -30,6 +31,9 @@ export async function uninstallCommand(options: { yes?: boolean } = {}): Promise
 
     await cleanCommand({ all: true, yes: true });
 
+    const source = getInstallSource();
+    const uninstallCmd = getUninstallCommandForSource(source);
+
     console.log(chalk.gray('  To remove the CLI binary, run:'));
-    console.log(chalk.white('    npm uninstall -g @niceprompt/helm\n'));
+    console.log(chalk.white(`    ${uninstallCmd}\n`));
 }
