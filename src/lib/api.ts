@@ -9,6 +9,7 @@ import type {
     InjectResponse,
     LoginResponse,
     McpDefinition,
+    PendingRun,
     RegisterResponse,
     ResolveAdmiralHandoffRequest,
     ResolveAdmiralHandoffResponse,
@@ -434,6 +435,7 @@ export interface HeartbeatMachineResponse {
         is_online: boolean;
         last_heartbeat_at: string | null;
     };
+    pending_runs: PendingRun[];
 }
 
 export async function heartbeatMachine(
@@ -465,5 +467,74 @@ export async function getProjectSetupInfo(
 ): Promise<ProjectSetupInfoResponse> {
     return request<ProjectSetupInfoResponse>(
         `/projects/${encodeURIComponent(slug)}/setup-info`,
+    );
+}
+
+export interface ClaimRunResponse {
+    run: {
+        id: string;
+        status: string;
+        machine_id: number;
+    };
+}
+
+export async function claimRun(
+    runId: number,
+    machineId: number,
+): Promise<ClaimRunResponse> {
+    return request<ClaimRunResponse>(`/admiral/runs/${runId}/claim`, {
+        method: 'POST',
+        body: JSON.stringify({ machine_id: machineId }),
+    });
+}
+
+export interface UpdateRunStatusResponse {
+    run: {
+        id: string;
+        status: string;
+        ended_at: string | null;
+        failure_reason: string | null;
+    };
+}
+
+export async function updateRunStatus(
+    runId: number,
+    status: string,
+    failureReason?: string,
+): Promise<UpdateRunStatusResponse> {
+    return request<UpdateRunStatusResponse>(
+        `/admiral/runs/${runId}/status`,
+        {
+            method: 'PATCH',
+            body: JSON.stringify({
+                status,
+                ...(failureReason ? { failure_reason: failureReason } : {}),
+            }),
+        },
+    );
+}
+
+export interface StoreRunEventResponse {
+    event: {
+        id: number;
+        event_type: string;
+        sequence: number;
+    };
+}
+
+export async function storeRunEvent(
+    runId: number,
+    eventType: string,
+    payload?: Record<string, unknown>,
+): Promise<StoreRunEventResponse> {
+    return request<StoreRunEventResponse>(
+        `/admiral/runs/${runId}/events`,
+        {
+            method: 'POST',
+            body: JSON.stringify({
+                event_type: eventType,
+                ...(payload ? { payload } : {}),
+            }),
+        },
     );
 }

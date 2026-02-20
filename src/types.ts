@@ -256,6 +256,24 @@ export interface AcceptInvitationResponse {
     api_key: string;
 }
 
+export interface PendingRun {
+    id: number;
+    ulid: string;
+    status: string;
+    requested_agent: string | null;
+    requested_model: string | null;
+    task: {
+        ulid: string;
+        title: string;
+        description: string | null;
+        profile: string;
+        template: string;
+    } | null;
+    project: {
+        slug: string;
+    } | null;
+}
+
 export interface AdmiralMachineConnectRequest {
     name: string;
     fingerprint: string;
