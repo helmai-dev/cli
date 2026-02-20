@@ -2,10 +2,8 @@
  * Daemon loop module — runs as a detached child process.
  * Sends heartbeat with local project paths to the Admiral API every 30 seconds.
  * Picks up queued runs and spawns agent processes to execute them.
- * Detects binary updates and gracefully restarts itself.
  */
 
-import { spawn } from 'child_process';
 import * as fs from 'fs';
 import pkg from '../../package.json';
 import type { PendingRun } from '../types.js';
@@ -21,7 +19,6 @@ import {
 import * as api from './api.js';
 import {
     canAcceptMore,
-    getActiveCount,
     getActiveRunDetails,
     getStats,
     gracefulShutdown,
@@ -38,9 +35,6 @@ let backoffMs = 0;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let shuttingDown = false;
 let lastHeartbeatAt: string | null = null;
-
-/** mtime of the binary at daemon start — used to detect upgrades */
-let binaryMtimeMs: number | null = null;
 
 /** Timestamp when the daemon started */
 const startedAt = new Date();
@@ -89,27 +83,6 @@ function cleanupStatusFile(): void {
         }
     } catch {
         // Best effort
-    }
-}
-
-function recordBinaryMtime(): void {
-    try {
-        binaryMtimeMs = fs.statSync(process.execPath).mtimeMs;
-    } catch {
-        binaryMtimeMs = null;
-    }
-}
-
-function hasBinaryChanged(): boolean {
-    if (binaryMtimeMs === null) {
-        return false;
-    }
-
-    try {
-        const currentMtime = fs.statSync(process.execPath).mtimeMs;
-        return currentMtime !== binaryMtimeMs;
-    } catch {
-        return false;
     }
 }
 
@@ -181,65 +154,9 @@ async function processPendingRuns(pendingRuns: PendingRun[]): Promise<void> {
     }
 }
 
-/**
- * Restart the daemon by spawning a new instance of the (updated) binary
- * and exiting the current process. Active agent processes run independently
- * and are unaffected — they'll complete on their own.
- */
-async function restartForUpgrade(): Promise<void> {
-    log(`Binary updated — restarting daemon (${getActiveCount()} active process(es) will continue independently)`);
-
-    shuttingDown = true;
-
-    if (timer) {
-        clearTimeout(timer);
-        timer = null;
-    }
-
-    // Spawn the new daemon from the updated binary
-    const logPath = getDaemonLogPath();
-    let logFd: number;
-    try {
-        logFd = fs.openSync(logPath, 'a');
-    } catch {
-        log('Failed to open log file for restart — aborting restart');
-        shuttingDown = false;
-        return;
-    }
-
-    try {
-        const child = spawn(process.execPath, [], {
-            detached: true,
-            stdio: ['ignore', logFd, logFd],
-            env: { ...process.env, HELM_DAEMON_MODE: '1' },
-        });
-        child.unref();
-    } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log(`Failed to spawn new daemon: ${msg} — aborting restart`);
-        fs.closeSync(logFd);
-        shuttingDown = false;
-        return;
-    }
-
-    fs.closeSync(logFd);
-
-    // Don't clean up PID file — the new process will overwrite it.
-    // Don't kill active agent processes — they're independent children
-    // that will complete and report their own status to the backend.
-    log('Old daemon exiting — new daemon spawned');
-    process.exit(0);
-}
-
 function scheduleNext(): void {
     const delay = HEARTBEAT_INTERVAL_MS + backoffMs;
     timer = setTimeout(async () => {
-        // Check for binary upgrade before doing work
-        if (hasBinaryChanged()) {
-            await restartForUpgrade();
-            return;
-        }
-
         const pendingRuns = await heartbeat();
         await processPendingRuns(pendingRuns);
         writeDaemonStatus();
@@ -276,9 +193,6 @@ async function cleanup(): Promise<void> {
 
 export async function runDaemonLoop(): Promise<void> {
     log('Daemon started (PID: ' + process.pid + ', version: ' + VERSION + ')');
-
-    // Record binary mtime for upgrade detection
-    recordBinaryMtime();
 
     // Write PID file
     fs.writeFileSync(getDaemonPidPath(), String(process.pid));

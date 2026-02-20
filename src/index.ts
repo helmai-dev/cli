@@ -332,6 +332,8 @@ program
         const { execSync } = await import('child_process');
         const { getInstallSource, getUpdateCommandForSource } =
             await import('./lib/config.js');
+        const { stopDaemonIfRunning, startDaemon } =
+            await import('./commands/daemon.js');
         const source = getInstallSource();
         const updateCommand = getUpdateCommandForSource(source);
 
@@ -340,6 +342,14 @@ program
         console.log(chalk.gray(`  Current version: ${pkg.version}`));
         console.log(chalk.gray(`  Install method:  ${source}`));
         console.log('');
+
+        // Stop daemon before updating to avoid crash from binary replacement
+        const daemonWasRunning = stopDaemonIfRunning();
+        if (daemonWasRunning) {
+            console.log(chalk.gray('  Stopped daemon for update...'));
+            // Give the daemon a moment to shut down cleanly
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
 
         console.log(chalk.gray(`  Updating...\n`));
 
@@ -354,14 +364,33 @@ program
             console.log(
                 chalk.green('\n  ✓ Update complete'),
             );
-            console.log(
-                chalk.gray(
-                    '  Restart your terminal or IDE to use the new version.\n',
-                ),
-            );
+
+            // Restart daemon if it was running before the update
+            if (daemonWasRunning) {
+                const result = startDaemon();
+                if (result.started) {
+                    console.log(chalk.gray(`  Daemon restarted (PID ${result.pid})\n`));
+                } else {
+                    console.log(chalk.yellow('  Could not restart daemon. Run: helm daemon start\n'));
+                }
+            } else {
+                console.log(
+                    chalk.gray(
+                        '  Restart your terminal or IDE to use the new version.\n',
+                    ),
+                );
+            }
         } catch (error) {
             console.log(chalk.red('\n  Update failed'));
             console.log(chalk.white(`\n  Try manually: ${updateCommand}\n`));
+
+            // Try to restart daemon even if update failed
+            if (daemonWasRunning) {
+                const result = startDaemon();
+                if (result.started) {
+                    console.log(chalk.gray(`  Daemon restarted (PID ${result.pid})\n`));
+                }
+            }
         }
     });
 
