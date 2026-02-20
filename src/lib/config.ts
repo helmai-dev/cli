@@ -344,6 +344,7 @@ export function registerProjectPath(slug: string, localPath: string): void {
 
 const DAEMON_PID_FILE = path.join(HELM_DIR, 'daemon.pid');
 const DAEMON_LOG_FILE = path.join(HELM_DIR, 'daemon.log');
+const DAEMON_STATUS_FILE = path.join(HELM_DIR, 'daemon-status.json');
 
 export function getDaemonPidPath(): string {
     return DAEMON_PID_FILE;
@@ -351,6 +352,46 @@ export function getDaemonPidPath(): string {
 
 export function getDaemonLogPath(): string {
     return DAEMON_LOG_FILE;
+}
+
+export function getDaemonStatusPath(): string {
+    return DAEMON_STATUS_FILE;
+}
+
+export interface DaemonStatus {
+    pid: number;
+    version: string;
+    started_at: string;
+    last_heartbeat_at: string | null;
+    active_runs: Array<{
+        run_id: number;
+        run_ulid: string;
+        task_title: string | null;
+        project_slug: string | null;
+        agent: string | null;
+        model: string | null;
+        child_pid: number | null;
+        started_at: string;
+    }>;
+    stats: {
+        total_spawned: number;
+        total_completed: number;
+        total_failed: number;
+        uptime_seconds: number;
+    };
+}
+
+export function loadDaemonStatus(): DaemonStatus | null {
+    if (!fs.existsSync(DAEMON_STATUS_FILE)) {
+        return null;
+    }
+
+    try {
+        const content = fs.readFileSync(DAEMON_STATUS_FILE, 'utf-8');
+        return JSON.parse(content) as DaemonStatus;
+    } catch {
+        return null;
+    }
 }
 
 export function getHelmDir(): string {

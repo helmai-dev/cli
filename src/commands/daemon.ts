@@ -5,6 +5,7 @@ import {
     ensureHelmDir,
     getDaemonLogPath,
     getDaemonPidPath,
+    loadDaemonStatus,
     loadMachineIdentity,
 } from '../lib/config.js';
 
@@ -188,6 +189,85 @@ export async function daemonStatusCommand(): Promise<void> {
             }
         } catch {
             // Ignore read errors
+        }
+    }
+
+    console.log('');
+}
+
+function formatUptime(seconds: number): string {
+    if (seconds < 60) {
+        return `${seconds}s`;
+    }
+    if (seconds < 3600) {
+        const m = Math.floor(seconds / 60);
+        const s = seconds % 60;
+        return `${m}m ${s}s`;
+    }
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return `${h}h ${m}m`;
+}
+
+function formatTimeAgo(isoString: string): string {
+    const diff = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
+    if (diff < 5) {
+        return 'just now';
+    }
+    if (diff < 60) {
+        return `${diff}s ago`;
+    }
+    if (diff < 3600) {
+        return `${Math.floor(diff / 60)}m ago`;
+    }
+    return `${Math.floor(diff / 3600)}h ${Math.floor((diff % 3600) / 60)}m ago`;
+}
+
+export async function daemonInfoCommand(): Promise<void> {
+    const { running, pid } = isDaemonRunning();
+
+    if (!running) {
+        console.log(chalk.yellow('\n  Daemon is not running.\n'));
+        return;
+    }
+
+    const status = loadDaemonStatus();
+
+    if (!status) {
+        console.log(chalk.yellow('\n  Daemon is running but no status file found.'));
+        console.log(chalk.gray('  The daemon may still be starting up. Try again in a few seconds.\n'));
+        return;
+    }
+
+    console.log(chalk.cyan.bold('\n  ⎈ Helm Daemon Info\n'));
+
+    // Process info
+    console.log(`  ${chalk.bold('PID:')}       ${status.pid}`);
+    console.log(`  ${chalk.bold('Version:')}   ${status.version}`);
+    console.log(`  ${chalk.bold('Uptime:')}    ${formatUptime(status.stats.uptime_seconds)}`);
+    if (status.last_heartbeat_at) {
+        console.log(`  ${chalk.bold('Heartbeat:')} ${formatTimeAgo(status.last_heartbeat_at)}`);
+    }
+
+    // Stats
+    console.log('');
+    console.log(`  ${chalk.bold('Runs:')}      ${chalk.cyan(String(status.stats.total_spawned))} spawned, ${chalk.green(String(status.stats.total_completed))} completed, ${chalk.red(String(status.stats.total_failed))} failed`);
+
+    // Active runs
+    const activeCount = status.active_runs.length;
+    console.log(`  ${chalk.bold('Active:')}    ${activeCount === 0 ? chalk.gray('none') : chalk.yellow(String(activeCount))}`);
+
+    if (activeCount > 0) {
+        console.log('');
+        for (const run of status.active_runs) {
+            const duration = formatTimeAgo(run.started_at).replace(' ago', '');
+            const agent = run.agent ?? 'unknown';
+            const model = run.model ? ` (${run.model})` : '';
+            const project = run.project_slug ? chalk.gray(` [${run.project_slug}]`) : '';
+            const childPid = run.child_pid ? chalk.gray(` pid:${run.child_pid}`) : '';
+
+            console.log(`  ${chalk.yellow('▶')} ${run.task_title ?? run.run_ulid}${project}`);
+            console.log(`    ${chalk.gray(`${agent}${model} · ${duration}${childPid}`)}`);
         }
     }
 

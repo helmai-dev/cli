@@ -12,11 +12,23 @@ const MAX_CONCURRENT = 3;
 
 interface RunProcess {
     runId: number;
+    runUlid: string;
+    taskTitle: string | null;
+    projectSlug: string | null;
+    agent: string | null;
+    model: string | null;
     child: ChildProcess;
     startedAt: Date;
 }
 
 const activeProcesses = new Map<number, RunProcess>();
+
+/** Cumulative stats for the lifetime of this daemon process */
+const stats = {
+    totalSpawned: 0,
+    totalCompleted: 0,
+    totalFailed: 0,
+};
 
 export function canAcceptMore(): boolean {
     return activeProcesses.size < MAX_CONCURRENT;
@@ -28,6 +40,32 @@ export function isRunActive(runId: number): boolean {
 
 export function getActiveCount(): number {
     return activeProcesses.size;
+}
+
+export function getStats(): { totalSpawned: number; totalCompleted: number; totalFailed: number } {
+    return { ...stats };
+}
+
+export function getActiveRunDetails(): Array<{
+    run_id: number;
+    run_ulid: string;
+    task_title: string | null;
+    project_slug: string | null;
+    agent: string | null;
+    model: string | null;
+    child_pid: number | null;
+    started_at: string;
+}> {
+    return Array.from(activeProcesses.values()).map(proc => ({
+        run_id: proc.runId,
+        run_ulid: proc.runUlid,
+        task_title: proc.taskTitle,
+        project_slug: proc.projectSlug,
+        agent: proc.agent,
+        model: proc.model,
+        child_pid: proc.child.pid ?? null,
+        started_at: proc.startedAt.toISOString(),
+    }));
 }
 
 function resolveProjectPath(projectSlug: string | null | undefined): string | null {
@@ -82,6 +120,7 @@ export async function spawnAgentForRun(
     run: PendingRun,
     machineId: number,
     log: (message: string) => void,
+    onStatusChange?: () => void,
 ): Promise<void> {
     if (!canAcceptMore()) {
         log(`Skipping run ${run.ulid} — at concurrency limit (${MAX_CONCURRENT})`);
@@ -98,6 +137,8 @@ export async function spawnAgentForRun(
         } catch (err) {
             log(`Failed to mark run ${run.ulid} as failed: ${err instanceof Error ? err.message : String(err)}`);
         }
+        stats.totalFailed++;
+        onStatusChange?.();
         return;
     }
 
@@ -132,15 +173,24 @@ export async function spawnAgentForRun(
         const msg = err instanceof Error ? err.message : String(err);
         log(`Spawn error for run ${run.ulid}: ${msg}`);
         api.updateRunStatus(run.id, 'failed', `Spawn error: ${msg}`).catch(() => {});
+        stats.totalFailed++;
+        onStatusChange?.();
         return;
     }
 
     const runProcess: RunProcess = {
         runId: run.id,
+        runUlid: run.ulid,
+        taskTitle: run.task?.title ?? null,
+        projectSlug: projectSlug ?? null,
+        agent: run.requested_agent ?? null,
+        model: run.requested_model ?? null,
         child,
         startedAt: new Date(),
     };
     activeProcesses.set(run.id, runProcess);
+    stats.totalSpawned++;
+    onStatusChange?.();
 
     // Stream stdout line-by-line
     let stdoutBuffer = '';
@@ -200,6 +250,7 @@ export async function spawnAgentForRun(
 
         if (code === 0) {
             log(`Run ${run.ulid} completed successfully`);
+            stats.totalCompleted++;
             api.updateRunStatus(run.id, 'completed').catch(err => {
                 log(`Failed to mark run ${run.ulid} as completed: ${err instanceof Error ? err.message : String(err)}`);
             });
@@ -208,16 +259,21 @@ export async function spawnAgentForRun(
                 ? `Process killed by signal ${signal}`
                 : `Process exited with code ${code}`;
             log(`Run ${run.ulid} failed: ${reason}`);
+            stats.totalFailed++;
             api.updateRunStatus(run.id, 'failed', reason).catch(err => {
                 log(`Failed to mark run ${run.ulid} as failed: ${err instanceof Error ? err.message : String(err)}`);
             });
         }
+
+        onStatusChange?.();
     });
 
     child.on('error', (err: Error) => {
         activeProcesses.delete(run.id);
         log(`Spawn error for run ${run.ulid}: ${err.message}`);
+        stats.totalFailed++;
         api.updateRunStatus(run.id, 'failed', `Spawn error: ${err.message}`).catch(() => {});
+        onStatusChange?.();
     });
 }
 
