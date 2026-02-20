@@ -103,6 +103,7 @@ function buildAgentCommand(run: PendingRun): { command: string; args: string[] }
                 prompt,
                 '--output-format',
                 'stream-json',
+                '--verbose',
                 '--dangerously-skip-permissions',
                 '--no-session-persistence',
             ];
