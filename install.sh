@@ -153,7 +153,11 @@ if [[ "$platform" == "windows" ]] && [[ ":$PATH:" != *":$install_dir:"* ]]; then
   echo "Tip: add $install_dir to PATH to run helm from anywhere."
 fi
 
-echo ""
-echo "Running initial setup..."
-HELM_INSTALL_SOURCE=curl "$install_dir/$HELM_BIN_NAME" init
-echo ""
+if [[ "${HELM_UPDATE_ONLY:-}" == "1" ]]; then
+  echo ""
+else
+  echo ""
+  echo "Running initial setup..."
+  HELM_INSTALL_SOURCE=curl "$install_dir/$HELM_BIN_NAME" init
+  echo ""
+fi

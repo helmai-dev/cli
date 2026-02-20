@@ -322,7 +322,6 @@ program
     .action(async () => {
         const chalk = (await import('chalk')).default;
         const { execSync } = await import('child_process');
-        const ora = (await import('ora')).default;
         const { getInstallSource, getUpdateCommandForSource } =
             await import('./lib/config.js');
         const source = getInstallSource();
@@ -334,23 +333,26 @@ program
         console.log(chalk.gray(`  Install method:  ${source}`));
         console.log('');
 
-        const spinner = ora(`Running: ${updateCommand}`).start();
+        console.log(chalk.gray(`  Updating...\n`));
 
         try {
             execSync(updateCommand, {
                 encoding: 'utf-8',
-                stdio: ['pipe', 'pipe', 'pipe'],
+                stdio: 'inherit',
                 shell: '/bin/sh',
+                env: { ...process.env, HELM_UPDATE_ONLY: '1' },
             });
 
-            spinner.succeed('Update complete');
+            console.log(
+                chalk.green('\n  ✓ Update complete'),
+            );
             console.log(
                 chalk.gray(
                     '  Restart your terminal or IDE to use the new version.\n',
                 ),
             );
         } catch (error) {
-            spinner.fail('Update failed');
+            console.log(chalk.red('\n  Update failed'));
             console.log(chalk.white(`\n  Try manually: ${updateCommand}\n`));
         }
     });
