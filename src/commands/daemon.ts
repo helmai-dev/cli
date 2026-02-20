@@ -1,13 +1,13 @@
 import chalk from 'chalk';
 import { spawn } from 'child_process';
 import * as fs from 'fs';
-import * as path from 'path';
 import {
     ensureHelmDir,
     getDaemonLogPath,
     getDaemonPidPath,
     loadMachineIdentity,
 } from '../lib/config.js';
+import { runDaemonLoop } from '../lib/daemon-loop.js';
 
 export function stopDaemonIfRunning(): boolean {
     const { running, pid } = isDaemonRunning();
@@ -76,21 +76,14 @@ export function startDaemon(): { started: boolean; alreadyRunning: boolean; pid?
 
     ensureHelmDir();
 
-    // Find the daemon-loop.js path relative to this compiled file
-    const daemonLoopPath = path.resolve(
-        __dirname,
-        '../lib/daemon-loop.js',
-    );
+    // Find the helm binary to spawn the daemon loop
+    const helmBin = process.argv[0] ?? 'helm';
 
-    if (!fs.existsSync(daemonLoopPath)) {
-        return { started: false, alreadyRunning: false };
-    }
-
-    // Spawn detached process
+    // Spawn detached process using `helm daemon run`
     const logPath = getDaemonLogPath();
     const logFd = fs.openSync(logPath, 'a');
 
-    const child = spawn('node', [daemonLoopPath], {
+    const child = spawn(helmBin, ['daemon', 'run'], {
         detached: true,
         stdio: ['ignore', logFd, logFd],
         env: { ...process.env },
@@ -198,4 +191,8 @@ export async function daemonStatusCommand(): Promise<void> {
     }
 
     console.log('');
+}
+
+export async function daemonRunCommand(): Promise<void> {
+    await runDaemonLoop();
 }

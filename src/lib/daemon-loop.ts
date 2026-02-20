@@ -107,11 +107,3 @@ export async function runDaemonLoop(): Promise<void> {
     scheduleNext();
 }
 
-// When run directly as a detached child process
-const isDirectRun = __filename.endsWith('daemon-loop.js');
-if (isDirectRun) {
-    runDaemonLoop().catch((error) => {
-        log(`Fatal error: ${error instanceof Error ? error.message : String(error)}`);
-        process.exit(1);
-    });
-}

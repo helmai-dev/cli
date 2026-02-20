@@ -9,6 +9,7 @@ import {
 import { captureCommand } from './commands/capture.js';
 import { cleanCommand } from './commands/clean.js';
 import {
+    daemonRunCommand,
     daemonStartCommand,
     daemonStatusCommand,
     daemonStopCommand,
@@ -173,6 +174,13 @@ daemon
     .description('Show daemon status')
     .action(async () => {
         await daemonStatusCommand();
+    });
+
+daemon
+    .command('run', { hidden: true })
+    .description('Run the daemon loop (internal, used by daemon start)')
+    .action(async () => {
+        await daemonRunCommand();
     });
 
 program
