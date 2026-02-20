@@ -332,7 +332,7 @@ program
         const { execSync } = await import('child_process');
         const { getInstallSource, getUpdateCommandForSource } =
             await import('./lib/config.js');
-        const { stopDaemonIfRunning, startDaemon } =
+        const { stopDaemonIfRunning } =
             await import('./commands/daemon.js');
         const source = getInstallSource();
         const updateCommand = getUpdateCommandForSource(source);
@@ -365,12 +365,17 @@ program
                 chalk.green('\n  ✓ Update complete'),
             );
 
-            // Restart daemon if it was running before the update
+            // Restart daemon using the NEW binary (not the currently-running old one)
             if (daemonWasRunning) {
-                const result = startDaemon();
-                if (result.started) {
-                    console.log(chalk.gray(`  Daemon restarted (PID ${result.pid})\n`));
-                } else {
+                try {
+                    execSync('helm daemon start', {
+                        encoding: 'utf-8',
+                        stdio: 'pipe',
+                        shell: '/bin/sh',
+                        timeout: 10_000,
+                    });
+                    console.log(chalk.gray('  Daemon restarted\n'));
+                } catch {
                     console.log(chalk.yellow('  Could not restart daemon. Run: helm daemon start\n'));
                 }
             } else {
@@ -386,9 +391,15 @@ program
 
             // Try to restart daemon even if update failed
             if (daemonWasRunning) {
-                const result = startDaemon();
-                if (result.started) {
-                    console.log(chalk.gray(`  Daemon restarted (PID ${result.pid})\n`));
+                try {
+                    execSync('helm daemon start', {
+                        encoding: 'utf-8',
+                        stdio: 'pipe',
+                        shell: '/bin/sh',
+                        timeout: 10_000,
+                    });
+                } catch {
+                    // Best effort
                 }
             }
         }
