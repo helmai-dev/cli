@@ -1,9 +1,8 @@
 import chalk from 'chalk';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
-import { createPromptModule } from 'inquirer';
+import inquirer from 'inquirer';
 import open from 'open';
-import * as tty from 'tty';
 import ora from 'ora';
 import * as os from 'os';
 import * as path from 'path';
@@ -43,23 +42,12 @@ interface InitOptions {
     forceOnboardingTasks?: boolean;
 }
 
-// Create a prompt module that works even when stdin is a pipe (e.g. curl|bash).
-// Opens /dev/tty directly so inquirer gets a real terminal for raw mode input.
-function createTtyPrompt() {
-    if (process.stdin.isTTY) {
-        return createPromptModule();
-    }
+const prompt = inquirer.prompt.bind(inquirer);
 
-    try {
-        const fd = fs.openSync('/dev/tty', 'r');
-        const input = new tty.ReadStream(fd);
-        return createPromptModule({ input });
-    } catch {
-        return createPromptModule();
-    }
-}
-
-const prompt = createTtyPrompt();
+// Detect if stdin is unavailable (e.g. curl|bash pipe). When true,
+// prompts that require raw mode (checkbox, list) are auto-defaulted
+// since Bun compiled binaries can't setRawMode on a piped stdin.
+const isNonInteractiveStdin = !process.stdin.isTTY;
 
 export async function initCommand(options: InitOptions = {}): Promise<void> {
     // Team invite flow
@@ -257,7 +245,17 @@ async function selectAgentRuntimes(
         .filter((runtime) => runtime.detected)
         .map((runtime) => runtime.key);
 
-    if (nonInteractive) {
+    // Auto-select when stdin is piped (curl|bash) or --yes is passed.
+    // The checkbox prompt requires raw mode which Bun compiled binaries
+    // can't provide on a piped stdin.
+    if (nonInteractive || isNonInteractiveStdin) {
+        if (isNonInteractiveStdin && detected.length > 0) {
+            console.log(
+                chalk.green(
+                    `\n   Auto-selected ${detected.length} detected runtime(s). Run \`helm init\` to customize.\n`,
+                ),
+            );
+        }
         const config = loadConfig();
         config.agentRuntimes = detected;
         saveConfig(config);
@@ -828,7 +826,9 @@ function buildTeamRulesContent(
 }
 
 async function askScopeQuestion(nonInteractive = false): Promise<void> {
-    if (nonInteractive) {
+    // Auto-default when stdin is piped (curl|bash) or --yes is passed.
+    // The list prompt requires raw mode for arrow key navigation.
+    if (nonInteractive || isNonInteractiveStdin) {
         const config = loadConfig();
         config.installationScope = 'global';
         saveConfig(config);
