@@ -138,7 +138,7 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
 
         printInitNextSteps();
         await openAdmiral();
-        return;
+        process.exit(0);
     }
 
     // Browser-based authentication
@@ -192,23 +192,18 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
     // Step 7: Direct to Helm Admiral
     printInitNextSteps();
     await openAdmiral();
+    process.exit(0);
 }
 
 function printInitNextSteps(): void {
     console.log('');
-    console.log(chalk.cyan.bold('  ⎈ Helm is ready.'));
+    console.log(chalk.cyan.bold('  ⎈ Helm is ready. Now let\'s get building.'));
     console.log('');
-    console.log(chalk.white('  Next steps:'));
-    console.log(
-        chalk.white(
-            '  1. Create a project on the dashboard (opening in browser...)',
-        ),
-    );
-    console.log(
-        chalk.white(
-            '  2. Run `helm project` in your project directory to link it',
-        ),
-    );
+    console.log(chalk.white('  Your dashboard is opening in the browser.'));
+    console.log(chalk.white('  Create your first project, then link it locally:'));
+    console.log('');
+    console.log(chalk.white('    cd /path/to/your/project'));
+    console.log(chalk.white('    helm project'));
     console.log('');
 }
 
@@ -792,6 +787,7 @@ async function handleTeamInit(
         ),
     );
     console.log('');
+    process.exit(0);
 }
 
 /**
