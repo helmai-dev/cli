@@ -99,6 +99,19 @@ export async function captureCommand(options: CaptureOptions): Promise<void> {
             undefined;
         const sessionId = process.env.HELM_LAST_SESSION_ID;
 
+        // Build enriched code_blocks summary (first 10, with language + file_hint + content preview)
+        const codeBlocksSummary = codeBlocks.slice(0, 10).map((block) => ({
+            language: block.language,
+            file_hint: block.file_hint ?? null,
+            content_preview: block.content.slice(0, 200),
+        }));
+
+        // Extract file paths that were likely modified
+        const filesModified = codeBlocks
+            .map((block) => block.file_hint)
+            .filter((hint): hint is string => hint !== null && hint !== undefined)
+            .slice(0, 20);
+
         void api
             .streamAdmiralRunEvent({
                 session_id: sessionId,
@@ -110,6 +123,10 @@ export async function captureCommand(options: CaptureOptions): Promise<void> {
                     provider: tokenUsage?.provider,
                     model: tokenUsage?.model,
                     duration_ms: durationMs,
+                    response_preview: response.slice(0, 3000),
+                    response_length: response.length,
+                    code_blocks: codeBlocksSummary,
+                    files_modified: filesModified.length > 0 ? filesModified : undefined,
                 },
             })
             .catch(() => {});

@@ -179,22 +179,36 @@ export async function injectCommand(options: InjectOptions): Promise<void> {
 
         const currentTaskUlid = result.admiral_task_ulid ?? admiralTaskUlid;
 
+        // Extract injection source names for richer display
+        const injectionNames = result.injections
+            .map((inj) => (inj as { source?: string }).source ?? (inj as { name?: string }).name)
+            .filter((name): name is string => !!name)
+            .slice(0, 10);
+
+        // Count AI recommendations
+        const recommendationsCount =
+            (result.recommendations?.relevant_files?.length ?? 0) +
+            (result.recommendations?.skills_to_activate?.length ?? 0) +
+            (result.recommendations?.tools_needed?.length ?? 0);
+
         void api
             .streamAdmiralRunEvent({
                 session_id: sessionId,
                 project_slug: projectSlug,
                 event_type: 'agent.prompt.injected',
                 payload: {
-                    prompt_preview: prompt.slice(0, 200),
+                    prompt_preview: prompt.slice(0, 1000),
                     prompt_length: prompt.length,
                     capability_ids: routedCapabilities.map(
                         (capability) => capability.id,
                     ),
                     injections_count: result.injections.length,
+                    injection_names: injectionNames.length > 0 ? injectionNames : undefined,
                     memory_hits_count: memoryMatches.length,
                     memory_sources: memoryMatches
                         .map((match) => match.source)
                         .slice(0, 5),
+                    recommendations_count: recommendationsCount > 0 ? recommendationsCount : undefined,
                     admiral_task_ulid: currentTaskUlid ?? undefined,
                 },
             })
