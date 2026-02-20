@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { getInstallSource, getUpdateCommandForSource } from './config.js';
+import pkg from '../../package.json';
 
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 1 day
 const CACHE_FILE = path.join(os.homedir(), '.helm', 'update-check.json');
@@ -12,21 +13,7 @@ interface UpdateCache {
 }
 
 function getOwnVersion(): string {
-    try {
-        // Walk up from dist/lib/ to find package.json
-        let dir = __dirname;
-        for (let i = 0; i < 5; i++) {
-            const pkgPath = path.join(dir, 'package.json');
-            if (fs.existsSync(pkgPath)) {
-                const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-                if (pkg.name === '@helmai/cli') return pkg.version;
-            }
-            dir = path.dirname(dir);
-        }
-        return '0.0.0';
-    } catch {
-        return '0.0.0';
-    }
+    return pkg.version;
 }
 
 function loadCache(): UpdateCache | null {

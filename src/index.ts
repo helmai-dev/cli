@@ -32,10 +32,7 @@ import { promoteSkillCommand } from './commands/skills.js';
 import { syncCommand } from './commands/sync.js';
 import { uninstallCommand } from './commands/uninstall.js';
 import { checkForUpdate } from './lib/update-check.js';
-import { readFileSync } from 'fs';
-import { join } from 'path';
-
-const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
+import pkg from '../package.json';
 
 const program = new Command();
 
@@ -332,30 +329,7 @@ program
 
         console.log(chalk.cyan.bold('\n  ⎈ Helm Update\n'));
 
-        // Show current version
-        let currentVersion = 'unknown';
-        try {
-            const fs = await import('fs');
-            const path = await import('path');
-            let dir = __dirname;
-            for (let i = 0; i < 5; i++) {
-                const pkgPath = path.join(dir, 'package.json');
-                if (fs.existsSync(pkgPath)) {
-                    const pkg = JSON.parse(
-                        fs.readFileSync(pkgPath, 'utf-8'),
-                    );
-                    if (pkg.name === '@helmai/cli') {
-                        currentVersion = pkg.version;
-                        break;
-                    }
-                }
-                dir = path.dirname(dir);
-            }
-        } catch {
-            // Ignore
-        }
-
-        console.log(chalk.gray(`  Current version: ${currentVersion}`));
+        console.log(chalk.gray(`  Current version: ${pkg.version}`));
         console.log(chalk.gray(`  Install method:  ${source}`));
         console.log('');
 
