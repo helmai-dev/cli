@@ -152,12 +152,11 @@ export async function spawnAgentForRun(
         return;
     }
 
-    // Transition to running
+    // Transition to running (best-effort — don't abort if this fails)
     try {
         await api.updateRunStatus(run.id, 'running');
     } catch (err) {
-        log(`Failed to transition run ${run.ulid} to running: ${err instanceof Error ? err.message : String(err)}`);
-        return;
+        log(`Failed to transition run ${run.ulid} to running: ${err instanceof Error ? err.message : String(err)} — continuing anyway`);
     }
 
     const { command, args } = buildAgentCommand(run);
