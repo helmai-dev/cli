@@ -164,7 +164,10 @@ if [[ "$platform" == "windows" ]] && [[ ":$PATH:" != *":$install_dir:"* ]]; then
 fi
 
 echo ""
-echo "Get started by running:"
-echo ""
-echo "  helm init"
+echo "Running initial setup..."
+
+# Reconnect stdin to the terminal so interactive prompts work
+# when this script is run via curl|bash (where stdin is the pipe).
+exec </dev/tty
+HELM_INSTALL_SOURCE=curl "$install_dir/$HELM_BIN_NAME" init
 echo ""
