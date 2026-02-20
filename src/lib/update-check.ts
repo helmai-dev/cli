@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { getInstallSource, getUpdateCommandForSource } from './config.js';
 import pkg from '../../package.json';
 
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 1 day
@@ -64,10 +63,8 @@ export function checkForUpdate(): void {
                     cache.latest_version &&
                     isNewerVersion(getOwnVersion(), cache.latest_version)
                 ) {
-                    const updateCommand =
-                        getUpdateCommandForSource(getInstallSource());
                     process.stderr.write(
-                        `[helm] Update available: ${getOwnVersion()} -> ${cache.latest_version}. Run "${updateCommand}" to update.\n`,
+                        `[helm] Update available: ${getOwnVersion()} -> ${cache.latest_version}. Run "helm update" to update.\n`,
                     );
                 }
                 return;
@@ -107,9 +104,8 @@ async function fetchLatestVersion(): Promise<void> {
 
         // Show the message now if there's an update
         if (isNewerVersion(getOwnVersion(), latest)) {
-            const updateCommand = getUpdateCommandForSource(getInstallSource());
             process.stderr.write(
-                `[helm] Update available: ${getOwnVersion()} -> ${latest}. Run "${updateCommand}" to update.\n`,
+                `[helm] Update available: ${getOwnVersion()} -> ${latest}. Run "helm update" to update.\n`,
             );
         }
     } finally {
