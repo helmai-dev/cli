@@ -132,9 +132,16 @@ export async function spawnAgentForRun(
     const projectPath = resolveProjectPath(projectSlug);
 
     if (!projectPath) {
-        log(`No local project path for run ${run.ulid} (project: ${projectSlug ?? 'none'})`);
+        const reason = projectSlug
+            ? `No local project path for "${projectSlug}". Run: helm link ${projectSlug} /path/to/project`
+            : 'Run has no project associated.';
+        log(`${reason} (run ${run.ulid})`);
+
+        // Post error as a run event so it appears in the dashboard
+        api.storeRunEvent(run.id, 'agent.stderr', { raw: reason }).catch(() => {});
+
         try {
-            await api.updateRunStatus(run.id, 'failed', 'No local project path found on this machine.');
+            await api.updateRunStatus(run.id, 'failed', reason);
         } catch (err) {
             log(`Failed to mark run ${run.ulid} as failed: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -172,6 +179,7 @@ export async function spawnAgentForRun(
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log(`Spawn error for run ${run.ulid}: ${msg}`);
+        api.storeRunEvent(run.id, 'agent.stderr', { raw: `Spawn error: ${msg}` }).catch(() => {});
         api.updateRunStatus(run.id, 'failed', `Spawn error: ${msg}`).catch(() => {});
         stats.totalFailed++;
         onStatusChange?.();
