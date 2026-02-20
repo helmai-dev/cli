@@ -143,7 +143,31 @@ export function getInstallSource(): InstallSource {
         return normalizeInstallSource(config.installSource);
     }
 
-    return detectInstallSourceFromEnvironment();
+    const envSource = detectInstallSourceFromEnvironment();
+    if (envSource !== 'unknown') {
+        return envSource;
+    }
+
+    return detectInstallSourceFromBinaryPath();
+}
+
+function detectInstallSourceFromBinaryPath(): InstallSource {
+    try {
+        const binPath = process.argv[1] ?? '';
+        if (binPath.includes('node_modules')) {
+            return 'npm';
+        }
+
+        // Standalone binary (e.g. ~/.local/bin/helm, /usr/local/bin/helm)
+        // is characteristic of curl-based install
+        if (binPath && !binPath.includes('node_modules')) {
+            return 'curl';
+        }
+    } catch {
+        // Ignore
+    }
+
+    return 'unknown';
 }
 
 export function setInstallSource(source: InstallSource): void {

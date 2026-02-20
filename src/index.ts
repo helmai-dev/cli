@@ -319,12 +319,42 @@ program
     .action(async () => {
         const chalk = (await import('chalk')).default;
         const { execSync } = await import('child_process');
+        const ora = (await import('ora')).default;
         const { getInstallSource, getUpdateCommandForSource } =
             await import('./lib/config.js');
         const source = getInstallSource();
         const updateCommand = getUpdateCommandForSource(source);
 
-        console.log(chalk.cyan.bold('\n  ⎈ Updating Helm...\n'));
+        console.log(chalk.cyan.bold('\n  ⎈ Helm Update\n'));
+
+        // Show current version
+        let currentVersion = 'unknown';
+        try {
+            const fs = await import('fs');
+            const path = await import('path');
+            let dir = __dirname;
+            for (let i = 0; i < 5; i++) {
+                const pkgPath = path.join(dir, 'package.json');
+                if (fs.existsSync(pkgPath)) {
+                    const pkg = JSON.parse(
+                        fs.readFileSync(pkgPath, 'utf-8'),
+                    );
+                    if (pkg.name === '@helmai/cli') {
+                        currentVersion = pkg.version;
+                        break;
+                    }
+                }
+                dir = path.dirname(dir);
+            }
+        } catch {
+            // Ignore
+        }
+
+        console.log(chalk.gray(`  Current version: ${currentVersion}`));
+        console.log(chalk.gray(`  Install method:  ${source}`));
+        console.log('');
+
+        const spinner = ora(`Running: ${updateCommand}`).start();
 
         try {
             execSync(updateCommand, {
@@ -333,17 +363,15 @@ program
                 shell: '/bin/sh',
             });
 
-            console.log(chalk.green('✓ Update command completed successfully'));
-            console.log(chalk.gray(`  Install source: ${source}`));
-            console.log(chalk.gray(`  Command: ${updateCommand}`));
+            spinner.succeed('Update complete');
             console.log(
                 chalk.gray(
                     '  Restart your terminal or IDE to use the new version.\n',
                 ),
             );
-        } catch {
-            console.log(chalk.red('Failed to update.'));
-            console.log(chalk.white(`  Try manually: ${updateCommand}\n`));
+        } catch (error) {
+            spinner.fail('Update failed');
+            console.log(chalk.white(`\n  Try manually: ${updateCommand}\n`));
         }
     });
 
