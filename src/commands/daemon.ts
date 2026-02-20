@@ -7,7 +7,6 @@ import {
     getDaemonPidPath,
     loadMachineIdentity,
 } from '../lib/config.js';
-import { runDaemonLoop } from '../lib/daemon-loop.js';
 
 export function stopDaemonIfRunning(): boolean {
     const { running, pid } = isDaemonRunning();
@@ -79,14 +78,15 @@ export function startDaemon(): { started: boolean; alreadyRunning: boolean; pid?
     // Find the helm binary to spawn the daemon loop
     const helmBin = process.argv[0] ?? 'helm';
 
-    // Spawn detached process using `helm daemon run`
+    // Spawn detached process with HELM_DAEMON_MODE env var
+    // (avoids Bun compiled binary arg parsing issues)
     const logPath = getDaemonLogPath();
     const logFd = fs.openSync(logPath, 'a');
 
-    const child = spawn(helmBin, ['daemon', 'run'], {
+    const child = spawn(helmBin, [], {
         detached: true,
         stdio: ['ignore', logFd, logFd],
-        env: { ...process.env },
+        env: { ...process.env, HELM_DAEMON_MODE: '1' },
     });
 
     child.unref();
@@ -193,6 +193,3 @@ export async function daemonStatusCommand(): Promise<void> {
     console.log('');
 }
 
-export async function daemonRunCommand(): Promise<void> {
-    await runDaemonLoop();
-}

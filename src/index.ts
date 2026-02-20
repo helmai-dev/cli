@@ -9,7 +9,6 @@ import {
 import { captureCommand } from './commands/capture.js';
 import { cleanCommand } from './commands/clean.js';
 import {
-    daemonRunCommand,
     daemonStartCommand,
     daemonStatusCommand,
     daemonStopCommand,
@@ -176,12 +175,6 @@ daemon
         await daemonStatusCommand();
     });
 
-daemon
-    .command('run', { hidden: true })
-    .description('Run the daemon loop (internal, used by daemon start)')
-    .action(async () => {
-        await daemonRunCommand();
-    });
 
 program
     .command('clean')
@@ -482,5 +475,11 @@ program
         await uninstallCommand(options);
     });
 
-checkForUpdate();
-program.parse();
+// When spawned as the background daemon, run the loop directly
+// and skip Commander.js (avoids Bun compiled binary arg issues).
+if (process.env.HELM_DAEMON_MODE === '1') {
+    import('./lib/daemon-loop.js').then(m => m.runDaemonLoop());
+} else {
+    checkForUpdate();
+    program.parse();
+}
