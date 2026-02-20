@@ -75,8 +75,9 @@ export function startDaemon(): { started: boolean; alreadyRunning: boolean; pid?
 
     ensureHelmDir();
 
-    // Find the helm binary to spawn the daemon loop
-    const helmBin = process.argv[0] ?? 'helm';
+    // Use process.execPath to get the compiled binary path
+    // (process.argv[0] returns the embedded Bun runtime in compiled binaries)
+    const helmBin = process.execPath;
 
     // Spawn detached process with HELM_DAEMON_MODE env var
     // (avoids Bun compiled binary arg parsing issues)
