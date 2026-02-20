@@ -165,4 +165,4 @@ fi
 
 echo ""
 echo "Running initial setup..."
-HELM_INSTALL_SOURCE=curl "$install_dir/$HELM_BIN_NAME" init
+HELM_INSTALL_SOURCE=curl "$install_dir/$HELM_BIN_NAME" init </dev/tty
