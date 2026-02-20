@@ -165,9 +165,5 @@ fi
 
 echo ""
 echo "Running initial setup..."
-
-# Reconnect stdin to the terminal so interactive prompts work
-# when this script is run via curl|bash (where stdin is the pipe).
-exec </dev/tty
 HELM_INSTALL_SOURCE=curl "$install_dir/$HELM_BIN_NAME" init
 echo ""

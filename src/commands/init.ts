@@ -1,8 +1,9 @@
 import chalk from 'chalk';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
-import inquirer from 'inquirer';
+import { createPromptModule } from 'inquirer';
 import open from 'open';
+import * as tty from 'tty';
 import ora from 'ora';
 import * as os from 'os';
 import * as path from 'path';
@@ -41,6 +42,24 @@ interface InitOptions {
     onboardingTasks?: boolean;
     forceOnboardingTasks?: boolean;
 }
+
+// Create a prompt module that works even when stdin is a pipe (e.g. curl|bash).
+// Opens /dev/tty directly so inquirer gets a real terminal for raw mode input.
+function createTtyPrompt() {
+    if (process.stdin.isTTY) {
+        return createPromptModule();
+    }
+
+    try {
+        const fd = fs.openSync('/dev/tty', 'r');
+        const input = new tty.ReadStream(fd);
+        return createPromptModule({ input });
+    } catch {
+        return createPromptModule();
+    }
+}
+
+const prompt = createTtyPrompt();
 
 export async function initCommand(options: InitOptions = {}): Promise<void> {
     // Team invite flow
@@ -219,7 +238,7 @@ async function openAdmiral(): Promise<void> {
 }
 
 async function promptUseExisting(): Promise<boolean> {
-    const { useExisting } = await inquirer.prompt<{ useExisting: boolean }>([
+    const { useExisting } = await prompt<{ useExisting: boolean }>([
         {
             type: 'confirm',
             name: 'useExisting',
@@ -257,7 +276,7 @@ async function selectAgentRuntimes(
         checked: false,
     });
 
-    const { selected } = await inquirer.prompt<{ selected: string[] }>([
+    const { selected } = await prompt<{ selected: string[] }>([
         {
             type: 'checkbox',
             name: 'selected',
@@ -273,7 +292,7 @@ async function selectAgentRuntimes(
     const values = selected.filter((value) => value !== '__custom__');
 
     if (selected.includes('__custom__')) {
-        const { customRuntime } = await inquirer.prompt<{
+        const { customRuntime } = await prompt<{
             customRuntime: string;
         }>([
             {
@@ -377,7 +396,7 @@ async function runOnboardingIfNeeded(
         await pullCloudCache(cwd);
         await buildRulesAndScan(cwd, stack);
     } else if (!nonInteractive) {
-        const { reOnboard } = await inquirer.prompt<{ reOnboard: boolean }>([
+        const { reOnboard } = await prompt<{ reOnboard: boolean }>([
             {
                 type: 'confirm',
                 name: 'reOnboard',
@@ -816,7 +835,7 @@ async function askScopeQuestion(nonInteractive = false): Promise<void> {
         return;
     }
 
-    const { scope } = await inquirer.prompt<{ scope: 'global' | 'project' }>([
+    const { scope } = await prompt<{ scope: 'global' | 'project' }>([
         {
             type: 'list',
             name: 'scope',
@@ -1290,7 +1309,7 @@ async function offerRulesUpload(cwd: string): Promise<void> {
         chalk.cyan(`\n📋 Found existing .helm/standing-orders.md (${lineCount} lines)\n`),
     );
 
-    const { upload } = await inquirer.prompt<{ upload: boolean }>([
+    const { upload } = await prompt<{ upload: boolean }>([
         {
             type: 'confirm',
             name: 'upload',
@@ -1359,7 +1378,7 @@ async function handleRegister(nonInteractive = false): Promise<void> {
         );
     }
 
-    const answers = await inquirer.prompt<{
+    const answers = await prompt<{
         name: string;
         email: string;
         password: string;
@@ -1421,7 +1440,7 @@ async function handleRegister(nonInteractive = false): Promise<void> {
 }
 
 async function handleLogin(nonInteractive = false): Promise<void> {
-    const answers = await inquirer.prompt<{
+    const answers = await prompt<{
         email: string;
         password: string;
     }>([
@@ -1621,7 +1640,7 @@ async function installRecommendedMcps(
             for (const [key, description] of Object.entries(
                 mcp.config_template,
             )) {
-                const { value } = await inquirer.prompt<{ value: string }>([
+                const { value } = await prompt<{ value: string }>([
                     {
                         type: 'password',
                         name: 'value',
@@ -1682,7 +1701,7 @@ async function installRecommendedMcps(
 }
 
 async function confirmMcpInstall(count: number): Promise<boolean> {
-    const { confirm } = await inquirer.prompt<{ confirm: boolean }>([
+    const { confirm } = await prompt<{ confirm: boolean }>([
         {
             type: 'confirm',
             name: 'confirm',
