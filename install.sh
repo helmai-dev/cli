@@ -68,32 +68,29 @@ trap cleanup EXIT
 manifest_path="$tmp_dir/releases.json"
 curl -fsSL "$HELM_RELEASES_URL" -o "$manifest_path"
 
-python3 - "$manifest_path" "$desired_version" "$platform" "$arch" <<'PY' > "$tmp_dir/selection.txt"
-import json
-import sys
+# Parse the JSON manifest with grep/sed (no python3 dependency)
+target_key="${platform}-${arch}"
 
-manifest_path, desired_version, platform, arch = sys.argv[1:]
-with open(manifest_path, 'r', encoding='utf-8') as fh:
-    data = json.load(fh)
+if [[ "$desired_version" == "latest" ]]; then
+  resolved_version="$(grep -o '"latest"[[:space:]]*:[[:space:]]*"[^"]*"' "$manifest_path" | sed 's/.*"latest"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+else
+  resolved_version="$desired_version"
+fi
 
-resolved = data.get('latest') if desired_version == 'latest' else desired_version
-release = data.get('versions', {}).get(resolved)
-if not release:
-    raise SystemExit(f"Release not found for version: {resolved}")
+if [[ -z "$resolved_version" ]]; then
+  echo "Failed to resolve version from manifest."
+  exit 1
+fi
 
-target_key = f"{platform}-{arch}"
-artifact = release.get('artifacts', {}).get(target_key)
-if not artifact:
-    raise SystemExit(f"Artifact not found for target: {target_key}")
+# Extract the artifact URL and SHA for our target
+artifact_block="$(sed -n "/${target_key}/,/}/p" "$manifest_path" | head -4)"
+artifact_url="$(echo "$artifact_block" | grep '"url"' | sed 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+artifact_sha="$(echo "$artifact_block" | grep '"sha256"' | sed 's/.*"sha256"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
 
-print(resolved)
-print(artifact['url'])
-print(artifact['sha256'])
-PY
-
-read -r resolved_version < "$tmp_dir/selection.txt"
-read -r artifact_url < <(sed -n '2p' "$tmp_dir/selection.txt")
-read -r artifact_sha < <(sed -n '3p' "$tmp_dir/selection.txt")
+if [[ -z "$artifact_url" ]]; then
+  echo "Artifact not found for target: $target_key"
+  exit 1
+fi
 
 archive_path="$tmp_dir/helm.tar.gz"
 archive_type="tar.gz"
@@ -114,14 +111,7 @@ if [[ "$calculated_sha" != "$artifact_sha" ]]; then
 fi
 
 if [[ "$archive_type" == "zip" ]]; then
-  python3 - "$archive_path" "$tmp_dir" <<'PY'
-import sys
-import zipfile
-
-archive_path, output_dir = sys.argv[1:]
-with zipfile.ZipFile(archive_path, 'r') as archive:
-    archive.extractall(output_dir)
-PY
+  unzip -qo "$archive_path" -d "$tmp_dir"
 else
   tar -xzf "$archive_path" -C "$tmp_dir"
 fi
