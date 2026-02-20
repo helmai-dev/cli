@@ -30,6 +30,7 @@ import { ruleAddCommand } from './commands/rule.js';
 import { saveCommand } from './commands/save.js';
 import { promoteSkillCommand } from './commands/skills.js';
 import { syncCommand } from './commands/sync.js';
+import { uninstallCommand } from './commands/uninstall.js';
 
 const program = new Command();
 
@@ -456,6 +457,14 @@ program
 
         clearCredentials();
         console.log(chalk.green('\n✓ Logged out successfully\n'));
+    });
+
+program
+    .command('uninstall')
+    .description('Completely remove Helm from your system')
+    .option('--yes', 'Skip confirmation prompt', false)
+    .action(async (options: { yes?: boolean }) => {
+        await uninstallCommand(options);
     });
 
 program.parse();

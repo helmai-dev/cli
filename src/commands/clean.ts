@@ -4,6 +4,7 @@ import inquirer from 'inquirer';
 import * as os from 'os';
 import * as path from 'path';
 import { removeGitPreCommitHook } from '../lib/git-hooks.js';
+import { stopDaemonIfRunning } from './daemon.js';
 
 interface CleanOptions {
     all?: boolean;
@@ -97,9 +98,13 @@ export async function cleanCommand(options: CleanOptions = {}): Promise<void> {
         }
     }
 
-    if (selected.global && fs.existsSync(globalHelmDir)) {
-        fs.rmSync(globalHelmDir, { recursive: true, force: true });
-        stats.filesDeleted.push(globalHelmDir);
+    if (selected.global) {
+        stopDaemonIfRunning();
+
+        if (fs.existsSync(globalHelmDir)) {
+            fs.rmSync(globalHelmDir, { recursive: true, force: true });
+            stats.filesDeleted.push(globalHelmDir);
+        }
     }
 
     printSummary(stats);

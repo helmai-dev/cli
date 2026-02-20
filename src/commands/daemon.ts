@@ -9,6 +9,31 @@ import {
     loadMachineIdentity,
 } from '../lib/config.js';
 
+export function stopDaemonIfRunning(): boolean {
+    const { running, pid } = isDaemonRunning();
+
+    if (!running || pid === null) {
+        return false;
+    }
+
+    try {
+        process.kill(pid, 'SIGTERM');
+    } catch {
+        // Process already gone
+    }
+
+    try {
+        const pidPath = getDaemonPidPath();
+        if (fs.existsSync(pidPath)) {
+            fs.unlinkSync(pidPath);
+        }
+    } catch {
+        // Ignore
+    }
+
+    return true;
+}
+
 function isDaemonRunning(): { running: boolean; pid: number | null } {
     const pidPath = getDaemonPidPath();
 
