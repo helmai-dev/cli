@@ -113,8 +113,51 @@ function buildAgentCommand(run: PendingRun): { command: string; args: string[] }
             }
             return { command: 'claude', args };
         }
+        case 'amp': {
+            const args = [
+                '-x',
+                prompt,
+                '--stream-json',
+                '--dangerously-allow-all',
+            ];
+            if (run.requested_model) {
+                args.push('-m', run.requested_model);
+            }
+            return { command: 'amp', args };
+        }
+        case 'gemini': {
+            const args = [
+                '-p',
+                prompt,
+                '-o',
+                'stream-json',
+                '--yolo',
+            ];
+            if (run.requested_model) {
+                args.push('-m', run.requested_model);
+            }
+            return { command: 'gemini', args };
+        }
+        case 'opencode': {
+            const args = [
+                'run',
+                prompt,
+            ];
+            return { command: 'opencode', args };
+        }
+        case 'codex': {
+            const args = [
+                '-p',
+                prompt,
+                '--full-auto',
+            ];
+            if (run.requested_model) {
+                args.push('--model', run.requested_model);
+            }
+            return { command: 'codex', args };
+        }
         default:
-            return { command: agent, args: ['-p', prompt] };
+            return { command: agent, args: [prompt] };
     }
 }
 
