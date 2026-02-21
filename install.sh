@@ -137,15 +137,6 @@ else
     mkdir -p "$install_dir" 2>/dev/null || true
   fi
 
-  # macOS: Bun-compiled binaries have an embedded linker signature that becomes
-  # invalid after download. Strip it and re-sign before copying to install dir
-  # (avoids needing sudo for codesign).
-  if [[ "$platform" == "darwin" ]]; then
-    xattr -dr com.apple.quarantine "$tmp_dir/$HELM_BIN_NAME" 2>/dev/null || true
-    codesign --remove-signature "$tmp_dir/$HELM_BIN_NAME" 2>/dev/null || true
-    codesign --force --sign - "$tmp_dir/$HELM_BIN_NAME" 2>/dev/null || true
-  fi
-
   if [[ -w "$install_dir" ]]; then
     cp "$tmp_dir/$HELM_BIN_NAME" "$install_dir/$HELM_BIN_NAME"
     chmod 0755 "$install_dir/$HELM_BIN_NAME"
@@ -154,6 +145,22 @@ else
     sudo mkdir -p "$install_dir"
     sudo cp "$tmp_dir/$HELM_BIN_NAME" "$install_dir/$HELM_BIN_NAME"
     sudo chmod 0755 "$install_dir/$HELM_BIN_NAME"
+  fi
+
+  # macOS: Bun-compiled binaries have an embedded linker signature that becomes
+  # invalid after download/copy. Strip and re-sign the INSTALLED binary so
+  # Gatekeeper allows execution. Must happen after cp, not before.
+  if [[ "$platform" == "darwin" ]]; then
+    target="$install_dir/$HELM_BIN_NAME"
+    if [[ -w "$target" ]]; then
+      xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
+      codesign --remove-signature "$target" 2>/dev/null || true
+      codesign --force --sign - "$target" 2>/dev/null || true
+    else
+      sudo xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
+      sudo codesign --remove-signature "$target" 2>/dev/null || true
+      sudo codesign --force --sign - "$target" 2>/dev/null || true
+    fi
   fi
 fi
 
