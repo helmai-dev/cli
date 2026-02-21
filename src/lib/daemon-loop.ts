@@ -1,7 +1,7 @@
 /**
  * Daemon loop module — runs as a detached child process.
- * Sends heartbeat with local project paths to the Admiral API every 30 seconds.
- * Picks up queued runs and spawns agent processes to execute them.
+ * Connects to the Admiral WebSocket server for real-time communication.
+ * Falls back to HTTP polling when WebSocket is unavailable.
  */
 
 import * as fs from 'fs';
@@ -23,8 +23,10 @@ import {
     getStats,
     gracefulShutdown,
     isRunActive,
+    setWebSocketClient,
     spawnAgentForRun,
 } from './process-manager.js';
+import { DaemonWebSocketClient } from './websocket-client.js';
 
 const VERSION = pkg.version;
 
@@ -37,6 +39,7 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 let fastPollTimer: ReturnType<typeof setTimeout> | null = null;
 let shuttingDown = false;
 let lastHeartbeatAt: string | null = null;
+let wsClient: DaemonWebSocketClient | null = null;
 
 /** Timestamp when the daemon started */
 const startedAt = new Date();
@@ -88,7 +91,10 @@ function cleanupStatusFile(): void {
     }
 }
 
-async function heartbeat(): Promise<PendingRun[]> {
+/**
+ * HTTP heartbeat — used as fallback when WebSocket is unavailable.
+ */
+async function heartbeatHttp(): Promise<PendingRun[]> {
     const credentials = loadCredentials();
     if (!credentials) {
         log('No credentials found, skipping heartbeat');
@@ -118,10 +124,27 @@ async function heartbeat(): Promise<PendingRun[]> {
         const msg = error instanceof Error ? error.message : String(error);
         log(`Heartbeat failed: ${msg}`);
 
-        // Exponential backoff: 0 -> 5s -> 10s -> 20s -> ... -> MAX
         backoffMs = backoffMs === 0 ? 5_000 : Math.min(backoffMs * 2, MAX_BACKOFF_MS);
         return [];
     }
+}
+
+/**
+ * WebSocket heartbeat — sends heartbeat with local projects over WS.
+ */
+function heartbeatWs(): void {
+    if (!wsClient?.isConnected) {
+        return;
+    }
+
+    const projectPaths = loadProjectPaths();
+    const localProjects = projectPaths.map(entry => ({
+        slug: entry.slug,
+        local_path: entry.localPath,
+    }));
+
+    wsClient.sendHeartbeat(localProjects.length > 0 ? localProjects : undefined);
+    lastHeartbeatAt = new Date().toISOString();
 }
 
 async function fastPoll(): Promise<PendingRun[]> {
@@ -177,19 +200,32 @@ async function processPendingRuns(pendingRuns: PendingRun[]): Promise<void> {
     }
 }
 
-function scheduleNext(): void {
+/**
+ * Schedule HTTP heartbeat loop — used as fallback or alongside WS for project sync.
+ */
+function scheduleHeartbeat(): void {
     const delay = HEARTBEAT_INTERVAL_MS + backoffMs;
     timer = setTimeout(async () => {
-        const pendingRuns = await heartbeat();
-        await processPendingRuns(pendingRuns);
+        if (wsClient?.isConnected) {
+            // Use WS heartbeat when connected
+            heartbeatWs();
+        } else {
+            // Fall back to HTTP heartbeat
+            const pendingRuns = await heartbeatHttp();
+            await processPendingRuns(pendingRuns);
+        }
         writeDaemonStatus();
-        scheduleNext();
+        scheduleHeartbeat();
     }, delay);
 }
 
+/**
+ * Schedule HTTP fast poll — only active when WebSocket is NOT connected.
+ */
 function scheduleFastPoll(): void {
     fastPollTimer = setTimeout(async () => {
-        if (!shuttingDown && canAcceptMore()) {
+        // Skip polling when WS is connected (server pushes pending runs)
+        if (!shuttingDown && canAcceptMore() && !wsClient?.isConnected) {
             const pendingRuns = await fastPoll();
             if (pendingRuns.length > 0) {
                 await processPendingRuns(pendingRuns);
@@ -200,6 +236,33 @@ function scheduleFastPoll(): void {
             scheduleFastPoll();
         }
     }, FAST_POLL_INTERVAL_MS);
+}
+
+function initWebSocket(): DaemonWebSocketClient | null {
+    const machine = loadMachineIdentity();
+    if (!machine) {
+        return null;
+    }
+
+    const client = new DaemonWebSocketClient({
+        name: machine.name,
+        fingerprint: machine.fingerprint,
+        log,
+        onPendingRuns: (runs: PendingRun[]) => {
+            processPendingRuns(runs).then(() => writeDaemonStatus());
+        },
+        onRunInput: (runUlid: string, message: string) => {
+            log(`Received input for run ${runUlid}: ${message.slice(0, 100)}`);
+            // TODO: pipe to running agent process stdin when supported
+        },
+        onRunCancel: (runUlid: string) => {
+            log(`Received cancel for run ${runUlid}`);
+            // TODO: send SIGTERM to matching agent process when supported
+        },
+    });
+
+    client.connect();
+    return client;
 }
 
 async function cleanup(): Promise<void> {
@@ -218,11 +281,14 @@ async function cleanup(): Promise<void> {
         fastPollTimer = null;
     }
 
+    // Close WebSocket connection
+    wsClient?.close();
+    wsClient = null;
+
     await gracefulShutdown(log);
     cleanupStatusFile();
 
     // Only delete PID file if it still belongs to this process
-    // (prevents a shutting-down old daemon from deleting a new daemon's PID file)
     try {
         const pidPath = getDaemonPidPath();
         if (fs.existsSync(pidPath)) {
@@ -249,12 +315,19 @@ export async function runDaemonLoop(): Promise<void> {
     process.on('SIGTERM', () => { cleanup(); });
     process.on('SIGINT', () => { cleanup(); });
 
-    // Initial heartbeat + process any pending runs
-    const pendingRuns = await heartbeat();
+    // Initialize WebSocket connection (non-blocking — runs in background)
+    wsClient = initWebSocket();
+    if (wsClient) {
+        setWebSocketClient(wsClient);
+    }
+
+    // Initial HTTP heartbeat to get immediate pending runs
+    // (WS connect + auth happens concurrently)
+    const pendingRuns = await heartbeatHttp();
     await processPendingRuns(pendingRuns);
     writeDaemonStatus();
 
-    // Schedule recurring heartbeats + fast poll for pending runs
-    scheduleNext();
+    // Schedule recurring heartbeats + fast poll (fast poll skips when WS is active)
+    scheduleHeartbeat();
     scheduleFastPoll();
 }

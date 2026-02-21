@@ -1,12 +1,14 @@
 /**
  * Process manager — spawns agent processes for pending runs,
- * streams stdout/stderr to the backend, and manages lifecycle.
+ * streams stdout/stderr to the backend via WebSocket (with HTTP fallback),
+ * and manages lifecycle.
  */
 
 import { spawn, type ChildProcess } from 'child_process';
 import type { PendingRun } from '../types.js';
 import * as api from './api.js';
 import { loadProjectPaths } from './config.js';
+import type { DaemonWebSocketClient } from './websocket-client.js';
 
 const MAX_CONCURRENT = 3;
 
@@ -29,6 +31,13 @@ const stats = {
     totalCompleted: 0,
     totalFailed: 0,
 };
+
+/** Shared WebSocket client reference, set by daemon-loop */
+let wsClient: DaemonWebSocketClient | null = null;
+
+export function setWebSocketClient(client: DaemonWebSocketClient | null): void {
+    wsClient = client;
+}
 
 export function canAcceptMore(): boolean {
     return activeProcesses.size < MAX_CONCURRENT;
@@ -117,6 +126,41 @@ function buildAgentCommand(run: PendingRun): { command: string; args: string[] }
     }
 }
 
+/**
+ * Send a run event — prefers WebSocket, falls back to HTTP.
+ */
+function sendRunEvent(runUlid: string, runId: number, eventType: string, payload: Record<string, unknown>): void {
+    if (wsClient?.isConnected) {
+        wsClient.sendRunEvent(runUlid, eventType, payload);
+    } else {
+        api.storeRunEvent(runId, eventType, payload).catch(() => {});
+    }
+}
+
+/**
+ * Send a run status update — prefers WebSocket, falls back to HTTP.
+ */
+function sendRunStatus(runUlid: string, runId: number, status: string, failureReason?: string): void {
+    if (wsClient?.isConnected) {
+        wsClient.sendRunStatus(runUlid, status, failureReason);
+    } else {
+        api.updateRunStatus(runId, status, failureReason).catch(err => {
+            // Logged by caller
+        });
+    }
+}
+
+/**
+ * Claim a run — prefers WebSocket, falls back to HTTP.
+ */
+async function claimRun(runUlid: string, runId: number, machineId: number): Promise<void> {
+    if (wsClient?.isConnected) {
+        wsClient.sendRunClaim(runUlid);
+    } else {
+        await api.claimRun(runId, machineId);
+    }
+}
+
 export async function spawnAgentForRun(
     run: PendingRun,
     machineId: number,
@@ -137,11 +181,10 @@ export async function spawnAgentForRun(
             : 'Run has no project associated.';
         log(`${reason} (run ${run.ulid})`);
 
-        // Post error as a run event so it appears in the dashboard
-        api.storeRunEvent(run.id, 'agent.stderr', { raw: reason }).catch(() => {});
+        sendRunEvent(run.ulid, run.id, 'agent.stderr', { raw: reason });
 
         try {
-            await api.updateRunStatus(run.id, 'failed', reason);
+            sendRunStatus(run.ulid, run.id, 'failed', reason);
         } catch (err) {
             log(`Failed to mark run ${run.ulid} as failed: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -152,16 +195,16 @@ export async function spawnAgentForRun(
 
     // Claim the run
     try {
-        await api.claimRun(run.id, machineId);
+        await claimRun(run.ulid, run.id, machineId);
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log(`Failed to claim run ${run.ulid}: ${msg}`);
         return;
     }
 
-    // Transition to running (best-effort — don't abort if this fails)
+    // Transition to running
     try {
-        await api.updateRunStatus(run.id, 'running');
+        sendRunStatus(run.ulid, run.id, 'running');
     } catch (err) {
         log(`Failed to transition run ${run.ulid} to running: ${err instanceof Error ? err.message : String(err)} — continuing anyway`);
     }
@@ -179,8 +222,8 @@ export async function spawnAgentForRun(
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log(`Spawn error for run ${run.ulid}: ${msg}`);
-        api.storeRunEvent(run.id, 'agent.stderr', { raw: `Spawn error: ${msg}` }).catch(() => {});
-        api.updateRunStatus(run.id, 'failed', `Spawn error: ${msg}`).catch(() => {});
+        sendRunEvent(run.ulid, run.id, 'agent.stderr', { raw: `Spawn error: ${msg}` });
+        sendRunStatus(run.ulid, run.id, 'failed', `Spawn error: ${msg}`);
         stats.totalFailed++;
         onStatusChange?.();
         return;
@@ -225,7 +268,7 @@ export async function spawnAgentForRun(
                 payload = { raw: line };
             }
 
-            api.storeRunEvent(run.id, eventType, payload).catch(() => {});
+            sendRunEvent(run.ulid, run.id, eventType, payload);
         }
     });
 
@@ -241,17 +284,17 @@ export async function spawnAgentForRun(
                 continue;
             }
 
-            api.storeRunEvent(run.id, 'agent.stderr', { raw: line }).catch(() => {});
+            sendRunEvent(run.ulid, run.id, 'agent.stderr', { raw: line });
         }
     });
 
     child.on('close', (code: number | null, signal: string | null) => {
         // Flush remaining buffers
         if (stdoutBuffer.trim()) {
-            api.storeRunEvent(run.id, 'agent.stdout', { raw: stdoutBuffer }).catch(() => {});
+            sendRunEvent(run.ulid, run.id, 'agent.stdout', { raw: stdoutBuffer });
         }
         if (stderrBuffer.trim()) {
-            api.storeRunEvent(run.id, 'agent.stderr', { raw: stderrBuffer }).catch(() => {});
+            sendRunEvent(run.ulid, run.id, 'agent.stderr', { raw: stderrBuffer });
         }
 
         activeProcesses.delete(run.id);
@@ -259,18 +302,14 @@ export async function spawnAgentForRun(
         if (code === 0) {
             log(`Run ${run.ulid} completed successfully`);
             stats.totalCompleted++;
-            api.updateRunStatus(run.id, 'completed').catch(err => {
-                log(`Failed to mark run ${run.ulid} as completed: ${err instanceof Error ? err.message : String(err)}`);
-            });
+            sendRunStatus(run.ulid, run.id, 'completed');
         } else {
             const reason = signal
                 ? `Process killed by signal ${signal}`
                 : `Process exited with code ${code}`;
             log(`Run ${run.ulid} failed: ${reason}`);
             stats.totalFailed++;
-            api.updateRunStatus(run.id, 'failed', reason).catch(err => {
-                log(`Failed to mark run ${run.ulid} as failed: ${err instanceof Error ? err.message : String(err)}`);
-            });
+            sendRunStatus(run.ulid, run.id, 'failed', reason);
         }
 
         onStatusChange?.();
@@ -280,7 +319,7 @@ export async function spawnAgentForRun(
         activeProcesses.delete(run.id);
         log(`Spawn error for run ${run.ulid}: ${err.message}`);
         stats.totalFailed++;
-        api.updateRunStatus(run.id, 'failed', `Spawn error: ${err.message}`).catch(() => {});
+        sendRunStatus(run.ulid, run.id, 'failed', `Spawn error: ${err.message}`);
         onStatusChange?.();
     });
 }
@@ -306,9 +345,13 @@ export async function gracefulShutdown(log: (message: string) => void): Promise<
     // Force kill any remaining
     if (activeProcesses.size > 0) {
         log(`Force killing ${activeProcesses.size} remaining process(es)`);
-        for (const [runId, proc] of activeProcesses) {
+        for (const [, proc] of activeProcesses) {
+            if (wsClient?.isConnected) {
+                wsClient.sendRunStatus(proc.runUlid, 'stale', 'Daemon shutdown — process force killed');
+            } else {
+                api.updateRunStatus(proc.runId, 'stale', 'Daemon shutdown — process force killed').catch(() => {});
+            }
             proc.child.kill('SIGKILL');
-            api.updateRunStatus(runId, 'stale', 'Daemon shutdown — process force killed').catch(() => {});
         }
         activeProcesses.clear();
     }
