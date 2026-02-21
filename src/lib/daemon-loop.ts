@@ -29,10 +29,12 @@ import {
 const VERSION = pkg.version;
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
+const FAST_POLL_INTERVAL_MS = 3_000;
 const MAX_BACKOFF_MS = 5 * 60_000;
 
 let backoffMs = 0;
 let timer: ReturnType<typeof setTimeout> | null = null;
+let fastPollTimer: ReturnType<typeof setTimeout> | null = null;
 let shuttingDown = false;
 let lastHeartbeatAt: string | null = null;
 
@@ -122,6 +124,27 @@ async function heartbeat(): Promise<PendingRun[]> {
     }
 }
 
+async function fastPoll(): Promise<PendingRun[]> {
+    const credentials = loadCredentials();
+    if (!credentials) {
+        return [];
+    }
+
+    const machine = loadMachineIdentity();
+    if (!machine) {
+        return [];
+    }
+
+    try {
+        const response = await api.pollForRuns(machine.id);
+        return response.pending_runs ?? [];
+    } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        log(`Fast poll failed: ${msg}`);
+        return [];
+    }
+}
+
 async function processPendingRuns(pendingRuns: PendingRun[]): Promise<void> {
     if (shuttingDown || pendingRuns.length === 0) {
         return;
@@ -164,6 +187,21 @@ function scheduleNext(): void {
     }, delay);
 }
 
+function scheduleFastPoll(): void {
+    fastPollTimer = setTimeout(async () => {
+        if (!shuttingDown && canAcceptMore()) {
+            const pendingRuns = await fastPoll();
+            if (pendingRuns.length > 0) {
+                await processPendingRuns(pendingRuns);
+                writeDaemonStatus();
+            }
+        }
+        if (!shuttingDown) {
+            scheduleFastPoll();
+        }
+    }, FAST_POLL_INTERVAL_MS);
+}
+
 async function cleanup(): Promise<void> {
     if (shuttingDown) {
         return;
@@ -173,6 +211,11 @@ async function cleanup(): Promise<void> {
     if (timer) {
         clearTimeout(timer);
         timer = null;
+    }
+
+    if (fastPollTimer) {
+        clearTimeout(fastPollTimer);
+        fastPollTimer = null;
     }
 
     await gracefulShutdown(log);
@@ -211,6 +254,7 @@ export async function runDaemonLoop(): Promise<void> {
     await processPendingRuns(pendingRuns);
     writeDaemonStatus();
 
-    // Schedule recurring heartbeats
+    // Schedule recurring heartbeats + fast poll for pending runs
     scheduleNext();
+    scheduleFastPoll();
 }

@@ -451,6 +451,21 @@ export async function heartbeatMachine(
     );
 }
 
+export interface PollForRunsResponse {
+    pending_runs: PendingRun[];
+}
+
+export async function pollForRuns(
+    machineId: number,
+): Promise<PollForRunsResponse> {
+    return request<PollForRunsResponse>(
+        `/admiral/machines/${machineId}/poll`,
+        {
+            method: 'POST',
+        },
+    );
+}
+
 export interface ProjectSetupInfoResponse {
     project: {
         ulid: string;
