@@ -1,6 +1,6 @@
 {
   "name": "@helmai/cli",
-  "version": "1.2.25",
+  "version": "1.2.26",
   "description": "Helm CLI - Intelligent context injection for AI coding assistants",
   "main": "dist/index.js",
   "bin": {
@@ -27,13 +27,11 @@
     "commander": "^12.0.0",
     "inquirer": "^9.2.0",
     "open": "^10.0.0",
-    "ora": "^8.0.0",
-    "ws": "^8.19.0"
+    "ora": "^8.0.0"
   },
   "devDependencies": {
     "@types/inquirer": "^9.0.7",
     "@types/node": "^20.0.0",
-    "@types/ws": "^8.18.1",
     "typescript": "^5.0.0"
   },
   "engines": {

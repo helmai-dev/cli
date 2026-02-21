@@ -1,6 +1,6 @@
 /**
  * Process manager — spawns agent processes for pending runs,
- * streams stdout/stderr to the backend via WebSocket (with HTTP fallback),
+ * streams stdout/stderr to the backend via HTTP POST,
  * and manages lifecycle.
  */
 
@@ -8,7 +8,6 @@ import { spawn, type ChildProcess } from 'child_process';
 import type { PendingRun } from '../types.js';
 import * as api from './api.js';
 import { loadProjectPaths } from './config.js';
-import type { DaemonWebSocketClient } from './websocket-client.js';
 
 const MAX_CONCURRENT = 3;
 
@@ -31,13 +30,6 @@ const stats = {
     totalCompleted: 0,
     totalFailed: 0,
 };
-
-/** Shared WebSocket client reference, set by daemon-loop */
-let wsClient: DaemonWebSocketClient | null = null;
-
-export function setWebSocketClient(client: DaemonWebSocketClient | null): void {
-    wsClient = client;
-}
 
 export function canAcceptMore(): boolean {
     return activeProcesses.size < MAX_CONCURRENT;
@@ -126,39 +118,16 @@ function buildAgentCommand(run: PendingRun): { command: string; args: string[] }
     }
 }
 
-/**
- * Send a run event — prefers WebSocket, falls back to HTTP.
- */
 function sendRunEvent(runUlid: string, runId: number, eventType: string, payload: Record<string, unknown>): void {
-    if (wsClient?.isConnected) {
-        wsClient.sendRunEvent(runUlid, eventType, payload);
-    } else {
-        api.storeRunEvent(runId, eventType, payload).catch(() => {});
-    }
+    api.storeRunEvent(runId, eventType, payload).catch(() => {});
 }
 
-/**
- * Send a run status update — prefers WebSocket, falls back to HTTP.
- */
 function sendRunStatus(runUlid: string, runId: number, status: string, failureReason?: string): void {
-    if (wsClient?.isConnected) {
-        wsClient.sendRunStatus(runUlid, status, failureReason);
-    } else {
-        api.updateRunStatus(runId, status, failureReason).catch(err => {
-            // Logged by caller
-        });
-    }
+    api.updateRunStatus(runId, status, failureReason).catch(() => {});
 }
 
-/**
- * Claim a run — prefers WebSocket, falls back to HTTP.
- */
 async function claimRun(runUlid: string, runId: number, machineId: number): Promise<void> {
-    if (wsClient?.isConnected) {
-        wsClient.sendRunClaim(runUlid);
-    } else {
-        await api.claimRun(runId, machineId);
-    }
+    await api.claimRun(runId, machineId);
 }
 
 export async function spawnAgentForRun(
@@ -346,11 +315,7 @@ export async function gracefulShutdown(log: (message: string) => void): Promise<
     if (activeProcesses.size > 0) {
         log(`Force killing ${activeProcesses.size} remaining process(es)`);
         for (const [, proc] of activeProcesses) {
-            if (wsClient?.isConnected) {
-                wsClient.sendRunStatus(proc.runUlid, 'stale', 'Daemon shutdown — process force killed');
-            } else {
-                api.updateRunStatus(proc.runId, 'stale', 'Daemon shutdown — process force killed').catch(() => {});
-            }
+            api.updateRunStatus(proc.runId, 'stale', 'Daemon shutdown — process force killed').catch(() => {});
             proc.child.kill('SIGKILL');
         }
         activeProcesses.clear();
