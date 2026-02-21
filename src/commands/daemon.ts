@@ -19,9 +19,32 @@ export function stopDaemonIfRunning(): boolean {
     try {
         process.kill(pid, 'SIGTERM');
     } catch {
-        // Process already gone
+        // Process already gone — clean up PID file and return
+        cleanupPidFile();
+        return true;
     }
 
+    // Wait for the process to actually exit (up to 15 seconds)
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+        try {
+            process.kill(pid, 0); // Test if still alive
+        } catch {
+            // Process is gone
+            break;
+        }
+        // Busy-wait in small increments (sync — this is a CLI command, not the daemon)
+        const waitUntil = Date.now() + 250;
+        while (Date.now() < waitUntil) {
+            // spin
+        }
+    }
+
+    cleanupPidFile();
+    return true;
+}
+
+function cleanupPidFile(): void {
     try {
         const pidPath = getDaemonPidPath();
         if (fs.existsSync(pidPath)) {
@@ -30,8 +53,6 @@ export function stopDaemonIfRunning(): boolean {
     } catch {
         // Ignore
     }
-
-    return true;
 }
 
 function isDaemonRunning(): { running: boolean; pid: number | null } {
@@ -129,29 +150,14 @@ export async function daemonStartCommand(): Promise<void> {
 }
 
 export async function daemonStopCommand(): Promise<void> {
-    const { running, pid } = isDaemonRunning();
+    const stopped = stopDaemonIfRunning();
 
-    if (!running || pid === null) {
+    if (!stopped) {
         console.log(chalk.yellow('\n  Daemon is not running.\n'));
         return;
     }
 
-    try {
-        process.kill(pid, 'SIGTERM');
-        console.log(chalk.green(`\n  ✓ Daemon stopped (PID: ${pid})\n`));
-    } catch {
-        console.log(chalk.red(`\n  Failed to stop daemon (PID: ${pid})\n`));
-    }
-
-    // Clean up PID file
-    try {
-        const pidPath = getDaemonPidPath();
-        if (fs.existsSync(pidPath)) {
-            fs.unlinkSync(pidPath);
-        }
-    } catch {
-        // Ignore
-    }
+    console.log(chalk.green('\n  ✓ Daemon stopped\n'));
 }
 
 export async function daemonStatusCommand(): Promise<void> {

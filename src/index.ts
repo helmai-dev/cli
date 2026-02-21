@@ -344,11 +344,10 @@ program
         console.log('');
 
         // Stop daemon before updating to avoid crash from binary replacement
+        // stopDaemonIfRunning() waits for the process to fully exit (up to 15s)
         const daemonWasRunning = stopDaemonIfRunning();
         if (daemonWasRunning) {
             console.log(chalk.gray('  Stopped daemon for update...'));
-            // Give the daemon a moment to shut down cleanly
-            await new Promise(resolve => setTimeout(resolve, 1000));
         }
 
         console.log(chalk.gray(`  Updating...\n`));

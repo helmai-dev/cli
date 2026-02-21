@@ -178,10 +178,15 @@ async function cleanup(): Promise<void> {
     await gracefulShutdown(log);
     cleanupStatusFile();
 
+    // Only delete PID file if it still belongs to this process
+    // (prevents a shutting-down old daemon from deleting a new daemon's PID file)
     try {
         const pidPath = getDaemonPidPath();
         if (fs.existsSync(pidPath)) {
-            fs.unlinkSync(pidPath);
+            const storedPid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
+            if (storedPid === process.pid) {
+                fs.unlinkSync(pidPath);
+            }
         }
     } catch {
         // Best effort cleanup
