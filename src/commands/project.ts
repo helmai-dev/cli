@@ -63,8 +63,19 @@ export async function projectCommand(options: ProjectOptions = {}): Promise<void
         syncData = await api.sync();
         spinner.succeed(`Found ${syncData.projects.length} project(s) in ${syncData.organization.name}`);
     } catch (error) {
+        const errMsg = error instanceof Error ? error.message : 'Unknown error';
+        const isAuthError = errMsg.toLowerCase().includes('invalid api key')
+            || errMsg.toLowerCase().includes('unauthorized')
+            || errMsg.toLowerCase().includes('api key required');
+
         spinner.fail('Failed to fetch projects');
-        console.log(chalk.red(`  ${error instanceof Error ? error.message : 'Unknown error'}`));
+
+        if (isAuthError) {
+            console.log(chalk.red('  Your API key is no longer valid.'));
+            console.log(chalk.white('  Run `helm init` to re-authenticate.\n'));
+        } else {
+            console.log(chalk.red(`  ${errMsg}`));
+        }
         process.exit(1);
     }
 
@@ -179,8 +190,19 @@ async function linkToSlug(
         syncData = await api.sync();
         spinner.succeed('Projects loaded');
     } catch (error) {
+        const errMsg = error instanceof Error ? error.message : 'Unknown error';
+        const isAuthError = errMsg.toLowerCase().includes('invalid api key')
+            || errMsg.toLowerCase().includes('unauthorized')
+            || errMsg.toLowerCase().includes('api key required');
+
         spinner.fail('Failed to fetch projects');
-        console.log(chalk.red(`  ${error instanceof Error ? error.message : 'Unknown error'}`));
+
+        if (isAuthError) {
+            console.log(chalk.red('  Your API key is no longer valid.'));
+            console.log(chalk.white('  Run `helm init` to re-authenticate.\n'));
+        } else {
+            console.log(chalk.red(`  ${errMsg}`));
+        }
         process.exit(1);
     }
 
