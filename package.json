@@ -4,7 +4,7 @@
   "description": "Helm CLI - Intelligent context injection for AI coding assistants",
   "main": "dist/index.js",
   "bin": {
-    "helm": "./bin/helm.js"
+    "helm": "bin/helm.js"
   },
   "scripts": {
     "build": "tsc",
