@@ -226,10 +226,15 @@ export async function spawnAgentForRun(
 
     let child: ChildProcess;
     try {
+        const agentEnv = { ...process.env };
+        // Remove Claude Code nesting guard so spawned agents don't refuse to start
+        delete agentEnv.CLAUDECODE;
+        delete agentEnv.CLAUDE_CODE;
+
         child = spawn(command, args, {
             cwd: projectPath,
             stdio: ['ignore', 'pipe', 'pipe'],
-            env: { ...process.env },
+            env: agentEnv,
         });
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
