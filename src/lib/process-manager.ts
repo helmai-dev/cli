@@ -5,6 +5,8 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process';
+import { mkdirSync, writeFileSync, unlinkSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
 import type { PendingRun } from '../types.js';
 import * as api from './api.js';
 import { loadProjectPaths } from './config.js';
@@ -14,8 +16,11 @@ const MAX_CONCURRENT = 3;
 interface RunProcess {
     runId: number;
     runUlid: string;
+    taskUlid: string | null;
     taskTitle: string | null;
     projectSlug: string | null;
+    projectPath: string | null;
+    planFilePath: string | null;
     agent: string | null;
     model: string | null;
     child: ChildProcess;
@@ -79,7 +84,7 @@ function resolveProjectPath(projectSlug: string | null | undefined): string | nu
     return match?.localPath ?? null;
 }
 
-function buildPrompt(run: PendingRun): string {
+function buildPrompt(run: PendingRun, prd: string | null | undefined): string {
     const parts: string[] = [];
 
     if (run.task?.title) {
@@ -90,12 +95,39 @@ function buildPrompt(run: PendingRun): string {
         parts.push(run.task.description);
     }
 
+    // Include PRD content when available
+    const prdContent = prd ?? run.task?.prd;
+    if (prdContent) {
+        parts.push('---');
+        parts.push('A PRD has been prepared for this task. Follow it. Do not enter plan mode unless the PRD is insufficient.');
+        parts.push('');
+        parts.push(prdContent);
+    }
+
     return parts.join('\n\n') || 'Execute the assigned task.';
 }
 
-function buildAgentCommand(run: PendingRun): { command: string; args: string[] } {
+function writePlanFile(projectPath: string, taskUlid: string, prd: string): string {
+    const helmDir = join(projectPath, '.helm', 'plans');
+    mkdirSync(helmDir, { recursive: true });
+    const filePath = join(helmDir, `${taskUlid}.md`);
+    writeFileSync(filePath, prd, 'utf-8');
+    return filePath;
+}
+
+function removePlanFile(filePath: string | null): void {
+    if (filePath && existsSync(filePath)) {
+        try {
+            unlinkSync(filePath);
+        } catch {
+            // best-effort cleanup
+        }
+    }
+}
+
+function buildAgentCommand(run: PendingRun, prd: string | null | undefined): { command: string; args: string[] } {
     const agent = run.requested_agent ?? 'claude-code';
-    const prompt = buildPrompt(run);
+    const prompt = buildPrompt(run, prd);
 
     switch (agent) {
         case 'claude-code': {
@@ -169,10 +201,6 @@ function sendRunStatus(runUlid: string, runId: number, status: string, failureRe
     api.updateRunStatus(runId, status, failureReason).catch(() => {});
 }
 
-async function claimRun(runUlid: string, runId: number, machineId: number): Promise<void> {
-    await api.claimRun(runId, machineId);
-}
-
 export async function spawnAgentForRun(
     run: PendingRun,
     machineId: number,
@@ -205,13 +233,29 @@ export async function spawnAgentForRun(
         return;
     }
 
-    // Claim the run
+    // Claim the run and capture response (includes task PRD)
+    let claimResponse: api.ClaimRunResponse;
     try {
-        await claimRun(run.ulid, run.id, machineId);
+        claimResponse = await api.claimRun(run.id, machineId);
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log(`Failed to claim run ${run.ulid}: ${msg}`);
         return;
+    }
+
+    // Extract PRD from claim response (falls back to run.task.prd)
+    const taskPrd = claimResponse.task?.prd ?? run.task?.prd ?? null;
+    const taskUlid = claimResponse.task?.ulid ?? run.task?.ulid ?? null;
+
+    // Write plan file if PRD exists
+    let planFilePath: string | null = null;
+    if (taskPrd && taskUlid && projectPath) {
+        try {
+            planFilePath = writePlanFile(projectPath, taskUlid, taskPrd);
+            log(`Wrote PRD to ${planFilePath}`);
+        } catch (err) {
+            log(`Failed to write plan file: ${err instanceof Error ? err.message : String(err)}`);
+        }
     }
 
     // Transition to running
@@ -221,7 +265,7 @@ export async function spawnAgentForRun(
         log(`Failed to transition run ${run.ulid} to running: ${err instanceof Error ? err.message : String(err)} — continuing anyway`);
     }
 
-    const { command, args } = buildAgentCommand(run);
+    const { command, args } = buildAgentCommand(run, taskPrd);
     log(`Spawning ${command} ${args.join(' ')} in ${projectPath} for run ${run.ulid}`);
 
     let child: ChildProcess;
@@ -241,6 +285,7 @@ export async function spawnAgentForRun(
         log(`Spawn error for run ${run.ulid}: ${msg}`);
         sendRunEvent(run.ulid, run.id, 'agent.stderr', { raw: `Spawn error: ${msg}` });
         sendRunStatus(run.ulid, run.id, 'failed', `Spawn error: ${msg}`);
+        removePlanFile(planFilePath);
         stats.totalFailed++;
         onStatusChange?.();
         return;
@@ -249,8 +294,11 @@ export async function spawnAgentForRun(
     const runProcess: RunProcess = {
         runId: run.id,
         runUlid: run.ulid,
+        taskUlid,
         taskTitle: run.task?.title ?? null,
         projectSlug: projectSlug ?? null,
+        projectPath,
+        planFilePath,
         agent: run.requested_agent ?? null,
         model: run.requested_model ?? null,
         child,
@@ -314,6 +362,8 @@ export async function spawnAgentForRun(
             sendRunEvent(run.ulid, run.id, 'agent.stderr', { raw: stderrBuffer });
         }
 
+        const proc = activeProcesses.get(run.id);
+        removePlanFile(proc?.planFilePath ?? null);
         activeProcesses.delete(run.id);
 
         if (code === 0) {
@@ -333,6 +383,8 @@ export async function spawnAgentForRun(
     });
 
     child.on('error', (err: Error) => {
+        const proc = activeProcesses.get(run.id);
+        removePlanFile(proc?.planFilePath ?? null);
         activeProcesses.delete(run.id);
         log(`Spawn error for run ${run.ulid}: ${err.message}`);
         stats.totalFailed++;
@@ -363,6 +415,7 @@ export async function gracefulShutdown(log: (message: string) => void): Promise<
     if (activeProcesses.size > 0) {
         log(`Force killing ${activeProcesses.size} remaining process(es)`);
         for (const [, proc] of activeProcesses) {
+            removePlanFile(proc.planFilePath);
             api.updateRunStatus(proc.runId, 'stale', 'Daemon shutdown — process force killed').catch(() => {});
             proc.child.kill('SIGKILL');
         }

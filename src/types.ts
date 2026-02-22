@@ -268,6 +268,7 @@ export interface PendingRun {
         description: string | null;
         profile: string;
         template: string;
+        prd: string | null;
     } | null;
     project: {
         slug: string;

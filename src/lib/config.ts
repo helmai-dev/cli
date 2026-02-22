@@ -4,28 +4,233 @@ import * as path from 'path';
 import type { Credentials } from '../types.js';
 
 const HELM_DIR = path.join(os.homedir(), '.helm');
-const CREDENTIALS_FILE = path.join(HELM_DIR, 'credentials');
+const ENVIRONMENTS_DIR = path.join(HELM_DIR, 'environments');
+const ACTIVE_ENV_FILE = path.join(HELM_DIR, 'active-env');
 const CONFIG_FILE = path.join(HELM_DIR, 'config.json');
+
+const DEFAULT_ENV = 'production';
+
+// Well-known environment URL defaults
+const WELL_KNOWN_URLS: Record<string, string> = {
+    local: 'http://127.0.0.1:8000',
+    production: 'https://tryhelm.ai',
+};
+
+// Files that live per-environment (moved into environments/<name>/)
+const PER_ENV_FILES = [
+    'credentials',
+    'machine.json',
+    'daemon.pid',
+    'daemon-status.json',
+    'daemon.log',
+    'projects-cache.json',
+    'project-paths.json',
+    'hints.json',
+];
+
+// --- Environment management ---
+
+export function getActiveEnvironment(): string {
+    if (!fs.existsSync(ACTIVE_ENV_FILE)) {
+        return DEFAULT_ENV;
+    }
+
+    try {
+        const name = fs.readFileSync(ACTIVE_ENV_FILE, 'utf-8').trim();
+        return name || DEFAULT_ENV;
+    } catch {
+        return DEFAULT_ENV;
+    }
+}
+
+export function setActiveEnvironment(name: string): void {
+    ensureHelmDir();
+    fs.writeFileSync(ACTIVE_ENV_FILE, name);
+}
+
+export function getEnvironmentDir(name?: string): string {
+    return path.join(ENVIRONMENTS_DIR, name ?? getActiveEnvironment());
+}
+
+export function ensureEnvironmentDir(name?: string): void {
+    const dir = getEnvironmentDir(name);
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+}
+
+export function listEnvironments(): string[] {
+    if (!fs.existsSync(ENVIRONMENTS_DIR)) {
+        return [];
+    }
+
+    try {
+        return fs
+            .readdirSync(ENVIRONMENTS_DIR, { withFileTypes: true })
+            .filter(d => d.isDirectory())
+            .map(d => d.name)
+            .sort();
+    } catch {
+        return [];
+    }
+}
+
+export function getWellKnownUrl(envName: string): string | undefined {
+    return WELL_KNOWN_URLS[envName];
+}
+
+// --- Per-environment file paths (resolved via active environment) ---
+
+function envFile(filename: string): string {
+    return path.join(getEnvironmentDir(), filename);
+}
+
+function getCredentialsPath(): string {
+    return envFile('credentials');
+}
+
+function getMachinePath(): string {
+    return envFile('machine.json');
+}
+
+function getProjectsCachePath(): string {
+    return envFile('projects-cache.json');
+}
+
+function getHintsPath(): string {
+    return envFile('hints.json');
+}
+
+function getProjectPathsPath(): string {
+    return envFile('project-paths.json');
+}
+
+// --- Helm dir bootstrap + one-time migration ---
+
+let migrationRan = false;
 
 export function ensureHelmDir(): void {
     if (!fs.existsSync(HELM_DIR)) {
         fs.mkdirSync(HELM_DIR, { recursive: true });
     }
+
+    if (!migrationRan) {
+        migrationRan = true;
+        migrateToEnvironments();
+    }
 }
+
+/**
+ * One-time migration: move legacy flat files from ~/.helm/ into
+ * ~/.helm/environments/<name>/. Picks "local" if existing credentials
+ * point at localhost, otherwise "production".
+ */
+function migrateToEnvironments(): void {
+    // Already migrated if environments dir exists and has content
+    if (fs.existsSync(ENVIRONMENTS_DIR)) {
+        const entries = fs.readdirSync(ENVIRONMENTS_DIR, { withFileTypes: true });
+        if (entries.some(e => e.isDirectory())) {
+            return;
+        }
+    }
+
+    // Check if there are any legacy files to migrate
+    const legacyFiles = PER_ENV_FILES.filter(f =>
+        fs.existsSync(path.join(HELM_DIR, f)),
+    );
+
+    if (legacyFiles.length === 0) {
+        // Fresh install — just create production env dir
+        ensureEnvironmentDir(DEFAULT_ENV);
+        return;
+    }
+
+    // Determine target env name from existing credentials
+    let targetEnv = DEFAULT_ENV;
+    const legacyCredPath = path.join(HELM_DIR, 'credentials');
+    if (fs.existsSync(legacyCredPath)) {
+        try {
+            const creds = JSON.parse(
+                fs.readFileSync(legacyCredPath, 'utf-8'),
+            ) as Credentials;
+            if (
+                creds.api_url &&
+                (creds.api_url.includes('127.0.0.1') ||
+                    creds.api_url.includes('localhost'))
+            ) {
+                targetEnv = 'local';
+            }
+        } catch {
+            // Ignore parse errors, default to production
+        }
+    }
+
+    // Create target environment dir and move files
+    const targetDir = path.join(ENVIRONMENTS_DIR, targetEnv);
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    for (const file of legacyFiles) {
+        const src = path.join(HELM_DIR, file);
+        const dest = path.join(targetDir, file);
+        try {
+            fs.renameSync(src, dest);
+        } catch {
+            // If rename fails (e.g. cross-device), copy + delete
+            try {
+                fs.copyFileSync(src, dest);
+                fs.unlinkSync(src);
+            } catch {
+                // Best effort — leave file in place
+            }
+        }
+    }
+
+    // Preserve permissions on credentials file
+    const destCreds = path.join(targetDir, 'credentials');
+    if (fs.existsSync(destCreds)) {
+        try {
+            fs.chmodSync(destCreds, 0o600);
+        } catch {
+            // Ignore
+        }
+    }
+
+    // Set active environment to whatever we migrated into
+    fs.writeFileSync(ACTIVE_ENV_FILE, targetEnv);
+}
+
+// --- Credentials ---
 
 export function saveCredentials(credentials: Credentials): void {
     ensureHelmDir();
-    fs.writeFileSync(CREDENTIALS_FILE, JSON.stringify(credentials, null, 2));
-    fs.chmodSync(CREDENTIALS_FILE, 0o600); // Read/write only for owner
+    ensureEnvironmentDir();
+    const credPath = getCredentialsPath();
+    fs.writeFileSync(credPath, JSON.stringify(credentials, null, 2));
+    fs.chmodSync(credPath, 0o600);
 }
 
 export function loadCredentials(): Credentials | null {
-    if (!fs.existsSync(CREDENTIALS_FILE)) {
+    const credPath = getCredentialsPath();
+    if (!fs.existsSync(credPath)) {
         return null;
     }
 
     try {
-        const content = fs.readFileSync(CREDENTIALS_FILE, 'utf-8');
+        const content = fs.readFileSync(credPath, 'utf-8');
+        return JSON.parse(content) as Credentials;
+    } catch {
+        return null;
+    }
+}
+
+export function loadCredentialsForEnv(name: string): Credentials | null {
+    const credPath = path.join(getEnvironmentDir(name), 'credentials');
+    if (!fs.existsSync(credPath)) {
+        return null;
+    }
+
+    try {
+        const content = fs.readFileSync(credPath, 'utf-8');
         return JSON.parse(content) as Credentials;
     } catch {
         return null;
@@ -33,8 +238,9 @@ export function loadCredentials(): Credentials | null {
 }
 
 export function clearCredentials(): void {
-    if (fs.existsSync(CREDENTIALS_FILE)) {
-        fs.unlinkSync(CREDENTIALS_FILE);
+    const credPath = getCredentialsPath();
+    if (fs.existsSync(credPath)) {
+        fs.unlinkSync(credPath);
     }
 }
 
@@ -53,6 +259,8 @@ export function getApiUrl(): string {
     // Default to production
     return 'https://tryhelm.ai';
 }
+
+// --- Local config (shared, not per-env) ---
 
 export interface LocalConfig {
     defaultOrganization?: string;
@@ -214,17 +422,16 @@ export function getUninstallCommandForSource(source: InstallSource): string {
     }
 }
 
-// --- Projects cache (global, ~/.helm/projects-cache.json) ---
-
-const PROJECTS_CACHE_FILE = path.join(HELM_DIR, 'projects-cache.json');
+// --- Projects cache (per-env) ---
 
 export function loadProjectsCache(): ProjectsCache | null {
-    if (!fs.existsSync(PROJECTS_CACHE_FILE)) {
+    const cachePath = getProjectsCachePath();
+    if (!fs.existsSync(cachePath)) {
         return null;
     }
 
     try {
-        const content = fs.readFileSync(PROJECTS_CACHE_FILE, 'utf-8');
+        const content = fs.readFileSync(cachePath, 'utf-8');
         return JSON.parse(content) as ProjectsCache;
     } catch {
         return null;
@@ -233,24 +440,24 @@ export function loadProjectsCache(): ProjectsCache | null {
 
 export function saveProjectsCache(cache: ProjectsCache): void {
     ensureHelmDir();
-    fs.writeFileSync(PROJECTS_CACHE_FILE, JSON.stringify(cache, null, 2));
+    ensureEnvironmentDir();
+    fs.writeFileSync(getProjectsCachePath(), JSON.stringify(cache, null, 2));
 }
 
-// --- Link hints (global, ~/.helm/hints.json) ---
-
-const HINTS_FILE = path.join(HELM_DIR, 'hints.json');
+// --- Link hints (per-env) ---
 
 interface HintsData {
     link_hinted_slugs: Record<string, string>;
 }
 
 function loadHints(): HintsData {
-    if (!fs.existsSync(HINTS_FILE)) {
+    const hintsPath = getHintsPath();
+    if (!fs.existsSync(hintsPath)) {
         return { link_hinted_slugs: {} };
     }
 
     try {
-        const content = fs.readFileSync(HINTS_FILE, 'utf-8');
+        const content = fs.readFileSync(hintsPath, 'utf-8');
         return JSON.parse(content) as HintsData;
     } catch {
         return { link_hinted_slugs: {} };
@@ -264,14 +471,13 @@ export function hasHintedLinkForSlug(slug: string): boolean {
 
 export function markLinkHintShown(slug: string): void {
     ensureHelmDir();
+    ensureEnvironmentDir();
     const hints = loadHints();
     hints.link_hinted_slugs[slug] = new Date().toISOString();
-    fs.writeFileSync(HINTS_FILE, JSON.stringify(hints, null, 2));
+    fs.writeFileSync(getHintsPath(), JSON.stringify(hints, null, 2));
 }
 
-// --- Machine identity (global, ~/.helm/machine.json) ---
-
-const MACHINE_FILE = path.join(HELM_DIR, 'machine.json');
+// --- Machine identity (per-env) ---
 
 export interface MachineIdentity {
     id: number;
@@ -282,25 +488,25 @@ export interface MachineIdentity {
 
 export function saveMachineIdentity(machine: MachineIdentity): void {
     ensureHelmDir();
-    fs.writeFileSync(MACHINE_FILE, JSON.stringify(machine, null, 2));
+    ensureEnvironmentDir();
+    fs.writeFileSync(getMachinePath(), JSON.stringify(machine, null, 2));
 }
 
 export function loadMachineIdentity(): MachineIdentity | null {
-    if (!fs.existsSync(MACHINE_FILE)) {
+    const machinePath = getMachinePath();
+    if (!fs.existsSync(machinePath)) {
         return null;
     }
 
     try {
-        const content = fs.readFileSync(MACHINE_FILE, 'utf-8');
+        const content = fs.readFileSync(machinePath, 'utf-8');
         return JSON.parse(content) as MachineIdentity;
     } catch {
         return null;
     }
 }
 
-// --- Project paths registry (global, ~/.helm/project-paths.json) ---
-
-const PROJECT_PATHS_FILE = path.join(HELM_DIR, 'project-paths.json');
+// --- Project paths registry (per-env) ---
 
 export interface ProjectPathEntry {
     slug: string;
@@ -309,12 +515,13 @@ export interface ProjectPathEntry {
 }
 
 export function loadProjectPaths(): ProjectPathEntry[] {
-    if (!fs.existsSync(PROJECT_PATHS_FILE)) {
+    const pathsFile = getProjectPathsPath();
+    if (!fs.existsSync(pathsFile)) {
         return [];
     }
 
     try {
-        const content = fs.readFileSync(PROJECT_PATHS_FILE, 'utf-8');
+        const content = fs.readFileSync(pathsFile, 'utf-8');
         return JSON.parse(content) as ProjectPathEntry[];
     } catch {
         return [];
@@ -323,7 +530,8 @@ export function loadProjectPaths(): ProjectPathEntry[] {
 
 export function saveProjectPaths(entries: ProjectPathEntry[]): void {
     ensureHelmDir();
-    fs.writeFileSync(PROJECT_PATHS_FILE, JSON.stringify(entries, null, 2));
+    ensureEnvironmentDir();
+    fs.writeFileSync(getProjectPathsPath(), JSON.stringify(entries, null, 2));
 }
 
 export function registerProjectPath(slug: string, localPath: string): void {
@@ -340,22 +548,18 @@ export function registerProjectPath(slug: string, localPath: string): void {
     saveProjectPaths(entries);
 }
 
-// --- Daemon PID (global, ~/.helm/daemon.pid) ---
-
-const DAEMON_PID_FILE = path.join(HELM_DIR, 'daemon.pid');
-const DAEMON_LOG_FILE = path.join(HELM_DIR, 'daemon.log');
-const DAEMON_STATUS_FILE = path.join(HELM_DIR, 'daemon-status.json');
+// --- Daemon PID (per-env) ---
 
 export function getDaemonPidPath(): string {
-    return DAEMON_PID_FILE;
+    return envFile('daemon.pid');
 }
 
 export function getDaemonLogPath(): string {
-    return DAEMON_LOG_FILE;
+    return envFile('daemon.log');
 }
 
 export function getDaemonStatusPath(): string {
-    return DAEMON_STATUS_FILE;
+    return envFile('daemon-status.json');
 }
 
 export interface DaemonStatus {
@@ -382,12 +586,13 @@ export interface DaemonStatus {
 }
 
 export function loadDaemonStatus(): DaemonStatus | null {
-    if (!fs.existsSync(DAEMON_STATUS_FILE)) {
+    const statusPath = getDaemonStatusPath();
+    if (!fs.existsSync(statusPath)) {
         return null;
     }
 
     try {
-        const content = fs.readFileSync(DAEMON_STATUS_FILE, 'utf-8');
+        const content = fs.readFileSync(statusPath, 'utf-8');
         return JSON.parse(content) as DaemonStatus;
     } catch {
         return null;

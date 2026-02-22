@@ -14,6 +14,11 @@ import {
     daemonStatusCommand,
     daemonStopCommand,
 } from './commands/daemon.js';
+import {
+    envCreateCommand,
+    envListCommand,
+    envSwitchCommand,
+} from './commands/env.js';
 import { initCommand } from './commands/init.js';
 import { injectCommand } from './commands/inject.js';
 import { linkCommand } from './commands/link.js';
@@ -184,6 +189,28 @@ daemon
     });
 
 
+const env = program
+    .command('env', { hidden: true })
+    .description('Manage Helm environments')
+    .action(async () => {
+        await envListCommand();
+    });
+
+env.command('switch')
+    .description('Switch to a different environment')
+    .argument('<name>', 'Environment name (e.g. local, production)')
+    .action(async (name: string) => {
+        await envSwitchCommand(name);
+    });
+
+env.command('create')
+    .description('Create a new environment')
+    .argument('<name>', 'Environment name (e.g. local, staging)')
+    .option('--url <url>', 'API URL for this environment')
+    .action(async (name: string, options: { url?: string }) => {
+        await envCreateCommand(name, options);
+    });
+
 program
     .command('clean')
     .description('Remove Helm hooks and local config traces')
@@ -279,7 +306,7 @@ program
     .command('status')
     .description('Show current Helm configuration')
     .action(async () => {
-        const { loadCredentials, loadConfig, getInstallSource } =
+        const { loadCredentials, loadConfig, getInstallSource, getActiveEnvironment } =
             await import('./lib/config.js');
         const { detectIDEs, detectStack } = await import('./lib/detect.js');
         const chalk = (await import('chalk')).default;
@@ -290,6 +317,7 @@ program
 
         console.log(chalk.cyan.bold('\n  ⎈ Helm Status\n'));
 
+        console.log(`  Environment: ${getActiveEnvironment()}`);
         console.log(
             `  Scope: ${scope === 'global' ? 'All projects' : 'This project only'}`,
         );

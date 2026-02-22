@@ -490,7 +490,15 @@ export interface ClaimRunResponse {
         id: string;
         status: string;
         machine_id: number;
+        branch?: string;
+        worktree_path?: string;
     };
+    task?: {
+        ulid: string;
+        title: string;
+        description: string | null;
+        prd: string | null;
+    } | null;
 }
 
 export async function claimRun(
