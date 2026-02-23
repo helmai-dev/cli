@@ -10,6 +10,7 @@ import { deriveProjectSlug, saveProjectMeta, loadProjectMeta, type ProjectMeta }
 import { detectIDEs, detectStack } from '../lib/detect.js';
 import { installHooks } from '../lib/hooks.js';
 import { installGitPreCommitHook } from '../lib/git-hooks.js';
+import { isDaemonRunning } from './daemon.js';
 
 interface ProjectOptions {
     link?: string;
@@ -274,6 +275,15 @@ async function saveAndFinish(
     // Print summary
     console.log('');
     console.log(chalk.green(`  ✓ Project "${projectName}" linked to this directory.`));
+
+    // Check daemon health and warn if not running
+    const { running } = isDaemonRunning();
+    if (!running) {
+        console.log('');
+        console.log(chalk.yellow('  ⚠ Daemon is not running. Task execution requires a running daemon.'));
+        console.log(chalk.white('    Run `helm daemon start` to enable task execution.'));
+    }
+
     console.log('');
 
     // Open Admiral

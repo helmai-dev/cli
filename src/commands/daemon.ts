@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import {
     ensureHelmDir,
+    getDaemonLockPath,
     getDaemonLogPath,
     getDaemonPidPath,
     loadDaemonStatus,
@@ -53,9 +54,17 @@ function cleanupPidFile(): void {
     } catch {
         // Ignore
     }
+    try {
+        const lockPath = getDaemonLockPath();
+        if (fs.existsSync(lockPath)) {
+            fs.unlinkSync(lockPath);
+        }
+    } catch {
+        // Ignore
+    }
 }
 
-function isDaemonRunning(): { running: boolean; pid: number | null } {
+export function isDaemonRunning(): { running: boolean; pid: number | null } {
     const pidPath = getDaemonPidPath();
 
     if (!fs.existsSync(pidPath)) {
@@ -83,6 +92,48 @@ function isDaemonRunning(): { running: boolean; pid: number | null } {
     }
 }
 
+/**
+ * Acquire an exclusive lock file to prevent concurrent daemon starts.
+ * Uses O_EXCL flag for atomic creation — if the file already exists, another
+ * process is in the middle of starting a daemon.
+ *
+ * Returns a release function on success, or null if lock is held.
+ */
+function acquireDaemonLock(): (() => void) | null {
+    const lockPath = getDaemonLockPath();
+
+    try {
+        // O_CREAT | O_EXCL | O_WRONLY — fails atomically if file exists
+        const fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+        fs.writeSync(fd, String(process.pid));
+        fs.closeSync(fd);
+
+        return () => {
+            try {
+                fs.unlinkSync(lockPath);
+            } catch {
+                // Best effort
+            }
+        };
+    } catch (err: unknown) {
+        if (err && typeof err === 'object' && 'code' in err && err.code === 'EEXIST') {
+            // Lock file exists — check if it's stale (> 30s old)
+            try {
+                const stat = fs.statSync(lockPath);
+                const ageMs = Date.now() - stat.mtimeMs;
+                if (ageMs > 30_000) {
+                    // Stale lock — remove and retry once
+                    fs.unlinkSync(lockPath);
+                    return acquireDaemonLock();
+                }
+            } catch {
+                // Can't stat — another process may have cleaned it up
+            }
+        }
+        return null;
+    }
+}
+
 export function startDaemon(): { started: boolean; alreadyRunning: boolean; pid?: number } {
     const { running, pid: existingPid } = isDaemonRunning();
 
@@ -90,39 +141,62 @@ export function startDaemon(): { started: boolean; alreadyRunning: boolean; pid?
         return { started: false, alreadyRunning: true, pid: existingPid ?? undefined };
     }
 
-    const machine = loadMachineIdentity();
-    if (!machine) {
+    // Acquire exclusive lock to prevent concurrent starts
+    const releaseLock = acquireDaemonLock();
+    if (!releaseLock) {
+        // Another process is starting the daemon right now — treat as already running
+        // Wait briefly and re-check PID file
+        const waitUntil = Date.now() + 3_000;
+        while (Date.now() < waitUntil) {
+            const waitMs = Date.now() + 100;
+            while (Date.now() < waitMs) { /* spin */ }
+        }
+
+        const recheck = isDaemonRunning();
+        return {
+            started: false,
+            alreadyRunning: recheck.running,
+            pid: recheck.pid ?? undefined,
+        };
+    }
+
+    try {
+        const machine = loadMachineIdentity();
+        if (!machine) {
+            return { started: false, alreadyRunning: false };
+        }
+
+        ensureHelmDir();
+
+        // Use process.execPath to get the compiled binary path
+        // (process.argv[0] returns the embedded Bun runtime in compiled binaries)
+        const helmBin = process.execPath;
+
+        // Spawn detached process with HELM_DAEMON_MODE env var
+        // (avoids Bun compiled binary arg parsing issues)
+        const logPath = getDaemonLogPath();
+        const logFd = fs.openSync(logPath, 'a');
+
+        const child = spawn(helmBin, [], {
+            detached: true,
+            stdio: ['ignore', logFd, logFd],
+            env: { ...process.env, HELM_DAEMON_MODE: '1' },
+        });
+
+        child.unref();
+        fs.closeSync(logFd);
+
+        // Write PID file from the parent immediately — the daemon child
+        // will overwrite this with the same value once it starts.
+        if (child.pid) {
+            fs.writeFileSync(getDaemonPidPath(), String(child.pid));
+            return { started: true, alreadyRunning: false, pid: child.pid };
+        }
+
         return { started: false, alreadyRunning: false };
+    } finally {
+        releaseLock();
     }
-
-    ensureHelmDir();
-
-    // Use process.execPath to get the compiled binary path
-    // (process.argv[0] returns the embedded Bun runtime in compiled binaries)
-    const helmBin = process.execPath;
-
-    // Spawn detached process with HELM_DAEMON_MODE env var
-    // (avoids Bun compiled binary arg parsing issues)
-    const logPath = getDaemonLogPath();
-    const logFd = fs.openSync(logPath, 'a');
-
-    const child = spawn(helmBin, [], {
-        detached: true,
-        stdio: ['ignore', logFd, logFd],
-        env: { ...process.env, HELM_DAEMON_MODE: '1' },
-    });
-
-    child.unref();
-    fs.closeSync(logFd);
-
-    // The daemon-loop writes its own PID file, but write it here too
-    // in case there's a race condition
-    if (child.pid) {
-        fs.writeFileSync(getDaemonPidPath(), String(child.pid));
-        return { started: true, alreadyRunning: false, pid: child.pid };
-    }
-
-    return { started: false, alreadyRunning: false };
 }
 
 export async function daemonStartCommand(): Promise<void> {

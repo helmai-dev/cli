@@ -176,6 +176,7 @@ export interface LinkProjectRequest {
 export interface LinkProjectResponse {
     project: { ulid: string; name: string; slug: string };
     onboarding_tasks?: string[];
+    daemon_online?: boolean;
 }
 
 export async function linkProject(

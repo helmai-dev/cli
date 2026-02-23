@@ -554,6 +554,10 @@ export function getDaemonPidPath(): string {
     return envFile('daemon.pid');
 }
 
+export function getDaemonLockPath(): string {
+    return envFile('daemon.lock');
+}
+
 export function getDaemonLogPath(): string {
     return envFile('daemon.log');
 }

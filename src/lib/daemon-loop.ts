@@ -9,6 +9,7 @@ import pkg from '../../package.json';
 import type { PendingRun } from '../types.js';
 import type { DaemonStatus } from './config.js';
 import {
+    getDaemonLockPath,
     getDaemonLogPath,
     getDaemonPidPath,
     getDaemonStatusPath,
@@ -233,15 +234,45 @@ async function cleanup(): Promise<void> {
         // Best effort cleanup
     }
 
+    // Clean up lock file if it exists (stale from startup)
+    try {
+        const lockPath = getDaemonLockPath();
+        if (fs.existsSync(lockPath)) {
+            fs.unlinkSync(lockPath);
+        }
+    } catch {
+        // Best effort cleanup
+    }
+
     log('Daemon stopped');
     process.exit(0);
 }
 
 export async function runDaemonLoop(): Promise<void> {
+    // Check if another daemon is already running (guard against race conditions)
+    const pidPath = getDaemonPidPath();
+    try {
+        if (fs.existsSync(pidPath)) {
+            const existingPid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
+            if (!isNaN(existingPid) && existingPid !== process.pid) {
+                try {
+                    process.kill(existingPid, 0); // Test if alive
+                    // Another daemon is running — exit silently
+                    log('Another daemon already running (PID: ' + existingPid + '), exiting');
+                    process.exit(0);
+                } catch {
+                    // Other process is dead — we can take over
+                }
+            }
+        }
+    } catch {
+        // Continue with startup
+    }
+
     log('Daemon started (PID: ' + process.pid + ', version: ' + VERSION + ')');
 
     // Write PID file
-    fs.writeFileSync(getDaemonPidPath(), String(process.pid));
+    fs.writeFileSync(pidPath, String(process.pid));
 
     // Handle graceful shutdown
     process.on('SIGTERM', () => { cleanup(); });
