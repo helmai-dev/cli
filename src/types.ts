@@ -185,7 +185,7 @@ export interface CaptureResponse {
     code_blocks_count: number;
 }
 
-export type IDE = 'claude-code' | 'cursor';
+export type IDE = 'claude-code' | 'cursor' | 'windsurf' | 'opencode';
 
 export interface DetectedIDE {
     name: IDE;

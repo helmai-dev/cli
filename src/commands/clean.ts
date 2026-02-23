@@ -162,11 +162,21 @@ function selectedTargets(
 }
 
 function buildConfigTargets(cwd: string): string[] {
+    const home = os.homedir();
     return [
-        path.join(os.homedir(), '.claude', 'settings.json'),
+        // Claude Code — hooks live in ~/.claude/settings.json, MCPs in ~/.claude.json
+        path.join(home, '.claude', 'settings.json'),
+        path.join(home, '.claude.json'),
         path.join(cwd, '.claude', 'settings.json'),
-        path.join(os.homedir(), '.cursor', 'hooks.json'),
-        path.join(os.homedir(), '.cursor', 'mcp.json'),
+        path.join(cwd, '.mcp.json'),
+        // Cursor
+        path.join(home, '.cursor', 'hooks.json'),
+        path.join(home, '.cursor', 'mcp.json'),
+        path.join(cwd, '.cursor', 'mcp.json'),
+        // Windsurf
+        path.join(home, '.codeium', 'windsurf', 'mcp_config.json'),
+        // OpenCode
+        path.join(home, '.config', 'opencode', 'opencode.json'),
     ];
 }
 
@@ -239,19 +249,23 @@ function cleanMcps(filePath: string, stats: CleanStats): number {
     }
 
     const record = parsed as Record<string, unknown>;
-    const mcpServers = record.mcpServers;
-    if (!mcpServers || typeof mcpServers !== 'object') {
-        return 0;
-    }
-
-    const serverRecord = mcpServers as Record<string, unknown>;
-    const keys = Object.keys(serverRecord);
     let removedCount = 0;
 
-    for (const key of keys) {
-        if (isLikelyHelmManagedMcp(serverRecord[key])) {
-            delete serverRecord[key];
-            removedCount += 1;
+    // Check both mcpServers (Claude Code, Cursor, Windsurf) and mcp (OpenCode)
+    for (const serversKey of ['mcpServers', 'mcp'] as const) {
+        const mcpServers = record[serversKey];
+        if (!mcpServers || typeof mcpServers !== 'object') {
+            continue;
+        }
+
+        const serverRecord = mcpServers as Record<string, unknown>;
+        const keys = Object.keys(serverRecord);
+
+        for (const key of keys) {
+            if (isLikelyHelmManagedMcp(serverRecord[key])) {
+                delete serverRecord[key];
+                removedCount += 1;
+            }
         }
     }
 
@@ -313,13 +327,26 @@ function isLikelyHelmManagedMcp(entry: unknown): boolean {
     }
 
     const record = entry as Record<string, unknown>;
-    const command = typeof record.command === 'string' ? record.command : '';
-    const args = Array.isArray(record.args)
-        ? (record.args.filter((arg) => typeof arg === 'string') as string[])
-        : [];
-    const joined = [command, ...args].join(' ').toLowerCase();
 
-    return joined.includes('@modelcontextprotocol/');
+    // Standard format: { command: "npx", args: ["-y", "@modelcontextprotocol/..."] }
+    if (typeof record.command === 'string') {
+        const args = Array.isArray(record.args)
+            ? (record.args.filter((arg) => typeof arg === 'string') as string[])
+            : [];
+        const joined = [record.command, ...args].join(' ').toLowerCase();
+        return joined.includes('@modelcontextprotocol/');
+    }
+
+    // OpenCode format: { command: ["npx", "-y", "@modelcontextprotocol/..."] }
+    if (Array.isArray(record.command)) {
+        const joined = record.command
+            .filter((part) => typeof part === 'string')
+            .join(' ')
+            .toLowerCase();
+        return joined.includes('@modelcontextprotocol/');
+    }
+
+    return false;
 }
 
 function readJson(filePath: string): unknown {

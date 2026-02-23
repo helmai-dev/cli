@@ -18,13 +18,25 @@ export function detectIDEs(): DetectedIDE[] {
         {
             name: 'claude-code',
             displayName: 'Claude Code',
-            configPath: path.join(home, '.claude', 'settings.json'),
+            configPath: path.join(home, '.claude.json'),
             detected: false,
         },
         {
             name: 'cursor',
             displayName: 'Cursor',
-            configPath: path.join(home, '.cursor', 'hooks.json'),
+            configPath: path.join(home, '.cursor', 'mcp.json'),
+            detected: false,
+        },
+        {
+            name: 'windsurf',
+            displayName: 'Windsurf',
+            configPath: path.join(home, '.codeium', 'windsurf', 'mcp_config.json'),
+            detected: false,
+        },
+        {
+            name: 'opencode',
+            displayName: 'OpenCode',
+            configPath: path.join(home, '.config', 'opencode', 'opencode.json'),
             detected: false,
         },
     ];
@@ -42,9 +54,20 @@ export function detectIDEs(): DetectedIDE[] {
     }
 
     // Also check for Cursor app installation on macOS
-    const cursorApp = '/Applications/Cursor.app';
-    if (fs.existsSync(cursorApp)) {
+    if (fs.existsSync('/Applications/Cursor.app')) {
         ides[1].detected = true;
+    }
+
+    // Check for Windsurf
+    const windsurfDir = path.join(home, '.codeium', 'windsurf');
+    if (fs.existsSync(windsurfDir) || fs.existsSync('/Applications/Windsurf.app')) {
+        ides[2].detected = true;
+    }
+
+    // Check for OpenCode
+    const opencodeDir = path.join(home, '.config', 'opencode');
+    if (fs.existsSync(opencodeDir)) {
+        ides[3].detected = true;
     }
 
     return ides;

@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import type { IDE } from '../types.js';
+import { installOpenCodePlugin, uninstallOpenCodePlugin } from './opencode-plugin.js';
 
 interface ClaudeHookEntry {
   type: 'command';
@@ -39,9 +40,12 @@ export function installHooks(ide: IDE): { success: boolean; message: string } {
     return installClaudeCodeHooks(home);
   } else if (ide === 'cursor') {
     return installCursorHooks(home);
+  } else if (ide === 'opencode') {
+    return installOpenCodePlugin();
   }
 
-  return { success: false, message: `Unknown IDE: ${ide}` };
+  // Windsurf doesn't support hooks — MCP only
+  return { success: false, message: `${ide} does not support hooks` };
 }
 
 function installClaudeCodeHooks(home: string): { success: boolean; message: string } {
@@ -246,5 +250,9 @@ export function uninstallHooks(ide: IDE): { success: boolean; message: string } 
     }
   }
 
-  return { success: false, message: `Unknown IDE: ${ide}` };
+  if (ide === 'opencode') {
+    return uninstallOpenCodePlugin();
+  }
+
+  return { success: false, message: `${ide} does not support hooks` };
 }

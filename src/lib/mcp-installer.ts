@@ -1,8 +1,10 @@
 /**
  * MCP installer: writes MCP server entries into IDE configuration files.
  *
- * Claude Code: ~/.claude/settings.json (mcpServers key)
- * Cursor:      ~/.cursor/mcp.json      (mcpServers key)
+ * Claude Code: ~/.claude.json          (mcpServers key)   project: .mcp.json
+ * Cursor:      ~/.cursor/mcp.json      (mcpServers key)   project: .cursor/mcp.json
+ * Windsurf:    ~/.codeium/windsurf/mcp_config.json (mcpServers key)  global only
+ * OpenCode:    ~/.config/opencode/opencode.json    (mcp key, array command format)  global only
  */
 
 import * as fs from 'fs';
@@ -17,8 +19,14 @@ interface McpServerEntry {
   env?: Record<string, string>;
 }
 
+interface OpenCodeMcpEntry {
+  command: string[];
+  environment?: Record<string, string>;
+}
+
 interface McpSettings {
   mcpServers?: Record<string, McpServerEntry>;
+  mcp?: Record<string, OpenCodeMcpEntry>;
   [key: string]: unknown;
 }
 
@@ -31,21 +39,77 @@ export interface McpInstallResult {
   needsApiKey?: boolean;
 }
 
+interface IdeMcpConfig {
+  serversKey: 'mcpServers' | 'mcp';
+  getPath: (scope: 'global' | 'project') => string;
+  buildEntry: (command: string, args: string[], env: Record<string, string>) => McpServerEntry | OpenCodeMcpEntry;
+}
+
+const IDE_MCP_CONFIGS: Record<IDE, IdeMcpConfig> = {
+  'claude-code': {
+    serversKey: 'mcpServers',
+    getPath: (scope) => scope === 'project'
+      ? path.join(process.cwd(), '.mcp.json')
+      : path.join(os.homedir(), '.claude.json'),
+    buildEntry: (command, args, env) => {
+      const entry: McpServerEntry = { command, args };
+      if (Object.keys(env).length > 0) {
+        entry.env = env;
+      }
+      return entry;
+    },
+  },
+  'cursor': {
+    serversKey: 'mcpServers',
+    getPath: (scope) => scope === 'project'
+      ? path.join(process.cwd(), '.cursor', 'mcp.json')
+      : path.join(os.homedir(), '.cursor', 'mcp.json'),
+    buildEntry: (command, args, env) => {
+      const entry: McpServerEntry = { command, args };
+      if (Object.keys(env).length > 0) {
+        entry.env = env;
+      }
+      return entry;
+    },
+  },
+  'windsurf': {
+    serversKey: 'mcpServers',
+    getPath: () => path.join(os.homedir(), '.codeium', 'windsurf', 'mcp_config.json'),
+    buildEntry: (command, args, env) => {
+      const entry: McpServerEntry = { command, args };
+      if (Object.keys(env).length > 0) {
+        entry.env = env;
+      }
+      return entry;
+    },
+  },
+  'opencode': {
+    serversKey: 'mcp',
+    getPath: () => path.join(os.homedir(), '.config', 'opencode', 'opencode.json'),
+    buildEntry: (command, args, env) => {
+      const entry: OpenCodeMcpEntry = { command: [command, ...args] };
+      if (Object.keys(env).length > 0) {
+        entry.environment = env;
+      }
+      return entry;
+    },
+  },
+};
+
 /** Parse an install_command string into command + args for the MCP server entry. */
 function parseInstallCommand(installCommand: string): { command: string; args: string[] } {
-  // MCP install commands are typically like: "npx -y @modelcontextprotocol/server-github"
-  // We split by whitespace; the first token is the command, rest are args
   const parts = installCommand.trim().split(/\s+/);
   const command = parts[0] ?? 'npx';
   const args = parts.slice(1);
   return { command, args };
 }
 
-/** Build the MCP server entry, substituting config_template values. */
+/** Build the MCP server entry for a given IDE, substituting config_template values. */
 function buildServerEntry(
   mcp: McpDefinition,
+  ide: IDE,
   apiKeyValues: Record<string, string>
-): McpServerEntry {
+): McpServerEntry | OpenCodeMcpEntry {
   const { command, args } = parseInstallCommand(mcp.install_command);
 
   const env: Record<string, string> = {};
@@ -57,23 +121,7 @@ function buildServerEntry(
     }
   }
 
-  const entry: McpServerEntry = { command, args };
-  if (Object.keys(env).length > 0) {
-    entry.env = env;
-  }
-
-  return entry;
-}
-
-function getClaudeSettingsPath(scope: 'global' | 'project' = 'global'): string {
-  if (scope === 'project') {
-    return path.join(process.cwd(), '.claude', 'settings.json');
-  }
-  return path.join(os.homedir(), '.claude', 'settings.json');
-}
-
-function getCursorMcpPath(): string {
-  return path.join(os.homedir(), '.cursor', 'mcp.json');
+  return IDE_MCP_CONFIGS[ide].buildEntry(command, args, env);
 }
 
 function loadJsonFile<T>(filePath: string, defaultValue: T): T {
@@ -97,24 +145,30 @@ function writeJsonFile(filePath: string, data: unknown): void {
 
 /** Check if an MCP is already registered in the IDE config. */
 export function isMcpInstalled(mcpName: string, ide: IDE, scope: 'global' | 'project' = 'global'): boolean {
-  const filePath = ide === 'claude-code'
-    ? getClaudeSettingsPath(scope)
-    : getCursorMcpPath();
-
+  const ideConfig = IDE_MCP_CONFIGS[ide];
+  const filePath = ideConfig.getPath(scope);
   const settings = loadJsonFile<McpSettings>(filePath, {});
-  return Boolean(settings.mcpServers?.[mcpName]);
+  const servers = settings[ideConfig.serversKey] as Record<string, unknown> | undefined;
+  return Boolean(servers?.[mcpName]);
 }
 
-/** Return all MCPs registered in the Claude Code settings file. */
+/** Return all MCPs registered in the given IDE's config file. */
+export function getInstalledMcpsForIde(ide: IDE, scope: 'global' | 'project' = 'global'): string[] {
+  const ideConfig = IDE_MCP_CONFIGS[ide];
+  const filePath = ideConfig.getPath(scope);
+  const settings = loadJsonFile<McpSettings>(filePath, {});
+  const servers = settings[ideConfig.serversKey] as Record<string, unknown> | undefined;
+  return Object.keys(servers ?? {});
+}
+
+/** @deprecated Use getInstalledMcpsForIde('claude-code', scope) */
 export function getInstalledMcpsForClaude(scope: 'global' | 'project' = 'global'): string[] {
-  const settings = loadJsonFile<McpSettings>(getClaudeSettingsPath(scope), {});
-  return Object.keys(settings.mcpServers ?? {});
+  return getInstalledMcpsForIde('claude-code', scope);
 }
 
-/** Return all MCPs registered in the Cursor MCP config file. */
+/** @deprecated Use getInstalledMcpsForIde('cursor') */
 export function getInstalledMcpsForCursor(): string[] {
-  const settings = loadJsonFile<McpSettings>(getCursorMcpPath(), {});
-  return Object.keys(settings.mcpServers ?? {});
+  return getInstalledMcpsForIde('cursor');
 }
 
 /**
@@ -127,17 +181,19 @@ export function installMcpIntoIde(
   apiKeyValues: Record<string, string> = {},
   scope: 'global' | 'project' = 'global'
 ): { success: boolean; error?: string } {
-  const filePath = ide === 'claude-code'
-    ? getClaudeSettingsPath(scope)
-    : getCursorMcpPath();
+  const ideConfig = IDE_MCP_CONFIGS[ide];
+  const filePath = ideConfig.getPath(scope);
 
   try {
     const settings = loadJsonFile<McpSettings>(filePath, {});
-    if (!settings.mcpServers) {
-      settings.mcpServers = {};
+    const key = ideConfig.serversKey;
+
+    if (!settings[key]) {
+      (settings as Record<string, unknown>)[key] = {};
     }
 
-    settings.mcpServers[mcp.name] = buildServerEntry(mcp, apiKeyValues);
+    const servers = settings[key] as Record<string, unknown>;
+    servers[mcp.name] = buildServerEntry(mcp, ide, apiKeyValues);
     writeJsonFile(filePath, settings);
     return { success: true };
   } catch (err) {
@@ -153,14 +209,14 @@ export function removeMcpFromIde(
   ide: IDE,
   scope: 'global' | 'project' = 'global'
 ): { success: boolean; error?: string } {
-  const filePath = ide === 'claude-code'
-    ? getClaudeSettingsPath(scope)
-    : getCursorMcpPath();
+  const ideConfig = IDE_MCP_CONFIGS[ide];
+  const filePath = ideConfig.getPath(scope);
 
   try {
     const settings = loadJsonFile<McpSettings>(filePath, {});
-    if (settings.mcpServers?.[mcpName]) {
-      delete settings.mcpServers[mcpName];
+    const servers = settings[ideConfig.serversKey] as Record<string, unknown> | undefined;
+    if (servers?.[mcpName]) {
+      delete servers[mcpName];
       writeJsonFile(filePath, settings);
     }
     return { success: true };
@@ -185,28 +241,29 @@ export function installHelmMcpServer(
 
   for (const ide of ides) {
     if (!ide.detected) continue;
-    if (ide.name !== 'claude-code' && ide.name !== 'cursor') continue;
+    if (!(ide.name in IDE_MCP_CONFIGS)) continue;
+
+    const ideName = ide.name as IDE;
 
     // Skip if already registered
-    if (isMcpInstalled('helm', ide.name as IDE, scope)) {
+    if (isMcpInstalled('helm', ideName, scope)) {
       skipped.push(ide.name);
       continue;
     }
 
-    const filePath = ide.name === 'claude-code'
-      ? getClaudeSettingsPath(scope)
-      : getCursorMcpPath();
+    const ideConfig = IDE_MCP_CONFIGS[ideName];
+    const filePath = ideConfig.getPath(scope);
 
     try {
       const settings = loadJsonFile<McpSettings>(filePath, {});
-      if (!settings.mcpServers) {
-        settings.mcpServers = {};
+      const key = ideConfig.serversKey;
+
+      if (!settings[key]) {
+        (settings as Record<string, unknown>)[key] = {};
       }
 
-      settings.mcpServers['helm'] = {
-        command: helmBin,
-        args: ['serve'],
-      };
+      const servers = settings[key] as Record<string, unknown>;
+      servers['helm'] = ideConfig.buildEntry(helmBin, ['serve'], {});
 
       writeJsonFile(filePath, settings);
       installed.push(ide.name);

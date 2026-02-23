@@ -8,8 +8,7 @@ import {
   installMcpIntoIde,
   removeMcpFromIde,
   isMcpInstalled,
-  getInstalledMcpsForClaude,
-  getInstalledMcpsForCursor,
+  getInstalledMcpsForIde,
 } from '../lib/mcp-installer.js';
 import type { McpDefinition, IDE } from '../types.js';
 
@@ -27,9 +26,7 @@ export async function mcpsStatusCommand(): Promise<void> {
   }
 
   for (const ide of detectedIDEs) {
-    const installed = ide.name === 'claude-code'
-      ? getInstalledMcpsForClaude()
-      : getInstalledMcpsForCursor();
+    const installed = getInstalledMcpsForIde(ide.name);
 
     console.log(chalk.white(`  ${ide.displayName}:`));
 
