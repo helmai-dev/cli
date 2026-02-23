@@ -274,6 +274,7 @@ export async function spawnAgentForRun(
         // Remove Claude Code nesting guard so spawned agents don't refuse to start
         delete agentEnv.CLAUDECODE;
         delete agentEnv.CLAUDE_CODE;
+        delete agentEnv.CLAUDE_CODE_ENTRYPOINT;
 
         child = spawn(command, args, {
             cwd: projectPath,
