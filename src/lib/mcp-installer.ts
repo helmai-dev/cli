@@ -170,6 +170,55 @@ export function removeMcpFromIde(
 }
 
 /**
+ * Register the Helm MCP server (`helm serve`) into detected IDE configs.
+ * Called during `helm init` to make Helm tools available to agents automatically.
+ */
+export function installHelmMcpServer(
+  ides: Array<{ name: string; detected: boolean }>,
+  scope: 'global' | 'project' = 'global'
+): { installed: string[]; skipped: string[] } {
+  const installed: string[] = [];
+  const skipped: string[] = [];
+
+  // Resolve the helm binary — same approach as daemon.ts
+  const helmBin = process.execPath;
+
+  for (const ide of ides) {
+    if (!ide.detected) continue;
+    if (ide.name !== 'claude-code' && ide.name !== 'cursor') continue;
+
+    // Skip if already registered
+    if (isMcpInstalled('helm', ide.name as IDE, scope)) {
+      skipped.push(ide.name);
+      continue;
+    }
+
+    const filePath = ide.name === 'claude-code'
+      ? getClaudeSettingsPath(scope)
+      : getCursorMcpPath();
+
+    try {
+      const settings = loadJsonFile<McpSettings>(filePath, {});
+      if (!settings.mcpServers) {
+        settings.mcpServers = {};
+      }
+
+      settings.mcpServers['helm'] = {
+        command: helmBin,
+        args: ['serve'],
+      };
+
+      writeJsonFile(filePath, settings);
+      installed.push(ide.name);
+    } catch {
+      skipped.push(ide.name);
+    }
+  }
+
+  return { installed, skipped };
+}
+
+/**
  * Run the install command for an MCP (e.g., to cache the npx package locally).
  * This is optional / best-effort — the MCP will work as long as the config entry exists.
  */

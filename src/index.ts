@@ -34,6 +34,7 @@ import {
 import { qcCommand } from './commands/qc.js';
 import { ruleAddCommand } from './commands/rule.js';
 import { saveCommand } from './commands/save.js';
+import { serveCommand } from './commands/serve.js';
 import { promoteSkillCommand } from './commands/skills.js';
 import { syncCommand } from './commands/sync.js';
 import { uninstallCommand } from './commands/uninstall.js';
@@ -300,6 +301,13 @@ mcps.command('configure')
     .option('--key <key>', 'API key value (skips interactive prompt)')
     .action(async (name: string, options: { key?: string }) => {
         await mcpsConfigureCommand(name, options);
+    });
+
+program
+    .command('serve')
+    .description('Start the Helm MCP server over stdio (used by IDE integrations)')
+    .action(async () => {
+        await serveCommand();
     });
 
 program

@@ -31,7 +31,7 @@ import { installGitPreCommitHook } from '../lib/git-hooks.js';
 import { installHooks } from '../lib/hooks.js';
 import { mergeFoundRules } from '../lib/import-rules.js';
 import { scanExistingRulesFiles } from '../lib/local-rules.js';
-import { installMcpIntoIde, isMcpInstalled } from '../lib/mcp-installer.js';
+import { installHelmMcpServer, installMcpIntoIde, isMcpInstalled } from '../lib/mcp-installer.js';
 import { ensureProjectSlug, type ProjectMeta } from '../lib/project.js';
 import type { Credentials, IDE, McpDefinition } from '../types.js';
 
@@ -136,6 +136,12 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
             }
         }
 
+        // Register Helm MCP server so agents can call Helm tools
+        const mcpResult = installHelmMcpServer(detectedIDEs);
+        if (mcpResult.installed.length > 0) {
+            console.log(chalk.green(`  ✓ Helm MCP server registered: ${mcpResult.installed.join(', ')}`));
+        }
+
         printInitNextSteps();
         await openAdmiral();
         process.exit(0);
@@ -174,6 +180,12 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
         for (const ide of installedHooks) {
             console.log(chalk.green(`  ✓ IDE hooks installed: ${ide}`));
         }
+    }
+
+    // Step 5b: Register Helm MCP server so agents can call Helm tools
+    const mcpResult = installHelmMcpServer(detectedIDEs);
+    if (mcpResult.installed.length > 0) {
+        console.log(chalk.green(`  ✓ Helm MCP server registered: ${mcpResult.installed.join(', ')}`));
     }
 
     // Step 6: Start daemon for heartbeat
@@ -769,6 +781,11 @@ async function handleTeamInit(
         for (const ide of installedHooks) {
             console.log(chalk.green(`  ✓ IDE hooks installed: ${ide}`));
         }
+    }
+    // Register Helm MCP server
+    const helmMcpResult = installHelmMcpServer(detectedIDEs);
+    if (helmMcpResult.installed.length > 0) {
+        console.log(chalk.green(`  ✓ Helm MCP server registered: ${helmMcpResult.installed.join(', ')}`));
     }
     if (gitHook.installed) {
         console.log(chalk.green('  ✓ Git pre-commit hook installed'));
