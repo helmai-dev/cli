@@ -562,3 +562,81 @@ export async function storeRunEvent(
         },
     );
 }
+
+export interface CodeGraphSyncPayload {
+    files: Array<{
+        path: string;
+        language: string;
+        content_hash: string;
+        import_count: number;
+        imported_by_count: number;
+        exports: Array<{ name: string; kind: string }> | null;
+    }>;
+    edges: Array<{
+        source_path: string;
+        target_path: string;
+        source_language: string;
+        import_kind: 'static' | 'dynamic';
+    }>;
+    stats: {
+        total_files: number;
+        total_edges: number;
+        languages: Record<string, number>;
+    };
+    git_head: string | null;
+}
+
+export interface CodeGraphSyncResponse {
+    synced: boolean;
+    files_count: number;
+    edges_count: number;
+}
+
+/**
+ * Sync the code dependency graph to Helm cloud.
+ */
+export async function syncCodeGraph(
+    projectSlug: string,
+    graph: import('./graph/types.js').CodeGraph,
+): Promise<CodeGraphSyncResponse> {
+    // Transform graph into sync payload (paths + edges, no file content)
+    const files: CodeGraphSyncPayload['files'] = [];
+    const edges: CodeGraphSyncPayload['edges'] = [];
+
+    for (const [filePath, node] of Object.entries(graph.files)) {
+        files.push({
+            path: filePath,
+            language: node.language,
+            content_hash: node.hash,
+            import_count: node.imports.filter(i => i.resolved !== null).length,
+            imported_by_count: node.imported_by.length,
+            exports: node.exports.length > 0 ? node.exports : null,
+        });
+
+        for (const imp of node.imports) {
+            if (imp.resolved) {
+                edges.push({
+                    source_path: filePath,
+                    target_path: imp.resolved,
+                    source_language: node.language,
+                    import_kind: imp.kind,
+                });
+            }
+        }
+    }
+
+    const payload: CodeGraphSyncPayload = {
+        files,
+        edges,
+        stats: graph.stats,
+        git_head: graph.git_head,
+    };
+
+    return request<CodeGraphSyncResponse>(
+        `/projects/${encodeURIComponent(projectSlug)}/graph`,
+        {
+            method: 'POST',
+            body: JSON.stringify(payload),
+        },
+    );
+}

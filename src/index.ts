@@ -38,6 +38,12 @@ import { serveCommand } from './commands/serve.js';
 import { promoteSkillCommand } from './commands/skills.js';
 import { syncCommand } from './commands/sync.js';
 import { uninstallCommand } from './commands/uninstall.js';
+import {
+    graphBuildCommand,
+    graphImpactCommand,
+    graphHubsCommand,
+    graphSyncCommand,
+} from './commands/graph.js';
 import { checkForUpdate } from './lib/update-check.js';
 import pkg from '../package.json';
 
@@ -301,6 +307,40 @@ mcps.command('configure')
     .option('--key <key>', 'API key value (skips interactive prompt)')
     .action(async (name: string, options: { key?: string }) => {
         await mcpsConfigureCommand(name, options);
+    });
+
+const graphCmd = program
+    .command('graph')
+    .description('Manage the code dependency graph');
+
+graphCmd
+    .command('build')
+    .description('Build the dependency graph (incremental by default)')
+    .option('--full', 'Force a full rebuild instead of incremental', false)
+    .action(async (options: { full?: boolean }) => {
+        await graphBuildCommand(options);
+    });
+
+graphCmd
+    .command('impact')
+    .description('Show files affected by changing a given file')
+    .argument('<file>', 'File path to analyze')
+    .action(async (file: string) => {
+        await graphImpactCommand(file);
+    });
+
+graphCmd
+    .command('hubs')
+    .description('Show most-imported files in the project')
+    .action(async () => {
+        await graphHubsCommand();
+    });
+
+graphCmd
+    .command('sync')
+    .description('Upload the dependency graph to Helm cloud')
+    .action(async () => {
+        await graphSyncCommand();
     });
 
 program

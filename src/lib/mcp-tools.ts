@@ -16,6 +16,8 @@ import { loadCredentials } from './config.js';
 import { loadProjectSlug } from './project.js';
 import { saveKnowledgeEntry, saveProjectKnowledgeEntry } from './knowledge.js';
 import { findRulesFile, parseRuleSections } from './local-rules.js';
+import { loadGraph, buildCodeGraph } from './graph/builder.js';
+import { analyzeImpact, findHubFiles, getNeighbors, generateGraphSummary } from './graph/impact.js';
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -130,6 +132,18 @@ const getProjectContextHandler: McpToolHandler = async (args) => {
             } catch {
                 // skip
             }
+        }
+
+        // Include dependency graph summary if available
+        const graph = loadGraph(cwd);
+        if (graph) {
+            const hubs = findHubFiles(graph, 5);
+            result.dependency_graph = {
+                total_files: graph.stats.total_files,
+                total_edges: graph.stats.total_edges,
+                languages: graph.stats.languages,
+                hub_files: hubs.map(h => ({ path: h.path, dependents: h.imported_by_count })),
+            };
         }
     }
 
@@ -635,6 +649,121 @@ const getQualityChecksHandler: McpToolHandler = async () => {
     return jsonResult({ source: 'local', quality_tools: tools });
 };
 
+// ── Tool: code_graph ──────────────────────────────────────────────
+
+const codeGraphDef: McpTool = {
+    name: 'helm_code_graph',
+    description:
+        'Query the project\'s code dependency graph. Use this to understand file relationships — ' +
+        'what imports what, what would break if you change a file, and which files are most critical. ' +
+        'One call replaces 5-10 grep/read operations for tracing dependencies.\n\n' +
+        'Modes:\n' +
+        '- "summary": graph stats + top hub files\n' +
+        '- "impact": files affected by changing a given file (with depth control)\n' +
+        '- "neighbors": direct imports + importers of a file\n' +
+        '- "hubs": most-imported files across the project',
+    inputSchema: {
+        type: 'object',
+        properties: {
+            mode: {
+                type: 'string',
+                enum: ['summary', 'impact', 'neighbors', 'hubs'],
+                description: 'Query mode',
+            },
+            file: {
+                type: 'string',
+                description: 'File path (required for "impact" and "neighbors" modes)',
+            },
+            depth: {
+                type: 'number',
+                description: 'Max traversal depth for impact analysis (default: 3)',
+            },
+            limit: {
+                type: 'number',
+                description: 'Number of results for "hubs" mode (default: 10)',
+            },
+        },
+        required: ['mode'],
+    },
+};
+
+const codeGraphHandler: McpToolHandler = async (args) => {
+    const cwd = getCwd();
+    const mode = args.mode as string;
+    const file = args.file as string | undefined;
+    const depth = (args.depth as number | undefined) ?? 3;
+    const limit = (args.limit as number | undefined) ?? 10;
+
+    let graph = loadGraph(cwd);
+
+    if (!graph) {
+        return errorResult(
+            'No dependency graph found. Run `helm graph build` to generate one.',
+        );
+    }
+
+    // Staleness detection: if graph git_head doesn't match current HEAD
+    // and graph is older than 60 seconds, trigger background rebuild
+    let stale = false;
+    if (graph.git_head) {
+        const currentHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf-8' });
+        const currentHeadStr = currentHead.stdout?.trim();
+        if (currentHeadStr && currentHeadStr !== graph.git_head) {
+            const generatedAt = new Date(graph.generated_at).getTime();
+            const now = Date.now();
+            if (now - generatedAt > 60_000) {
+                stale = true;
+                // Rebuild incrementally in the background
+                try {
+                    graph = buildCodeGraph({ cwd, incremental: true });
+                } catch {
+                    // Use stale graph if rebuild fails
+                }
+            }
+        }
+    }
+
+    switch (mode) {
+        case 'summary': {
+            const hubs = findHubFiles(graph, 5);
+            return jsonResult({
+                stats: graph.stats,
+                generated_at: graph.generated_at,
+                git_head: graph.git_head,
+                stale,
+                top_hub_files: hubs,
+            });
+        }
+
+        case 'impact': {
+            if (!file) {
+                return errorResult('The "file" parameter is required for impact mode.');
+            }
+            const result = analyzeImpact(graph, file, depth);
+            return jsonResult(result);
+        }
+
+        case 'neighbors': {
+            if (!file) {
+                return errorResult('The "file" parameter is required for neighbors mode.');
+            }
+            const neighbors = getNeighbors(graph, file);
+            if (!neighbors) {
+                return errorResult(`File not found in graph: ${file}`);
+            }
+            return jsonResult(neighbors);
+        }
+
+        case 'hubs': {
+            const hubs = findHubFiles(graph, limit);
+            return jsonResult({ hub_files: hubs });
+        }
+
+        default:
+            return errorResult(`Unknown mode: ${mode}. Use summary, impact, neighbors, or hubs.`);
+    }
+};
+
 // ── Registry ──────────────────────────────────────────────────────
 
 export interface ToolRegistration {
@@ -653,5 +782,6 @@ export function getAllTools(): ToolRegistration[] {
         { definition: exportSkillDef, handler: exportSkillHandler },
         { definition: listSkillsDef, handler: listSkillsHandler },
         { definition: getQualityChecksDef, handler: getQualityChecksHandler },
+        { definition: codeGraphDef, handler: codeGraphHandler },
     ];
 }

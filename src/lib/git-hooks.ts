@@ -109,6 +109,79 @@ export function removeGitPreCommitHook(cwd: string): boolean {
     return true;
 }
 
+// ── Post-commit hook ─────────────────────────────────────────────
+
+const POST_COMMIT_START = '# >>> helm-managed post-commit >>>';
+const POST_COMMIT_END = '# <<< helm-managed post-commit <<<';
+
+const POST_COMMIT_BLOCK = `${POST_COMMIT_START}
+if command -v helm >/dev/null 2>&1; then
+  helm graph build >/dev/null 2>&1 &
+fi
+${POST_COMMIT_END}`;
+
+export function installGitPostCommitHook(cwd: string): GitHookInstallResult {
+    const gitDir = path.join(cwd, '.git');
+    const hooksDir = path.join(gitDir, 'hooks');
+    const postCommitPath = path.join(hooksDir, 'post-commit');
+
+    if (!fs.existsSync(gitDir) || !fs.statSync(gitDir).isDirectory()) {
+        return {
+            installed: false,
+            updated: false,
+            message: 'Not a git repository; skipped post-commit hook install.',
+        };
+    }
+
+    if (!fs.existsSync(hooksDir)) {
+        fs.mkdirSync(hooksDir, { recursive: true });
+    }
+
+    const existing = fs.existsSync(postCommitPath)
+        ? fs.readFileSync(postCommitPath, 'utf-8')
+        : '';
+
+    let nextContent = existing;
+    let updated = false;
+
+    const hasManagedBlock =
+        existing.includes(POST_COMMIT_START) && existing.includes(POST_COMMIT_END);
+
+    if (hasManagedBlock) {
+        const pattern = new RegExp(
+            `${escapeRegExp(POST_COMMIT_START)}[\\s\\S]*?${escapeRegExp(POST_COMMIT_END)}`,
+            'm',
+        );
+        nextContent = existing.replace(pattern, POST_COMMIT_BLOCK);
+        updated = nextContent !== existing;
+    } else if (existing.trim().length === 0) {
+        nextContent = `#!/bin/bash\n${POST_COMMIT_BLOCK}\n`;
+        updated = true;
+    } else {
+        const needsTrailingNewline = existing.endsWith('\n') ? '' : '\n';
+        nextContent = `${existing}${needsTrailingNewline}${POST_COMMIT_BLOCK}\n`;
+        updated = true;
+    }
+
+    if (updated) {
+        fs.writeFileSync(postCommitPath, nextContent);
+    }
+
+    const currentMode = fs.existsSync(postCommitPath)
+        ? fs.statSync(postCommitPath).mode
+        : 0o100644;
+    const executableMode = currentMode | 0o111;
+    fs.chmodSync(postCommitPath, executableMode);
+
+    return {
+        installed: true,
+        updated,
+        message: updated
+            ? `Installed Helm post-commit hook at ${postCommitPath}`
+            : 'Helm post-commit hook already up to date.',
+    };
+}
+
 function escapeRegExp(input: string): string {
     return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
