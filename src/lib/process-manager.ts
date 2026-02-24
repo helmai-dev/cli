@@ -10,6 +10,7 @@ import { join, dirname } from 'path';
 import type { PendingRun } from '../types.js';
 import * as api from './api.js';
 import { loadProjectPaths } from './config.js';
+import { EventBatcher } from './event-batcher.js';
 
 const MAX_CONCURRENT = 3;
 
@@ -24,6 +25,7 @@ interface RunProcess {
     agent: string | null;
     model: string | null;
     child: ChildProcess;
+    batcher: EventBatcher;
     startedAt: Date;
 }
 
@@ -292,6 +294,8 @@ export async function spawnAgentForRun(
         return;
     }
 
+    const batcher = new EventBatcher(run.id, run.ulid);
+
     const runProcess: RunProcess = {
         runId: run.id,
         runUlid: run.ulid,
@@ -303,13 +307,14 @@ export async function spawnAgentForRun(
         agent: run.requested_agent ?? null,
         model: run.requested_model ?? null,
         child,
+        batcher,
         startedAt: new Date(),
     };
     activeProcesses.set(run.id, runProcess);
     stats.totalSpawned++;
     onStatusChange?.();
 
-    // Stream stdout line-by-line
+    // Stream stdout line-by-line (batched)
     let stdoutBuffer = '';
     child.stdout?.on('data', (chunk: Buffer) => {
         stdoutBuffer += chunk.toString();
@@ -334,11 +339,11 @@ export async function spawnAgentForRun(
                 payload = { raw: line };
             }
 
-            sendRunEvent(run.ulid, run.id, eventType, payload);
+            batcher.push(eventType, payload);
         }
     });
 
-    // Stream stderr line-by-line
+    // Stream stderr line-by-line (batched)
     let stderrBuffer = '';
     child.stderr?.on('data', (chunk: Buffer) => {
         stderrBuffer += chunk.toString();
@@ -350,43 +355,57 @@ export async function spawnAgentForRun(
                 continue;
             }
 
-            sendRunEvent(run.ulid, run.id, 'agent.stderr', { raw: line });
+            batcher.push('agent.stderr', { raw: line });
         }
     });
 
     child.on('close', (code: number | null, signal: string | null) => {
-        // Flush remaining buffers
+        // Flush remaining line buffers into the batcher
         if (stdoutBuffer.trim()) {
-            sendRunEvent(run.ulid, run.id, 'agent.stdout', { raw: stdoutBuffer });
+            batcher.push('agent.stdout', { raw: stdoutBuffer });
         }
         if (stderrBuffer.trim()) {
-            sendRunEvent(run.ulid, run.id, 'agent.stderr', { raw: stderrBuffer });
+            batcher.push('agent.stderr', { raw: stderrBuffer });
         }
 
         const proc = activeProcesses.get(run.id);
         removePlanFile(proc?.planFilePath ?? null);
         activeProcesses.delete(run.id);
 
-        if (code === 0) {
-            log(`Run ${run.ulid} completed successfully`);
-            stats.totalCompleted++;
-            sendRunStatus(run.ulid, run.id, 'completed');
-        } else {
-            const reason = signal
-                ? `Process killed by signal ${signal}`
-                : `Process exited with code ${code}`;
-            log(`Run ${run.ulid} failed: ${reason}`);
-            stats.totalFailed++;
-            sendRunStatus(run.ulid, run.id, 'failed', reason);
-        }
+        // Flush batched events before sending terminal status
+        batcher.destroy().then(() => {
+            if (code === 0) {
+                log(`Run ${run.ulid} completed successfully`);
+                stats.totalCompleted++;
+                sendRunStatus(run.ulid, run.id, 'completed');
+            } else {
+                const reason = signal
+                    ? `Process killed by signal ${signal}`
+                    : `Process exited with code ${code}`;
+                log(`Run ${run.ulid} failed: ${reason}`);
+                stats.totalFailed++;
+                sendRunStatus(run.ulid, run.id, 'failed', reason);
+            }
 
-        onStatusChange?.();
+            onStatusChange?.();
+        }).catch(() => {
+            // Even if flush fails, still send status
+            if (code === 0) {
+                stats.totalCompleted++;
+                sendRunStatus(run.ulid, run.id, 'completed');
+            } else {
+                stats.totalFailed++;
+                sendRunStatus(run.ulid, run.id, 'failed', `Process exited with code ${code}`);
+            }
+            onStatusChange?.();
+        });
     });
 
     child.on('error', (err: Error) => {
         const proc = activeProcesses.get(run.id);
         removePlanFile(proc?.planFilePath ?? null);
         activeProcesses.delete(run.id);
+        batcher.destroy().catch(() => {});
         log(`Spawn error for run ${run.ulid}: ${err.message}`);
         stats.totalFailed++;
         sendRunStatus(run.ulid, run.id, 'failed', `Spawn error: ${err.message}`);
@@ -417,6 +436,7 @@ export async function gracefulShutdown(log: (message: string) => void): Promise<
         log(`Force killing ${activeProcesses.size} remaining process(es)`);
         for (const [, proc] of activeProcesses) {
             removePlanFile(proc.planFilePath);
+            proc.batcher.destroy().catch(() => {});
             api.updateRunStatus(proc.runId, 'stale', 'Daemon shutdown — process force killed').catch(() => {});
             proc.child.kill('SIGKILL');
         }

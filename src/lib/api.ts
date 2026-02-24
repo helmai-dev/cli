@@ -563,6 +563,27 @@ export async function storeRunEvent(
     );
 }
 
+export interface StoreRunEventBatchResponse {
+    events: Array<{
+        id: number;
+        event_type: string;
+        sequence: number;
+    }>;
+}
+
+export async function storeRunEventBatch(
+    runId: number,
+    events: Array<{ event_type: string; payload?: Record<string, unknown> }>,
+): Promise<StoreRunEventBatchResponse> {
+    return request<StoreRunEventBatchResponse>(
+        `/admiral/runs/${runId}/events/batch`,
+        {
+            method: 'POST',
+            body: JSON.stringify({ events }),
+        },
+    );
+}
+
 export interface CodeGraphSyncPayload {
     files: Array<{
         path: string;
