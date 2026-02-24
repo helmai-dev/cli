@@ -141,7 +141,9 @@ else
     cp "$tmp_dir/$HELM_BIN_NAME" "$install_dir/$HELM_BIN_NAME"
     chmod 0755 "$install_dir/$HELM_BIN_NAME"
   else
-    echo "Installing to $install_dir requires elevated permissions."
+    echo ""
+    echo "Helm needs elevated permissions to install to $install_dir"
+    echo ""
     sudo mkdir -p "$install_dir"
     sudo cp "$tmp_dir/$HELM_BIN_NAME" "$install_dir/$HELM_BIN_NAME"
     sudo chmod 0755 "$install_dir/$HELM_BIN_NAME"
