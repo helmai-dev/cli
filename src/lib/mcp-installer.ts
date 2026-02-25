@@ -4,7 +4,7 @@
  * Claude Code: ~/.claude.json          (mcpServers key)   project: .mcp.json
  * Cursor:      ~/.cursor/mcp.json      (mcpServers key)   project: .cursor/mcp.json
  * Windsurf:    ~/.codeium/windsurf/mcp_config.json (mcpServers key)  global only
- * OpenCode:    ~/.config/opencode/opencode.json    (mcp key, array command format)  global only
+ * OpenCode:    ~/.config/opencode/opencode.json    (mcp key, environment instead of env)  global only
  */
 
 import * as fs from 'fs';
@@ -20,6 +20,7 @@ interface McpServerEntry {
 }
 
 interface OpenCodeMcpEntry {
+  type: 'local';
   command: string[];
   environment?: Record<string, string>;
 }
@@ -87,7 +88,7 @@ const IDE_MCP_CONFIGS: Record<IDE, IdeMcpConfig> = {
     serversKey: 'mcp',
     getPath: () => path.join(os.homedir(), '.config', 'opencode', 'opencode.json'),
     buildEntry: (command, args, env) => {
-      const entry: OpenCodeMcpEntry = { command: [command, ...args] };
+      const entry: OpenCodeMcpEntry = { type: 'local', command: [command, ...args] };
       if (Object.keys(env).length > 0) {
         entry.environment = env;
       }
