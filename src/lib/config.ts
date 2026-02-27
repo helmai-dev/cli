@@ -26,6 +26,7 @@ const PER_ENV_FILES = [
     'projects-cache.json',
     'project-paths.json',
     'hints.json',
+    'tunnel-state.json',
 ];
 
 // --- Environment management ---
@@ -566,6 +567,10 @@ export function getDaemonStatusPath(): string {
     return envFile('daemon-status.json');
 }
 
+export function getTunnelStatePath(): string {
+    return envFile('tunnel-state.json');
+}
+
 export interface DaemonStatus {
     pid: number;
     version: string;
@@ -589,6 +594,22 @@ export interface DaemonStatus {
     };
 }
 
+export interface TunnelState {
+    project_slug: string;
+    mode: 'preview';
+    status: 'starting' | 'active' | 'stopped' | 'failed';
+    provider: string;
+    public_url: string | null;
+    local_port: number | null;
+    local_command: string | null;
+    machine_id: number | null;
+    tunnel_record_ulid?: string | null;
+    dev_pid?: number | null;
+    tunnel_pid?: number | null;
+    started_at: string;
+    updated_at: string;
+}
+
 export function loadDaemonStatus(): DaemonStatus | null {
     const statusPath = getDaemonStatusPath();
     if (!fs.existsSync(statusPath)) {
@@ -600,6 +621,33 @@ export function loadDaemonStatus(): DaemonStatus | null {
         return JSON.parse(content) as DaemonStatus;
     } catch {
         return null;
+    }
+}
+
+export function loadTunnelState(): TunnelState | null {
+    const statePath = getTunnelStatePath();
+    if (!fs.existsSync(statePath)) {
+        return null;
+    }
+
+    try {
+        const content = fs.readFileSync(statePath, 'utf-8');
+        return JSON.parse(content) as TunnelState;
+    } catch {
+        return null;
+    }
+}
+
+export function saveTunnelState(state: TunnelState): void {
+    ensureHelmDir();
+    ensureEnvironmentDir();
+    fs.writeFileSync(getTunnelStatePath(), JSON.stringify(state, null, 2));
+}
+
+export function clearTunnelState(): void {
+    const statePath = getTunnelStatePath();
+    if (fs.existsSync(statePath)) {
+        fs.unlinkSync(statePath);
     }
 }
 

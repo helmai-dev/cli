@@ -156,6 +156,22 @@ export interface SyncResponse {
         usage_count: number;
         updated_at: string;
     }>;
+    approved_skills?: Array<{
+        slug: string;
+        label: string;
+        description: string | null;
+        stacks: string[];
+        is_default: boolean;
+        approved_at: string;
+    }>;
+    approved_tools?: Array<{
+        slug: string;
+        label: string;
+        description: string | null;
+        stacks: string[];
+        is_default: boolean;
+        approved_at: string;
+    }>;
     synced_at: string;
 }
 
@@ -486,11 +502,159 @@ export async function getProjectSetupInfo(
     );
 }
 
+export interface TunnelRecord {
+    ulid: string;
+    project_id: number;
+    machine_id: number | null;
+    mode: 'preview';
+    status: string;
+    provider: string;
+    local_command: string | null;
+    local_port: number | null;
+    public_url: string | null;
+    started_at: string | null;
+    ended_at: string | null;
+    last_heartbeat_at: string | null;
+}
+
+export interface StartProjectTunnelRequest {
+    machine_id?: number;
+    mode?: 'preview';
+    provider?: string;
+    local_command?: string;
+    local_port?: number;
+    public_url?: string;
+}
+
+export interface StartProjectTunnelResponse {
+    _version: string;
+    tunnel: TunnelRecord;
+}
+
+export async function startProjectTunnel(
+    projectSlug: string,
+    data: StartProjectTunnelRequest,
+): Promise<StartProjectTunnelResponse> {
+    return request<StartProjectTunnelResponse>(
+        `/projects/${encodeURIComponent(projectSlug)}/tunnels/start`,
+        {
+            method: 'POST',
+            body: JSON.stringify(data),
+        },
+    );
+}
+
+export interface StopProjectTunnelRequest {
+    machine_id?: number;
+}
+
+export interface StopProjectTunnelResponse {
+    _version: string;
+    stopped: boolean;
+    stopped_count: number;
+}
+
+export async function stopProjectTunnel(
+    projectSlug: string,
+    data: StopProjectTunnelRequest = {},
+): Promise<StopProjectTunnelResponse> {
+    return request<StopProjectTunnelResponse>(
+        `/projects/${encodeURIComponent(projectSlug)}/tunnels/stop`,
+        {
+            method: 'POST',
+            body: JSON.stringify(data),
+        },
+    );
+}
+
+export interface ProjectTunnelStatusResponse {
+    _version: string;
+    tunnel: TunnelRecord | null;
+}
+
+export async function getProjectTunnelStatus(
+    projectSlug: string,
+): Promise<ProjectTunnelStatusResponse> {
+    return request<ProjectTunnelStatusResponse>(
+        `/projects/${encodeURIComponent(projectSlug)}/tunnels/status`,
+    );
+}
+
+export interface PollProjectSchedulesResponse {
+    _version: string;
+    schedule_runs: Array<{
+        run_id: number;
+        run_ulid: string;
+        schedule_ulid: string;
+        project_slug: string;
+        due_at: string;
+        task_payload: {
+            template?: 'feature' | 'bug' | 'planning' | 'chore' | 'investigation';
+            title?: string;
+            description?: string;
+            profile?:
+                | 'planning'
+                | 'implementation'
+                | 'strong_thinking'
+                | 'bugfix'
+                | 'review';
+            priority?: 1 | 2 | 3 | 4;
+            auto_execute?: boolean;
+            requested_agent?: string;
+            requested_model?: string;
+        };
+    }>;
+}
+
+export async function pollProjectSchedules(
+    machineId: number,
+): Promise<PollProjectSchedulesResponse> {
+    return request<PollProjectSchedulesResponse>(
+        `/admiral/machines/${machineId}/schedules/poll`,
+        {
+            method: 'POST',
+        },
+    );
+}
+
+export interface ReportProjectScheduleRunRequest {
+    status: 'started' | 'completed' | 'failed';
+    error?: string;
+    created_task_ulid?: string;
+}
+
+export interface ReportProjectScheduleRunResponse {
+    _version: string;
+    run: {
+        id: number;
+        ulid: string;
+        status: string;
+        error: string | null;
+        created_task_ulid: string | null;
+        finished_at: string | null;
+    };
+}
+
+export async function reportProjectScheduleRun(
+    machineId: number,
+    runId: number,
+    data: ReportProjectScheduleRunRequest,
+): Promise<ReportProjectScheduleRunResponse> {
+    return request<ReportProjectScheduleRunResponse>(
+        `/admiral/machines/${machineId}/schedules/runs/${runId}/report`,
+        {
+            method: 'POST',
+            body: JSON.stringify(data),
+        },
+    );
+}
+
 export interface ClaimRunResponse {
     run: {
         id: string;
         status: string;
         machine_id: number;
+        execution_mode?: 'local' | 'sprite';
         branch?: string;
         worktree_path?: string;
         continue_session_id?: string | null;
@@ -526,6 +690,10 @@ export async function updateRunStatus(
     runId: number,
     status: string,
     failureReason?: string,
+    options?: {
+        input_reason?: string;
+        payload?: Record<string, unknown>;
+    },
 ): Promise<UpdateRunStatusResponse> {
     return request<UpdateRunStatusResponse>(
         `/admiral/runs/${runId}/status`,
@@ -534,6 +702,42 @@ export async function updateRunStatus(
             body: JSON.stringify({
                 status,
                 ...(failureReason ? { failure_reason: failureReason } : {}),
+                ...(options?.input_reason ? { input_reason: options.input_reason } : {}),
+                ...(options?.payload ? { payload: options.payload } : {}),
+            }),
+        },
+    );
+}
+
+export interface RunExecutionContextResponse {
+    run: {
+        id: string;
+        execution_mode: 'local' | 'sprite';
+        completion_outcome: string | null;
+    };
+    project: {
+        slug: string | null;
+        repository_url: string | null;
+    };
+    settings: {
+        execution_mode_policy: string | null;
+        sprites_api_url: string | null;
+    };
+    credentials: {
+        github_token: string | null;
+    };
+}
+
+export async function getRunExecutionContext(
+    runId: number,
+    machineId: number,
+): Promise<RunExecutionContextResponse> {
+    return request<RunExecutionContextResponse>(
+        `/admiral/runs/${runId}/execution-context`,
+        {
+            method: 'POST',
+            body: JSON.stringify({
+                machine_id: machineId,
             }),
         },
     );

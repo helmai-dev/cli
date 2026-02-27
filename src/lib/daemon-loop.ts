@@ -145,6 +145,29 @@ async function fastPoll(): Promise<PendingRun[]> {
     }
 }
 
+async function pollSchedules(): Promise<
+    api.PollProjectSchedulesResponse['schedule_runs']
+> {
+    const credentials = loadCredentials();
+    if (!credentials) {
+        return [];
+    }
+
+    const machine = loadMachineIdentity();
+    if (!machine) {
+        return [];
+    }
+
+    try {
+        const response = await api.pollProjectSchedules(machine.id);
+        return response.schedule_runs ?? [];
+    } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        log(`Schedule poll failed: ${msg}`);
+        return [];
+    }
+}
+
 async function processPendingRuns(pendingRuns: PendingRun[]): Promise<void> {
     if (shuttingDown || pendingRuns.length === 0) {
         return;
@@ -177,11 +200,126 @@ async function processPendingRuns(pendingRuns: PendingRun[]): Promise<void> {
     }
 }
 
+async function processScheduledRuns(
+    scheduledRuns: api.PollProjectSchedulesResponse['schedule_runs'],
+): Promise<void> {
+    if (shuttingDown || scheduledRuns.length === 0) {
+        return;
+    }
+
+    const machine = loadMachineIdentity();
+    if (!machine) {
+        return;
+    }
+
+    for (const scheduledRun of scheduledRuns) {
+        if (shuttingDown) {
+            break;
+        }
+
+        const payload = scheduledRun.task_payload ?? {};
+        const template = coerceTaskTemplate(payload.template);
+        const title = payload.title ?? `Scheduled run ${scheduledRun.run_ulid}`;
+        const profile = coerceTaskProfile(payload.profile);
+        const priority = coerceTaskPriority(payload.priority);
+
+        try {
+            await api.reportProjectScheduleRun(machine.id, scheduledRun.run_id, {
+                status: 'started',
+            });
+
+            const created = await api.createAdmiralTask({
+                template,
+                title,
+                description: payload.description ?? undefined,
+                profile,
+                priority,
+                project_slug: scheduledRun.project_slug,
+            });
+
+            if (payload.auto_execute) {
+                await api.pickupAdmiralTask({
+                    task_ulid: created.task.id,
+                    requested_agent: payload.requested_agent,
+                    requested_model: payload.requested_model,
+                });
+            }
+
+            await api.reportProjectScheduleRun(machine.id, scheduledRun.run_id, {
+                status: 'completed',
+                created_task_ulid: created.task.id,
+            });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : String(error);
+
+            log(
+                `Scheduled run ${scheduledRun.run_ulid} failed: ${message}`,
+            );
+
+            try {
+                await api.reportProjectScheduleRun(
+                    machine.id,
+                    scheduledRun.run_id,
+                    {
+                        status: 'failed',
+                        error: message,
+                    },
+                );
+            } catch {
+                // best effort
+            }
+        }
+    }
+}
+
+function coerceTaskTemplate(
+    value: string | undefined,
+): api.CreateAdmiralTaskRequest['template'] {
+    switch (value) {
+        case 'feature':
+        case 'bug':
+        case 'planning':
+        case 'chore':
+        case 'investigation':
+            return value;
+        default:
+            return 'chore';
+    }
+}
+
+function coerceTaskProfile(
+    value: string | undefined,
+): api.CreateAdmiralTaskRequest['profile'] {
+    switch (value) {
+        case 'planning':
+        case 'implementation':
+        case 'strong_thinking':
+        case 'bugfix':
+        case 'review':
+            return value;
+        default:
+            return 'implementation';
+    }
+}
+
+function coerceTaskPriority(
+    value: number | undefined,
+): api.CreateAdmiralTaskRequest['priority'] {
+    if (value === 1 || value === 2 || value === 3 || value === 4) {
+        return value;
+    }
+
+    return 3;
+}
+
 function scheduleHeartbeat(): void {
     const delay = HEARTBEAT_INTERVAL_MS + backoffMs;
     timer = setTimeout(async () => {
         const pendingRuns = await heartbeat();
+        const scheduledRuns = await pollSchedules();
         await processPendingRuns(pendingRuns);
+        await processScheduledRuns(scheduledRuns);
         writeDaemonStatus();
         scheduleHeartbeat();
     }, delay);
@@ -191,8 +329,13 @@ function scheduleFastPoll(): void {
     fastPollTimer = setTimeout(async () => {
         if (!shuttingDown && canAcceptMore()) {
             const pendingRuns = await fastPoll();
+            const scheduledRuns = await pollSchedules();
             if (pendingRuns.length > 0) {
                 await processPendingRuns(pendingRuns);
+                writeDaemonStatus();
+            }
+            if (scheduledRuns.length > 0) {
+                await processScheduledRuns(scheduledRuns);
                 writeDaemonStatus();
             }
         }
@@ -280,7 +423,9 @@ export async function runDaemonLoop(): Promise<void> {
 
     // Initial heartbeat to get immediate pending runs
     const pendingRuns = await heartbeat();
+    const scheduledRuns = await pollSchedules();
     await processPendingRuns(pendingRuns);
+    await processScheduledRuns(scheduledRuns);
     writeDaemonStatus();
 
     // Schedule recurring heartbeats + fast poll

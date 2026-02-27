@@ -92,6 +92,24 @@ helm init --team <invite-token>  # Join an existing team
 - **MCP management** — Install, configure, and manage Model Context Protocol servers
 - **Quality checks** — Run pre-commit quality checks powered by your project rules
 
+## Sprite Execution (MVP)
+
+When a run is marked for hosted execution, the daemon can execute it in a Sprite sandbox.
+
+Required environment variables on the runner machine:
+
+- `SPRITE_TOKEN` (or `SPRITES_TOKEN`)
+
+Optional:
+
+- `SPRITES_API_URL` (defaults to `https://api.sprites.dev`)
+- `HELM_SPRITE_HOURLY_RATE_USD` (used for estimated compute-cost events)
+
+Agent provider variables should also be available to the daemon for in-sandbox runs:
+
+- `ANTHROPIC_API_KEY`
+- `OPENAI_API_KEY`
+
 ## License
 
 MIT

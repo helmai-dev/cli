@@ -37,6 +37,11 @@ import { saveCommand } from './commands/save.js';
 import { serveCommand } from './commands/serve.js';
 import { promoteSkillCommand } from './commands/skills.js';
 import { syncCommand } from './commands/sync.js';
+import {
+    tunnelStartCommand,
+    tunnelStatusCommand,
+    tunnelStopCommand,
+} from './commands/tunnel.js';
 import { uninstallCommand } from './commands/uninstall.js';
 import {
     graphBuildCommand,
@@ -307,6 +312,32 @@ mcps.command('configure')
     .option('--key <key>', 'API key value (skips interactive prompt)')
     .action(async (name: string, options: { key?: string }) => {
         await mcpsConfigureCommand(name, options);
+    });
+
+const tunnel = program
+    .command('tunnel')
+    .description('Manage project preview tunnels');
+
+tunnel
+    .command('start')
+    .description('Start a preview tunnel for the current project')
+    .option('--mode <mode>', 'Tunnel mode (preview only)', 'preview')
+    .action(async (options: { mode?: 'preview' }) => {
+        await tunnelStartCommand(options);
+    });
+
+tunnel
+    .command('stop')
+    .description('Stop the active preview tunnel')
+    .action(async () => {
+        await tunnelStopCommand();
+    });
+
+tunnel
+    .command('status')
+    .description('Show preview tunnel status')
+    .action(async () => {
+        await tunnelStatusCommand();
     });
 
 const graphCmd = program

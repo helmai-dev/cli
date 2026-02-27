@@ -7,11 +7,23 @@
 import { spawn, type ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
 import { mkdirSync, writeFileSync, unlinkSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join } from 'path';
 import type { PendingRun } from '../types.js';
 import * as api from './api.js';
 import { loadProjectPaths } from './config.js';
 import { EventBatcher } from './event-batcher.js';
+import {
+    createSpriteSandbox,
+    destroySpriteSandbox,
+    estimateSpriteCostUsd,
+    executeSpriteCommand,
+    getSpriteApiUrl,
+    getSpriteToken,
+    isSpriteAgentSupported,
+    requiresRemoteGitCredentials,
+    shouldUseSpriteExecution,
+    toShellCommand,
+} from './sprite.js';
 
 const MAX_CONCURRENT = 3;
 
@@ -31,7 +43,18 @@ interface RunProcess {
     startedAt: Date;
 }
 
+interface RemoteRunProcess {
+    runId: number;
+    runUlid: string;
+    taskTitle: string | null;
+    projectSlug: string | null;
+    agent: string | null;
+    model: string | null;
+    startedAt: Date;
+}
+
 const activeProcesses = new Map<number, RunProcess>();
+const activeRemoteProcesses = new Map<number, RemoteRunProcess>();
 
 /** Cumulative stats for the lifetime of this daemon process */
 const stats = {
@@ -41,15 +64,15 @@ const stats = {
 };
 
 export function canAcceptMore(): boolean {
-    return activeProcesses.size < MAX_CONCURRENT;
+    return activeProcesses.size + activeRemoteProcesses.size < MAX_CONCURRENT;
 }
 
 export function isRunActive(runId: number): boolean {
-    return activeProcesses.has(runId);
+    return activeProcesses.has(runId) || activeRemoteProcesses.has(runId);
 }
 
 export function getActiveCount(): number {
-    return activeProcesses.size;
+    return activeProcesses.size + activeRemoteProcesses.size;
 }
 
 export function getStats(): { totalSpawned: number; totalCompleted: number; totalFailed: number } {
@@ -66,7 +89,7 @@ export function getActiveRunDetails(): Array<{
     child_pid: number | null;
     started_at: string;
 }> {
-    return Array.from(activeProcesses.values()).map(proc => ({
+    const local = Array.from(activeProcesses.values()).map(proc => ({
         run_id: proc.runId,
         run_ulid: proc.runUlid,
         task_title: proc.taskTitle,
@@ -76,6 +99,19 @@ export function getActiveRunDetails(): Array<{
         child_pid: proc.child.pid ?? null,
         started_at: proc.startedAt.toISOString(),
     }));
+
+    const remote = Array.from(activeRemoteProcesses.values()).map(proc => ({
+        run_id: proc.runId,
+        run_ulid: proc.runUlid,
+        task_title: proc.taskTitle,
+        project_slug: proc.projectSlug,
+        agent: proc.agent,
+        model: proc.model,
+        child_pid: null,
+        started_at: proc.startedAt.toISOString(),
+    }));
+
+    return [...local, ...remote];
 }
 
 function resolveProjectPath(projectSlug: string | null | undefined): string | null {
@@ -224,11 +260,34 @@ function sendRunEvent(
     api.storeRunEvent(runId, eventType, sessionId, payload).catch(() => {});
 }
 
-function sendRunStatus(runUlid: string, runId: number, status: string, failureReason?: string): void {
-    api.updateRunStatus(runId, status, failureReason).catch(() => {});
+function sendRunStatus(
+    runUlid: string,
+    runId: number,
+    status: string,
+    failureReason?: string,
+    options?: {
+        input_reason?: string;
+        payload?: Record<string, unknown>;
+    },
+): void {
+    api.updateRunStatus(runId, status, failureReason, options).catch(() => {});
 }
 
 export async function spawnAgentForRun(
+    run: PendingRun,
+    machineId: number,
+    log: (message: string) => void,
+    onStatusChange?: () => void,
+): Promise<void> {
+    if (shouldUseSpriteExecution(run.execution_mode)) {
+        await spawnSpriteRun(run, machineId, log, onStatusChange);
+        return;
+    }
+
+    await spawnLocalRun(run, machineId, log, onStatusChange);
+}
+
+async function spawnLocalRun(
     run: PendingRun,
     machineId: number,
     log: (message: string) => void,
@@ -446,8 +505,249 @@ export async function spawnAgentForRun(
     });
 }
 
+async function spawnSpriteRun(
+    run: PendingRun,
+    machineId: number,
+    log: (message: string) => void,
+    onStatusChange?: () => void,
+): Promise<void> {
+    if (!canAcceptMore()) {
+        log(`Skipping run ${run.ulid} — at concurrency limit (${MAX_CONCURRENT})`);
+        return;
+    }
+
+    let claimResponse: api.ClaimRunResponse;
+    try {
+        claimResponse = await api.claimRun(run.id, machineId);
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`Failed to claim Sprite run ${run.ulid}: ${msg}`);
+        return;
+    }
+
+    const taskPrd = claimResponse.task?.prd ?? run.task?.prd ?? null;
+    const taskUlid = claimResponse.task?.ulid ?? run.task?.ulid ?? null;
+    const continuationCandidate = claimResponse.run?.continue_session_id ?? run.continue_session_id ?? null;
+    const continueSessionId =
+        typeof continuationCandidate === 'string' && isUuid(continuationCandidate)
+            ? continuationCandidate
+            : null;
+    const sessionId = continueSessionId ?? randomUUID();
+
+    const remoteRun: RemoteRunProcess = {
+        runId: run.id,
+        runUlid: run.ulid,
+        taskTitle: run.task?.title ?? null,
+        projectSlug: run.project?.slug ?? null,
+        agent: run.requested_agent ?? null,
+        model: run.requested_model ?? null,
+        startedAt: new Date(),
+    };
+
+    activeRemoteProcesses.set(run.id, remoteRun);
+    stats.totalSpawned++;
+    onStatusChange?.();
+
+    const batcher = new EventBatcher(run.id, run.ulid);
+    batcher.setSessionId(sessionId);
+
+    let sandboxId: string | null = null;
+    let sandboxStartedAt: Date | null = null;
+
+    try {
+        const executionContext = await api.getRunExecutionContext(run.id, machineId);
+        const repositoryUrl = executionContext.project.repository_url ?? run.project?.repository_url ?? null;
+
+        if (!repositoryUrl) {
+            throw new Error('Run has no repository URL configured. Set a project repository URL in Helm.');
+        }
+
+        if (!isSpriteAgentSupported(run.requested_agent)) {
+            throw new Error(`Sprite execution currently supports claude-code and codex. Received: ${run.requested_agent ?? 'none'}`);
+        }
+
+        if (
+            requiresRemoteGitCredentials(run.completion_outcome)
+            && !executionContext.credentials.github_token
+        ) {
+            const reason = 'This run requires a GitHub token for push/PR but no project token is configured.';
+            batcher.push('agent.stderr', { raw: reason });
+            sendRunStatus(run.ulid, run.id, 'needs_input', undefined, {
+                input_reason: 'generic',
+                payload: {
+                    missing_credential: 'github_token',
+                },
+            });
+            await batcher.destroy();
+            return;
+        }
+
+        const spriteToken = getSpriteToken();
+        if (!spriteToken) {
+            throw new Error('SPRITE_TOKEN (or SPRITES_TOKEN) is required for Sprite execution mode.');
+        }
+
+        const spriteApiUrl = getSpriteApiUrl();
+        const sandboxName = `helm-${run.ulid}`;
+
+        sandboxId = await createSpriteSandbox(spriteApiUrl, spriteToken, sandboxName);
+        sandboxStartedAt = new Date();
+        sendRunEvent(run.ulid, run.id, 'sandbox.created', {
+            provider: 'sprite',
+            sandbox_id: sandboxId,
+            name: sandboxName,
+        }, sessionId);
+
+        sendRunStatus(run.ulid, run.id, 'running', undefined, {
+            payload: {
+                execution_mode: 'sprite',
+                sandbox_provider: 'sprite',
+                sandbox_id: sandboxId,
+                sandbox_started_at: sandboxStartedAt.toISOString(),
+            },
+        });
+
+        sendRunEvent(run.ulid, run.id, 'sandbox.bootstrap.started', {
+            sandbox_id: sandboxId,
+        }, sessionId);
+
+        const remoteRepoPath = '/workspace/repo';
+        const remoteWorktreePath = '/workspace/worktree';
+        const effectiveWorkdir = run.worktree_path ? remoteWorktreePath : remoteRepoPath;
+        const prdBase64 = Buffer.from(taskPrd ?? '', 'utf-8').toString('base64');
+        const bootstrapScript = [
+            'set -euo pipefail',
+            'mkdir -p /workspace',
+            'rm -rf /workspace/repo /workspace/worktree',
+            `git clone ${repositoryUrl} ${remoteRepoPath}`,
+            `cd ${remoteRepoPath}`,
+            run.branch ? `git checkout -B ${run.branch}` : '',
+            run.worktree_path ? `git worktree add ${remoteWorktreePath}` : '',
+            run.worktree_path ? `cd ${remoteWorktreePath}` : '',
+            taskUlid ? 'mkdir -p .helm/plans' : '',
+            taskUlid ? `echo ${prdBase64} | base64 --decode > .helm/plans/${taskUlid}.md` : '',
+        ]
+            .filter(Boolean)
+            .join('\n');
+
+        const bootstrapResult = await executeSpriteCommand(
+            spriteApiUrl,
+            spriteToken,
+            sandboxId,
+            `bash -lc ${JSON.stringify(bootstrapScript)}`,
+            '/workspace',
+            {
+                GITHUB_TOKEN: executionContext.credentials.github_token ?? '',
+            },
+        );
+
+        if (bootstrapResult.exitCode !== 0) {
+            throw new Error(`Sprite bootstrap failed: ${bootstrapResult.stderr || bootstrapResult.stdout}`);
+        }
+
+        sendRunEvent(run.ulid, run.id, 'sandbox.bootstrap.completed', {
+            sandbox_id: sandboxId,
+        }, sessionId);
+
+        const { command, args } = buildAgentCommand(run, taskPrd, sessionId, continueSessionId);
+        const agentCommand = toShellCommand(command, args);
+        const execution = await executeSpriteCommand(
+            spriteApiUrl,
+            spriteToken,
+            sandboxId,
+            agentCommand,
+            effectiveWorkdir,
+            {
+                ...(process.env.ANTHROPIC_API_KEY ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY } : {}),
+                ...(process.env.OPENAI_API_KEY ? { OPENAI_API_KEY: process.env.OPENAI_API_KEY } : {}),
+                ...(executionContext.credentials.github_token ? { GITHUB_TOKEN: executionContext.credentials.github_token } : {}),
+            },
+        );
+
+        for (const line of execution.stdout.split('\n').filter(line => line.trim() !== '')) {
+            try {
+                const parsed = JSON.parse(line) as Record<string, unknown>;
+                const type = typeof parsed.type === 'string' ? parsed.type : 'unknown';
+                batcher.push(`agent.stream.${type}`, parsed);
+            } catch {
+                batcher.push('agent.stdout', { raw: line });
+            }
+        }
+
+        for (const line of execution.stderr.split('\n').filter(line => line.trim() !== '')) {
+            batcher.push('agent.stderr', { raw: line });
+        }
+
+        const endedAt = new Date();
+        const hourlyRateUsd = Number.parseFloat(process.env.HELM_SPRITE_HOURLY_RATE_USD ?? '0');
+        const estimatedCostUsd = estimateSpriteCostUsd(
+            (sandboxStartedAt ?? remoteRun.startedAt).getTime(),
+            endedAt.getTime(),
+            Number.isFinite(hourlyRateUsd) ? hourlyRateUsd : 0,
+        );
+        const durationSeconds = Math.max(
+            0,
+            Math.floor((endedAt.getTime() - (sandboxStartedAt ?? remoteRun.startedAt).getTime()) / 1000),
+        );
+
+        sendRunEvent(run.ulid, run.id, 'sandbox.cost.estimated', {
+            sandbox_id: sandboxId,
+            hourly_rate_usd: hourlyRateUsd,
+            duration_seconds: durationSeconds,
+            estimated_compute_cost_usd: estimatedCostUsd,
+        }, sessionId);
+
+        await batcher.destroy();
+
+        if (execution.exitCode === 0) {
+            stats.totalCompleted++;
+            sendRunStatus(run.ulid, run.id, 'completed', undefined, {
+                payload: {
+                    sandbox_provider: 'sprite',
+                    sandbox_id: sandboxId,
+                    sandbox_started_at: (sandboxStartedAt ?? remoteRun.startedAt).toISOString(),
+                    sandbox_ended_at: endedAt.toISOString(),
+                    estimated_compute_cost_usd: estimatedCostUsd,
+                },
+            });
+        } else {
+            stats.totalFailed++;
+            sendRunStatus(run.ulid, run.id, 'failed', `Sprite command exited with code ${execution.exitCode}`, {
+                payload: {
+                    sandbox_provider: 'sprite',
+                    sandbox_id: sandboxId,
+                    sandbox_started_at: (sandboxStartedAt ?? remoteRun.startedAt).toISOString(),
+                    sandbox_ended_at: endedAt.toISOString(),
+                    estimated_compute_cost_usd: estimatedCostUsd,
+                },
+            });
+        }
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`Sprite run ${run.ulid} failed: ${msg}`);
+        batcher.push('agent.stderr', { raw: msg });
+        await batcher.destroy().catch(() => {});
+        stats.totalFailed++;
+        sendRunStatus(run.ulid, run.id, 'failed', msg);
+    } finally {
+        if (sandboxId) {
+            const spriteToken = getSpriteToken();
+            const spriteApiUrl = getSpriteApiUrl();
+            if (spriteToken) {
+                await destroySpriteSandbox(spriteApiUrl, spriteToken, sandboxId).catch(() => {});
+            }
+            sendRunEvent(run.ulid, run.id, 'sandbox.destroyed', {
+                sandbox_id: sandboxId,
+            }, sessionId);
+        }
+
+        activeRemoteProcesses.delete(run.id);
+        onStatusChange?.();
+    }
+}
+
 export async function gracefulShutdown(log: (message: string) => void): Promise<void> {
-    const count = activeProcesses.size;
+    const count = activeProcesses.size + activeRemoteProcesses.size;
     if (count === 0) {
         return;
     }
@@ -474,5 +774,13 @@ export async function gracefulShutdown(log: (message: string) => void): Promise<
             proc.child.kill('SIGKILL');
         }
         activeProcesses.clear();
+    }
+
+    if (activeRemoteProcesses.size > 0) {
+        log(`Marking ${activeRemoteProcesses.size} remote run(s) as stale`);
+        for (const [, proc] of activeRemoteProcesses) {
+            api.updateRunStatus(proc.runId, 'stale', 'Daemon shutdown during remote Sprite execution').catch(() => {});
+        }
+        activeRemoteProcesses.clear();
     }
 }

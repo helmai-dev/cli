@@ -159,6 +159,20 @@ export interface InjectResponse {
             usage_count: number;
             updated_at: string;
         }>;
+        approved_skills?: Array<{
+            slug: string;
+            label: string;
+            description: string | null;
+            stacks: string[];
+            is_default: boolean;
+        }>;
+        approved_tools?: Array<{
+            slug: string;
+            label: string;
+            description: string | null;
+            stacks: string[];
+            is_default: boolean;
+        }>;
         mcps: McpDefinition[];
     };
 }
@@ -241,6 +255,18 @@ export interface TeamInvitationResponse {
             }>;
         }>;
         recommended_skills: Array<{ skill: string; label: string }>;
+        approved_skills?: Array<{
+            slug: string;
+            label: string;
+            description: string | null;
+            stacks: string[];
+        }>;
+        approved_tools?: Array<{
+            slug: string;
+            label: string;
+            description: string | null;
+            stacks: string[];
+        }>;
         mcps: McpDefinition[];
     };
 }
@@ -260,9 +286,11 @@ export interface PendingRun {
     id: number;
     ulid: string;
     status: string;
+    execution_mode?: 'local' | 'sprite';
     requested_agent: string | null;
     requested_model: string | null;
     prompt?: string | null;
+    completion_outcome?: string | null;
     continue_session_id?: string | null;
     branch?: string | null;
     worktree_path?: string | null;
@@ -276,6 +304,7 @@ export interface PendingRun {
     } | null;
     project: {
         slug: string;
+        repository_url?: string | null;
     } | null;
 }
 
