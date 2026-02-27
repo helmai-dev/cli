@@ -19,11 +19,16 @@ export class EventBatcher {
     private buffer: BufferedEvent[] = [];
     private flushTimer: ReturnType<typeof setTimeout> | null = null;
     private destroyed = false;
+    private sessionId: string | null = null;
 
     constructor(
         private readonly runId: number,
         private readonly runUlid: string,
     ) {}
+
+    setSessionId(sessionId: string | null): void {
+        this.sessionId = sessionId;
+    }
 
     push(eventType: string, payload?: Record<string, unknown>): void {
         if (this.destroyed) {
@@ -62,7 +67,7 @@ export class EventBatcher {
         const events = this.buffer.splice(0);
 
         try {
-            await api.storeRunEventBatch(this.runId, events);
+            await api.storeRunEventBatch(this.runId, events, this.sessionId);
         } catch {
             // Fire-and-forget — don't block the process on failed event delivery
         }

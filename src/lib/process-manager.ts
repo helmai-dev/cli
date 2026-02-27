@@ -5,6 +5,7 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process';
+import { randomUUID } from 'crypto';
 import { mkdirSync, writeFileSync, unlinkSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import type { PendingRun } from '../types.js';
@@ -24,6 +25,7 @@ interface RunProcess {
     planFilePath: string | null;
     agent: string | null;
     model: string | null;
+    sessionId: string | null;
     child: ChildProcess;
     batcher: EventBatcher;
     startedAt: Date;
@@ -87,6 +89,11 @@ function resolveProjectPath(projectSlug: string | null | undefined): string | nu
 }
 
 function buildPrompt(run: PendingRun, prd: string | null | undefined): string {
+    const explicitPrompt = run.prompt?.trim();
+    if (explicitPrompt) {
+        return explicitPrompt;
+    }
+
     const parts: string[] = [];
 
     if (run.task?.title) {
@@ -109,6 +116,10 @@ function buildPrompt(run: PendingRun, prd: string | null | undefined): string {
     return parts.join('\n\n') || 'Execute the assigned task.';
 }
 
+function isUuid(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 function writePlanFile(projectPath: string, taskUlid: string, prd: string): string {
     const helmDir = join(projectPath, '.helm', 'plans');
     mkdirSync(helmDir, { recursive: true });
@@ -127,24 +138,32 @@ function removePlanFile(filePath: string | null): void {
     }
 }
 
-function buildAgentCommand(run: PendingRun, prd: string | null | undefined): { command: string; args: string[] } {
+function buildAgentCommand(
+    run: PendingRun,
+    prd: string | null | undefined,
+    sessionId: string | null,
+    continueSessionId: string | null,
+): { command: string; args: string[] } {
     const agent = run.requested_agent ?? 'claude-code';
     const prompt = buildPrompt(run, prd);
 
     switch (agent) {
         case 'claude-code': {
             const args = [
-                '-p',
-                prompt,
                 '--output-format',
                 'stream-json',
                 '--verbose',
                 '--dangerously-skip-permissions',
-                '--no-session-persistence',
             ];
+            if (continueSessionId) {
+                args.push('--resume', continueSessionId);
+            } else if (sessionId) {
+                args.push('--session-id', sessionId);
+            }
             if (run.requested_model) {
                 args.push('--model', run.requested_model);
             }
+            args.push('-p', prompt);
             return { command: 'claude', args };
         }
         case 'amp': {
@@ -195,8 +214,14 @@ function buildAgentCommand(run: PendingRun, prd: string | null | undefined): { c
     }
 }
 
-function sendRunEvent(runUlid: string, runId: number, eventType: string, payload: Record<string, unknown>): void {
-    api.storeRunEvent(runId, eventType, payload).catch(() => {});
+function sendRunEvent(
+    runUlid: string,
+    runId: number,
+    eventType: string,
+    payload: Record<string, unknown>,
+    sessionId?: string | null,
+): void {
+    api.storeRunEvent(runId, eventType, sessionId, payload).catch(() => {});
 }
 
 function sendRunStatus(runUlid: string, runId: number, status: string, failureReason?: string): void {
@@ -248,6 +273,12 @@ export async function spawnAgentForRun(
     // Extract PRD from claim response (falls back to run.task.prd)
     const taskPrd = claimResponse.task?.prd ?? run.task?.prd ?? null;
     const taskUlid = claimResponse.task?.ulid ?? run.task?.ulid ?? null;
+    const continuationCandidate = claimResponse.run?.continue_session_id ?? run.continue_session_id ?? null;
+    const continueSessionId =
+        typeof continuationCandidate === 'string' && isUuid(continuationCandidate)
+            ? continuationCandidate
+            : null;
+    const sessionId = continueSessionId ?? randomUUID();
 
     // Write plan file if PRD exists
     let planFilePath: string | null = null;
@@ -267,7 +298,7 @@ export async function spawnAgentForRun(
         log(`Failed to transition run ${run.ulid} to running: ${err instanceof Error ? err.message : String(err)} — continuing anyway`);
     }
 
-    const { command, args } = buildAgentCommand(run, taskPrd);
+    const { command, args } = buildAgentCommand(run, taskPrd, sessionId, continueSessionId);
     log(`Spawning ${command} ${args.join(' ')} in ${projectPath} for run ${run.ulid}`);
 
     let child: ChildProcess;
@@ -286,7 +317,7 @@ export async function spawnAgentForRun(
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log(`Spawn error for run ${run.ulid}: ${msg}`);
-        sendRunEvent(run.ulid, run.id, 'agent.stderr', { raw: `Spawn error: ${msg}` });
+        sendRunEvent(run.ulid, run.id, 'agent.stderr', { raw: `Spawn error: ${msg}` }, sessionId);
         sendRunStatus(run.ulid, run.id, 'failed', `Spawn error: ${msg}`);
         removePlanFile(planFilePath);
         stats.totalFailed++;
@@ -306,10 +337,12 @@ export async function spawnAgentForRun(
         planFilePath,
         agent: run.requested_agent ?? null,
         model: run.requested_model ?? null,
+        sessionId,
         child,
         batcher,
         startedAt: new Date(),
     };
+    batcher.setSessionId(sessionId);
     activeProcesses.set(run.id, runProcess);
     stats.totalSpawned++;
     onStatusChange?.();

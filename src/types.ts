@@ -262,6 +262,10 @@ export interface PendingRun {
     status: string;
     requested_agent: string | null;
     requested_model: string | null;
+    prompt?: string | null;
+    continue_session_id?: string | null;
+    branch?: string | null;
+    worktree_path?: string | null;
     task: {
         ulid: string;
         title: string;

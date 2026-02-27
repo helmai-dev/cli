@@ -493,6 +493,7 @@ export interface ClaimRunResponse {
         machine_id: number;
         branch?: string;
         worktree_path?: string;
+        continue_session_id?: string | null;
     };
     task?: {
         ulid: string;
@@ -549,6 +550,7 @@ export interface StoreRunEventResponse {
 export async function storeRunEvent(
     runId: number,
     eventType: string,
+    sessionId?: string | null,
     payload?: Record<string, unknown>,
 ): Promise<StoreRunEventResponse> {
     return request<StoreRunEventResponse>(
@@ -557,6 +559,7 @@ export async function storeRunEvent(
             method: 'POST',
             body: JSON.stringify({
                 event_type: eventType,
+                ...(sessionId ? { session_id: sessionId } : {}),
                 ...(payload ? { payload } : {}),
             }),
         },
@@ -574,12 +577,16 @@ export interface StoreRunEventBatchResponse {
 export async function storeRunEventBatch(
     runId: number,
     events: Array<{ event_type: string; payload?: Record<string, unknown> }>,
+    sessionId?: string | null,
 ): Promise<StoreRunEventBatchResponse> {
     return request<StoreRunEventBatchResponse>(
         `/admiral/runs/${runId}/events/batch`,
         {
             method: 'POST',
-            body: JSON.stringify({ events }),
+            body: JSON.stringify({
+                events,
+                ...(sessionId ? { session_id: sessionId } : {}),
+            }),
         },
     );
 }
