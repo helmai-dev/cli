@@ -274,6 +274,14 @@ export function getApiUrl(): string {
   return "https://tryhelm.ai";
 }
 
+export function getAdmiralMachineStreamUrl(machineId: number): string {
+  if (process.env.HELM_ADMIRAL_STREAM_URL) {
+    return process.env.HELM_ADMIRAL_STREAM_URL;
+  }
+
+  return `${getApiUrl()}/api/v1/admiral/machines/${machineId}/stream`;
+}
+
 // --- Local config (shared, not per-env) ---
 
 export interface LocalConfig {
@@ -589,6 +597,11 @@ export interface DaemonStatus {
   version: string;
   started_at: string;
   last_heartbeat_at: string | null;
+  transport: {
+    stream_url: string | null;
+    stream_connected: boolean;
+    last_stream_error: string | null;
+  };
   active_runs: Array<{
     run_id: number;
     run_ulid: string;
