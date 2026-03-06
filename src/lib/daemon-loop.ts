@@ -26,6 +26,7 @@ import {
     isRunActive,
     spawnAgentForRun,
 } from './process-manager.js';
+import { getMachineRuntimeCapabilities } from './runtime-capabilities.js';
 
 const VERSION = pkg.version;
 
@@ -111,6 +112,7 @@ async function heartbeat(): Promise<PendingRun[]> {
     try {
         const response = await api.heartbeatMachine(machine.id, {
             local_projects: localProjects.length > 0 ? localProjects : undefined,
+            capabilities: getMachineRuntimeCapabilities(),
         });
         backoffMs = 0;
         lastHeartbeatAt = new Date().toISOString();

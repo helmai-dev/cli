@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+    buildGithubAuthBootstrapCommands,
     estimateSpriteCostUsd,
     getSpriteApiUrl,
     getSpriteToken,
@@ -45,6 +46,17 @@ test('getSpriteToken prefers SPRITE_TOKEN over SPRITES_TOKEN', () => {
 test('getSpriteApiUrl returns default when unset', () => {
     assert.equal(getSpriteApiUrl({}), 'https://api.sprites.dev');
     assert.equal(getSpriteApiUrl({ SPRITES_API_URL: 'https://sandbox.example' }), 'https://sandbox.example');
+});
+
+test('buildGithubAuthBootstrapCommands configures git URL rewriting when token is available', () => {
+    const commands = buildGithubAuthBootstrapCommands(true);
+    assert.equal(commands[0], 'if [ -n "${GITHUB_TOKEN:-}" ]; then');
+    assert.equal(commands.some(command => command.includes('insteadOf "https://github.com/"')), true);
+    assert.equal(commands.at(-1), 'fi');
+});
+
+test('buildGithubAuthBootstrapCommands returns empty commands when token is missing', () => {
+    assert.deepEqual(buildGithubAuthBootstrapCommands(false), []);
 });
 
 test('toShellCommand escapes unsafe arguments', () => {

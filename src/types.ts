@@ -315,6 +315,10 @@ export interface AdmiralMachineConnectRequest {
         agents: string[];
         ides: string[];
         stack: string[];
+        hosted_execution?: {
+            sprite?: boolean;
+            sprite_supported_agents?: string[];
+        };
     };
 }
 

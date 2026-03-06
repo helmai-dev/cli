@@ -33,6 +33,7 @@ import { mergeFoundRules } from '../lib/import-rules.js';
 import { scanExistingRulesFiles } from '../lib/local-rules.js';
 import { installHelmMcpServer, installMcpIntoIde, isMcpInstalled } from '../lib/mcp-installer.js';
 import { ensureProjectSlug, type ProjectMeta } from '../lib/project.js';
+import { getMachineRuntimeCapabilities } from '../lib/runtime-capabilities.js';
 import type { Credentials, IDE, McpDefinition } from '../types.js';
 
 interface InitOptions {
@@ -350,6 +351,7 @@ async function syncAdmiralMachineCapabilities(
                 agents: selectedAgentRuntimes,
                 ides: detectedIDEs.map((ide) => ide.name),
                 stack,
+                ...getMachineRuntimeCapabilities(),
             },
         });
 

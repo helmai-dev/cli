@@ -13,6 +13,7 @@ import * as api from './api.js';
 import { loadProjectPaths } from './config.js';
 import { EventBatcher } from './event-batcher.js';
 import {
+    buildGithubAuthBootstrapCommands,
     createSpriteSandbox,
     destroySpriteSandbox,
     estimateSpriteCostUsd,
@@ -619,6 +620,7 @@ async function spawnSpriteRun(
             'set -euo pipefail',
             'mkdir -p /workspace',
             'rm -rf /workspace/repo /workspace/worktree',
+            ...buildGithubAuthBootstrapCommands(Boolean(executionContext.credentials.github_token)),
             `git clone ${repositoryUrl} ${remoteRepoPath}`,
             `cd ${remoteRepoPath}`,
             run.branch ? `git checkout -B ${run.branch}` : '',

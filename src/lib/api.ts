@@ -444,6 +444,12 @@ export interface HeartbeatMachineRequest {
         slug: string;
         local_path?: string | null;
     }>;
+    capabilities?: {
+        hosted_execution?: {
+            sprite?: boolean;
+            sprite_supported_agents?: string[];
+        };
+    };
 }
 
 export interface HeartbeatMachineResponse {
