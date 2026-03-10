@@ -31,6 +31,7 @@ import { installGitPreCommitHook } from '../lib/git-hooks.js';
 import { installHooks } from '../lib/hooks.js';
 import { mergeFoundRules } from '../lib/import-rules.js';
 import { scanExistingRulesFiles } from '../lib/local-rules.js';
+import { isCloudflaredInstalled, getCloudflaredVersion, installCloudflared } from '../lib/cloudflared.js';
 import { installHelmMcpServer, installMcpIntoIde, isMcpInstalled } from '../lib/mcp-installer.js';
 import { ensureProjectSlug, type ProjectMeta } from '../lib/project.js';
 import { getMachineRuntimeCapabilities } from '../lib/runtime-capabilities.js';
@@ -187,6 +188,41 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
     const mcpResult = installHelmMcpServer(detectedIDEs);
     if (mcpResult.installed.length > 0) {
         console.log(chalk.green(`  ✓ Helm MCP server registered: ${mcpResult.installed.join(', ')}`));
+    }
+
+    // Step 5c: Check for cloudflared (needed for tunnel previews)
+    if (isCloudflaredInstalled()) {
+        const version = getCloudflaredVersion();
+        console.log(chalk.green(`  ✓ cloudflared detected${version ? ` (v${version})` : ''}`));
+    } else {
+        console.log(chalk.yellow('  ⚠ cloudflared not found — needed for tunnel previews'));
+
+        if (!nonInteractive && !isNonInteractiveStdin) {
+            const { install } = await prompt([
+                {
+                    type: 'confirm',
+                    name: 'install',
+                    message: 'Install cloudflared now?',
+                    default: true,
+                },
+            ]);
+
+            if (install) {
+                const cfSpinner = ora('Installing cloudflared...').start();
+                const installed = installCloudflared();
+                if (installed) {
+                    const version = getCloudflaredVersion();
+                    cfSpinner.succeed(`cloudflared installed${version ? ` (v${version})` : ''}`);
+                } else {
+                    cfSpinner.fail('Could not auto-install cloudflared');
+                    console.log(chalk.gray('    Install manually: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/'));
+                }
+            } else {
+                console.log(chalk.gray('    You can install it later: brew install cloudflared'));
+            }
+        } else {
+            console.log(chalk.gray('    Install with: brew install cloudflared'));
+        }
     }
 
     // Step 6: Start daemon for heartbeat

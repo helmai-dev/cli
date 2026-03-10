@@ -1,9 +1,11 @@
 import chalk from 'chalk';
 import * as fs from 'fs';
+import inquirer from 'inquirer';
 import * as net from 'net';
 import * as path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
 import * as api from '../lib/api.js';
+import { isCloudflaredInstalled, installCloudflared, getCloudflaredVersion } from '../lib/cloudflared.js';
 import {
     clearTunnelState,
     loadCredentials,
@@ -54,6 +56,41 @@ export async function tunnelStartCommand(
             ),
         );
         process.exit(1);
+    }
+
+    // Check for cloudflared
+    if (!isCloudflaredInstalled()) {
+        console.log(chalk.yellow('\n  cloudflared is not installed (required for tunnel previews).'));
+
+        if (process.stdin.isTTY) {
+            const { install } = await inquirer.prompt([
+                {
+                    type: 'confirm',
+                    name: 'install',
+                    message: 'Install cloudflared now?',
+                    default: true,
+                },
+            ]);
+
+            if (install) {
+                console.log(chalk.gray('  Installing cloudflared...'));
+                const installed = installCloudflared();
+                if (installed) {
+                    const version = getCloudflaredVersion();
+                    console.log(chalk.green(`  ✓ cloudflared installed${version ? ` (v${version})` : ''}`));
+                } else {
+                    console.log(chalk.red('  Could not auto-install cloudflared.'));
+                    console.log(chalk.gray('  Install manually: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/\n'));
+                    process.exit(1);
+                }
+            } else {
+                console.log(chalk.gray('  Install with: brew install cloudflared\n'));
+                process.exit(1);
+            }
+        } else {
+            console.log(chalk.gray('  Install with: brew install cloudflared\n'));
+            process.exit(1);
+        }
     }
 
     const mode = options.mode ?? 'preview';

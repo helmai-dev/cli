@@ -496,6 +496,19 @@ export async function acknowledgeMachineCommands(
   );
 }
 
+export async function acknowledgeDaemonCommands(
+  machineId: number,
+  commandIds: string[],
+): Promise<{ acknowledged: number }> {
+  return request<{ acknowledged: number }>(
+    `/admiral/machines/${machineId}/daemon-commands/ack`,
+    {
+      method: "POST",
+      body: JSON.stringify({ command_ids: commandIds }),
+    },
+  );
+}
+
 export interface ProjectSetupInfoResponse {
   project: {
     ulid: string;

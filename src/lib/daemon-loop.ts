@@ -29,6 +29,11 @@ import {
   spawnAgentForRun,
 } from "./process-manager.js";
 import { getMachineRuntimeCapabilities } from "./runtime-capabilities.js";
+import {
+  getActiveTunnelDetails,
+  handleTunnelCommand,
+  stopAllTunnels,
+} from "./tunnel-manager.js";
 
 const VERSION = pkg.version;
 
@@ -72,6 +77,7 @@ function writeDaemonStatus(): void {
       last_stream_error: lastStreamError ?? daemonSocket.getLastError(),
     },
     active_runs: getActiveRunDetails(),
+    active_tunnels: getActiveTunnelDetails(),
     stats: {
       total_spawned: stats.totalSpawned,
       total_completed: stats.totalCompleted,
@@ -369,6 +375,7 @@ async function cleanup(): Promise<void> {
 
   daemonSocket.disconnect();
 
+  await stopAllTunnels(log);
   await gracefulShutdown(log);
   cleanupStatusFile();
 
@@ -471,6 +478,20 @@ const daemonSocket = new DaemonSocket({
 
       if (wasHandled) {
         handled.push(command.id);
+      }
+    }
+
+    return handled;
+  },
+  async onDaemonCommands(commands): Promise<string[]> {
+    const handled: string[] = [];
+
+    for (const command of commands) {
+      const wasHandled = await handleTunnelCommand(command, log);
+
+      if (wasHandled) {
+        handled.push(command.id);
+        writeDaemonStatus();
       }
     }
 

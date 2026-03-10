@@ -612,6 +612,12 @@ export interface DaemonStatus {
     child_pid: number | null;
     started_at: string;
   }>;
+  active_tunnels?: Array<{
+    project_slug: string;
+    status: string;
+    public_url: string | null;
+    local_port: number | null;
+  }>;
   stats: {
     total_spawned: number;
     total_completed: number;

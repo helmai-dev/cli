@@ -172,12 +172,20 @@ export function startDaemon(): { started: boolean; alreadyRunning: boolean; pid?
         // (process.argv[0] returns the embedded Bun runtime in compiled binaries)
         const helmBin = process.execPath;
 
+        // Detect if running via npm link / node (dev mode) vs compiled binary.
+        // In dev mode, process.execPath is the node binary — we need to pass
+        // the actual entry script as an argument.
+        const isDevMode = helmBin.endsWith('/node') || helmBin.endsWith('/node.exe');
+        const spawnArgs = isDevMode && process.argv[1]
+            ? [process.argv[1]]
+            : [];
+
         // Spawn detached process with HELM_DAEMON_MODE env var
         // (avoids Bun compiled binary arg parsing issues)
         const logPath = getDaemonLogPath();
         const logFd = fs.openSync(logPath, 'a');
 
-        const child = spawn(helmBin, [], {
+        const child = spawn(helmBin, spawnArgs, {
             detached: true,
             stdio: ['ignore', logFd, logFd],
             env: { ...process.env, HELM_DAEMON_MODE: '1' },

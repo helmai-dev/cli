@@ -8,10 +8,18 @@ import {
 
 const RECONNECT_DELAY_MS = 1_000;
 
+export interface DaemonCommand {
+  id: string;
+  type: string;
+  payload: Record<string, unknown>;
+  issued_at: string;
+}
+
 interface DaemonSocketOptions {
   log: (message: string) => void;
   onPendingRuns: (pendingRuns: PendingRun[]) => Promise<void>;
   onRunnerCommands: (commands: RunnerCommand[]) => Promise<string[]>;
+  onDaemonCommands: (commands: DaemonCommand[]) => Promise<string[]>;
 }
 
 export interface RunnerCommand {
@@ -221,6 +229,29 @@ export class DaemonSocket {
         this.lastError = error instanceof Error ? error.message : String(error);
         this.options.log(
           `Failed to process daemon runner commands: ${this.lastError}`,
+        );
+      }
+
+      return;
+    }
+
+    if (event.event === "daemon_commands") {
+      try {
+        const machine = loadMachineIdentity();
+        const payload = JSON.parse(event.data) as {
+          commands?: DaemonCommand[];
+        };
+        const commandIds = await this.options.onDaemonCommands(
+          payload.commands ?? [],
+        );
+
+        if (machine && commandIds.length > 0) {
+          await api.acknowledgeDaemonCommands(machine.id, commandIds);
+        }
+      } catch (error) {
+        this.lastError = error instanceof Error ? error.message : String(error);
+        this.options.log(
+          `Failed to process daemon commands: ${this.lastError}`,
         );
       }
 
