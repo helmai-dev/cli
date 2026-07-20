@@ -87,6 +87,10 @@ export async function pollDeviceAuth(deviceCode: string): Promise<DeviceAuthPoll
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ device_code: deviceCode }),
   });
+  // Rate-limited polls are "try again later", never a verdict on the code.
+  if (response.status === 429) {
+    return { status: "pending" };
+  }
   const data = (await response.json().catch(() => ({}))) as {
     code?: string;
     token?: string;
