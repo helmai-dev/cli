@@ -15,19 +15,43 @@ interface BufferedEvent {
     payload?: Record<string, unknown>;
 }
 
+interface EventBatcherOptions {
+    flushEvents?: (
+        runId: number,
+        events: Array<{ event_type: string; payload?: Record<string, unknown> }>,
+        sessionId?: string | null,
+    ) => Promise<unknown>;
+    log?: (message: string) => void;
+}
+
 export class EventBatcher {
     private buffer: BufferedEvent[] = [];
     private flushTimer: ReturnType<typeof setTimeout> | null = null;
     private destroyed = false;
     private sessionId: string | null = null;
+    private readonly flushEvents: (
+        runId: number,
+        events: Array<{ event_type: string; payload?: Record<string, unknown> }>,
+        sessionId?: string | null,
+    ) => Promise<unknown>;
+    private readonly log: (message: string) => void;
 
     constructor(
         private readonly runId: number,
         private readonly runUlid: string,
-    ) {}
+        options: EventBatcherOptions = {},
+    ) {
+        this.flushEvents = options.flushEvents ?? api.storeRunEventBatch;
+        this.log = options.log ?? (() => {});
+    }
 
     setSessionId(sessionId: string | null): void {
         this.sessionId = sessionId;
+    }
+
+    pushImmediate(eventType: string, payload?: Record<string, unknown>): void {
+        this.push(eventType, payload);
+        this.flush().catch(() => {});
     }
 
     push(eventType: string, payload?: Record<string, unknown>): void {
@@ -67,9 +91,12 @@ export class EventBatcher {
         const events = this.buffer.splice(0);
 
         try {
-            await api.storeRunEventBatch(this.runId, events, this.sessionId);
-        } catch {
-            // Fire-and-forget — don't block the process on failed event delivery
+            await this.flushEvents(this.runId, events, this.sessionId);
+        } catch (error) {
+            this.buffer.unshift(...events);
+            this.log(
+                `Failed to flush ${events.length} run event(s) for ${this.runUlid}: ${error instanceof Error ? error.message : String(error)}`,
+            );
         }
     }
 

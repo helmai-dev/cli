@@ -5,13 +5,21 @@
  */
 
 import { spawn, type ChildProcess } from "child_process";
-import { randomUUID } from "crypto";
 import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "fs";
 import { join } from "path";
 import type { PendingRun } from "../types.js";
 import * as api from "./api.js";
 import { loadProjectPaths } from "./config.js";
 import { EventBatcher } from "./event-batcher.js";
+import {
+  buildPtyInputCommand,
+  buildPtySpawnCommand,
+  canUsePtyTransport,
+  parsePtyOutputLine,
+  shouldUsePtyTransport,
+} from "./pty-bridge.js";
+import { ClaudeSdkRunner } from "./runners/claude-sdk-runner.js";
+import { CodexSdkRunner } from "./runners/codex-sdk-runner.js";
 import {
   buildGithubAuthBootstrapCommands,
   createSpriteSandbox,
@@ -39,7 +47,12 @@ interface RunProcess {
   agent: string | null;
   model: string | null;
   sessionId: string | null;
-  child: ChildProcess;
+  child: ChildProcess | null;
+  sdkHandle?: { interrupt(): void; terminate(signal: NodeJS.Signals): void };
+  transport: "pipe" | "ht" | "sdk";
+  writeInput: (message: string) => void;
+  interrupt: () => void;
+  terminate: (signal: NodeJS.Signals) => void;
   batcher: EventBatcher;
   startedAt: Date;
   cancelRequested: boolean;
@@ -102,7 +115,7 @@ export function getActiveRunDetails(): Array<{
     project_slug: proc.projectSlug,
     agent: proc.agent,
     model: proc.model,
-    child_pid: proc.child.pid ?? null,
+    child_pid: proc.child?.pid ?? null,
     started_at: proc.startedAt.toISOString(),
   }));
 
@@ -132,10 +145,19 @@ function resolveProjectPath(
   return match?.localPath ?? null;
 }
 
-function buildPrompt(run: PendingRun, prd: string | null | undefined): string {
+export function buildPrompt(
+  run: PendingRun,
+  prd: string | null | undefined,
+  taskUlid: string | null = null,
+): string {
   const explicitPrompt = run.prompt?.trim();
   if (explicitPrompt) {
     return explicitPrompt;
+  }
+
+  const prdContent = prd ?? run.task?.prd;
+  if (taskUlid && prdContent) {
+    return `Execute the task in .helm/plans/${taskUlid}.md. Read that file first and follow it exactly. Do not enter plan mode unless the file is missing or insufficient.`;
   }
 
   const parts: string[] = [];
@@ -144,12 +166,14 @@ function buildPrompt(run: PendingRun, prd: string | null | undefined): string {
     parts.push(run.task.title);
   }
 
-  if (run.task?.description) {
+  if (
+    run.task?.description &&
+    !(taskUlid && prd && run.task.description.trim().length >= 500)
+  ) {
     parts.push(run.task.description);
   }
 
   // Include PRD content when available
-  const prdContent = prd ?? run.task?.prd;
   if (prdContent) {
     parts.push("---");
     parts.push(
@@ -160,6 +184,28 @@ function buildPrompt(run: PendingRun, prd: string | null | undefined): string {
   }
 
   return parts.join("\n\n") || "Execute the assigned task.";
+}
+
+export function resolveTaskInstructions(
+  task:
+    | {
+        prd?: string | null;
+        description?: string | null;
+      }
+    | null
+    | undefined,
+): string | null {
+  const prd = task?.prd?.trim();
+  if (prd) {
+    return prd;
+  }
+
+  const description = task?.description?.trim();
+  if (description && description.length >= 1000) {
+    return description;
+  }
+
+  return null;
 }
 
 function isUuid(value: string): boolean {
@@ -190,14 +236,34 @@ function removePlanFile(filePath: string | null): void {
   }
 }
 
-function buildAgentCommand(
+export function shouldResumePriorClaudeSession(
+  run: PendingRun,
+  continueSessionId: string | null,
+): boolean {
+  if ((run.requested_agent ?? "claude-code") !== "claude-code") {
+    return false;
+  }
+
+  if (continueSessionId === null) {
+    return false;
+  }
+
+  return typeof run.prompt === "string" && run.prompt.trim() !== "";
+}
+
+function isContinuationPrompt(run: PendingRun): boolean {
+  return typeof run.prompt === "string" && run.prompt.trim() !== "";
+}
+
+export function buildAgentCommand(
   run: PendingRun,
   prd: string | null | undefined,
-  sessionId: string | null,
+  taskUlid: string | null,
+  _sessionId: string | null,
   continueSessionId: string | null,
 ): { command: string; args: string[] } {
   const agent = run.requested_agent ?? "claude-code";
-  const prompt = buildPrompt(run, prd);
+  const prompt = buildPrompt(run, prd, taskUlid);
 
   switch (agent) {
     case "claude-code": {
@@ -207,13 +273,14 @@ function buildAgentCommand(
         "--verbose",
         "--dangerously-skip-permissions",
       ];
-      if (continueSessionId) {
-        args.push("--resume", continueSessionId);
-      } else if (sessionId) {
-        args.push("--session-id", sessionId);
-      }
       if (run.requested_model) {
         args.push("--model", run.requested_model);
+      }
+      const resumeSessionId = shouldResumePriorClaudeSession(run, continueSessionId)
+        ? continueSessionId
+        : null;
+      if (resumeSessionId !== null) {
+        args.push("--resume", resumeSessionId, "--fork-session");
       }
       args.push("-p", prompt);
       return { command: "claude", args };
@@ -233,19 +300,72 @@ function buildAgentCommand(
       return { command: "gemini", args };
     }
     case "opencode": {
-      const args = ["run", prompt];
+      const args = ["run", "--format", "json"];
+      if (continueSessionId !== null && isContinuationPrompt(run)) {
+        args.push("--session", continueSessionId, "--fork");
+      }
+      args.push(prompt);
       return { command: "opencode", args };
     }
     case "codex": {
-      const args = ["-p", prompt, "--full-auto"];
+      const args =
+        continueSessionId !== null && isContinuationPrompt(run)
+          ? [
+              "exec",
+              "resume",
+              "--json",
+              "--skip-git-repo-check",
+              "--dangerously-bypass-approvals-and-sandbox",
+              continueSessionId,
+              prompt,
+            ]
+          : [
+              "exec",
+              "--json",
+              "--skip-git-repo-check",
+              "--dangerously-bypass-approvals-and-sandbox",
+              prompt,
+            ];
+      if (run.requested_model) {
+        args.splice(2, 0, "--model", run.requested_model);
+      }
+      return { command: "codex", args };
+    }
+    case "cursor":
+    case "cursor-cli": {
+      const args = [
+        "agent",
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--force",
+        "--trust",
+      ];
       if (run.requested_model) {
         args.push("--model", run.requested_model);
       }
-      return { command: "codex", args };
+      if (continueSessionId !== null && isContinuationPrompt(run)) {
+        args.push("--resume", continueSessionId);
+      }
+      args.push(prompt);
+      return { command: "cursor", args };
     }
     default:
       return { command: agent, args: [prompt] };
   }
+}
+
+export function extractAgentSessionId(
+  payload: Record<string, unknown>,
+): string | null {
+  const sessionId =
+    payload.session_id ?? payload.sessionID ?? payload.thread_id;
+
+  if (typeof sessionId !== "string" || sessionId.trim() === "") {
+    return null;
+  }
+
+  return sessionId;
 }
 
 function sendRunEvent(
@@ -311,10 +431,10 @@ export async function handleRunnerCommand(
       type: command.type,
       payload: command.payload,
     });
-    activeProcess.child.kill("SIGINT");
+    activeProcess.interrupt();
     setTimeout(() => {
       if (activeProcesses.has(command.run_id)) {
-        activeProcess.child.kill("SIGTERM");
+        activeProcess.terminate("SIGTERM");
       }
     }, 2_000);
     onStatusChange?.();
@@ -336,11 +456,11 @@ export async function handleRunnerCommand(
         ? command.payload.message.trim()
         : "";
 
-    if (message === "" || !activeProcess.child.stdin) {
+    if (message === "") {
       return true;
     }
 
-    activeProcess.child.stdin.write(`${message}\n`);
+    activeProcess.writeInput(message);
     activeProcess.batcher.push("runner.command.received", {
       command_id: command.id,
       type: command.type,
@@ -400,7 +520,7 @@ async function spawnLocalRun(
   }
 
   // Extract PRD from claim response (falls back to run.task.prd)
-  const taskPrd = claimResponse.task?.prd ?? run.task?.prd ?? null;
+  const taskPrd = resolveTaskInstructions(claimResponse.task ?? run.task);
   const taskUlid = claimResponse.task?.ulid ?? run.task?.ulid ?? null;
   const continuationCandidate =
     claimResponse.run?.continue_session_id ?? run.continue_session_id ?? null;
@@ -408,7 +528,7 @@ async function spawnLocalRun(
     typeof continuationCandidate === "string" && isUuid(continuationCandidate)
       ? continuationCandidate
       : null;
-  const sessionId = continueSessionId ?? randomUUID();
+  const sessionId = null;
 
   // Write plan file if PRD exists
   let planFilePath: string | null = null;
@@ -432,14 +552,73 @@ async function spawnLocalRun(
     );
   }
 
+  // SDK routing — use SDK runners unless explicitly disabled via HELM_FORCE_CLI_SPAWN
+  const agent = run.requested_agent ?? "claude-code";
+  if (!process.env.HELM_FORCE_CLI_SPAWN) {
+    const prompt = buildPrompt(run, taskPrd, taskUlid);
+    const sdkRunnerOptions = {
+      prompt,
+      cwd: projectPath,
+      batcher: new EventBatcher(run.id, run.ulid, { log }),
+      log,
+      runUlid: run.ulid,
+      model: run.requested_model,
+      continueSessionId,
+      onSessionId: (sid: string) => {
+        const proc = activeProcesses.get(run.id);
+        if (proc) {
+          proc.sessionId = sid;
+        }
+      },
+      onComplete: (code: number) => handleSdkComplete(run, code, log, planFilePath, onStatusChange),
+      onError: (err: Error) => handleSdkError(run, err, log, planFilePath, onStatusChange),
+    };
+
+    if (agent === "claude-code") {
+      log(`Using Claude Agent SDK for run ${run.ulid} (transport: sdk)`);
+      await runWithSdkRunner(
+        new ClaudeSdkRunner(sdkRunnerOptions),
+        run,
+        projectSlug ?? null,
+        projectPath,
+        planFilePath,
+        log,
+        onStatusChange,
+      );
+      return;
+    }
+
+    if (agent === "codex") {
+      log(`Using Codex SDK for run ${run.ulid} (transport: sdk)`);
+      await runWithSdkRunner(
+        new CodexSdkRunner(sdkRunnerOptions),
+        run,
+        projectSlug ?? null,
+        projectPath,
+        planFilePath,
+        log,
+        onStatusChange,
+      );
+      return;
+    }
+  }
+
   const { command, args } = buildAgentCommand(
     run,
     taskPrd,
+    taskUlid,
     sessionId,
     continueSessionId,
   );
+
+  const shouldWrapWithPty =
+    shouldUsePtyTransport(run.requested_agent ?? null) && canUsePtyTransport();
+  const spawnSpec = shouldWrapWithPty
+    ? buildPtySpawnCommand(command, args)
+    : { command, args };
+
   log(
-    `Spawning ${command} ${args.join(" ")} in ${projectPath} for run ${run.ulid}`,
+    `Spawning ${spawnSpec.command} ${spawnSpec.args.join(" ")} in ${projectPath} for run ${run.ulid}${shouldWrapWithPty ? " (PTY bridge)" : ""}`,
   );
 
   let child: ChildProcess;
@@ -450,7 +629,7 @@ async function spawnLocalRun(
     delete agentEnv.CLAUDE_CODE;
     delete agentEnv.CLAUDE_CODE_ENTRYPOINT;
 
-    child = spawn(command, args, {
+    child = spawn(spawnSpec.command, spawnSpec.args, {
       cwd: projectPath,
       stdio: ["pipe", "pipe", "pipe"],
       env: agentEnv,
@@ -472,7 +651,27 @@ async function spawnLocalRun(
     return;
   }
 
-  const batcher = new EventBatcher(run.id, run.ulid);
+  const batcher = new EventBatcher(run.id, run.ulid, { log });
+  const transport = shouldWrapWithPty ? "ht" : "pipe";
+  const writeInput =
+    transport === "ht"
+      ? (message: string): void => {
+          child.stdin?.write(buildPtyInputCommand(`${message}\n`));
+        }
+      : (message: string): void => {
+          child.stdin?.write(`${message}\n`);
+        };
+  const interrupt =
+    transport === "ht"
+      ? (): void => {
+          child.stdin?.write(buildPtyInputCommand("\u0003"));
+        }
+      : (): void => {
+          child.kill("SIGINT");
+        };
+  const terminate = (signal: NodeJS.Signals): void => {
+    child.kill(signal);
+  };
 
   const runProcess: RunProcess = {
     runId: run.id,
@@ -486,19 +685,23 @@ async function spawnLocalRun(
     model: run.requested_model ?? null,
     sessionId,
     child,
+    transport,
+    writeInput,
+    interrupt,
+    terminate,
     batcher,
     startedAt: new Date(),
     cancelRequested: false,
   };
-  batcher.setSessionId(sessionId);
   activeProcesses.set(run.id, runProcess);
   stats.totalSpawned++;
   onStatusChange?.();
 
-  // Stream stdout line-by-line (batched)
   let stdoutBuffer = "";
-  child.stdout?.on("data", (chunk: Buffer) => {
-    stdoutBuffer += chunk.toString();
+  let ptyBuffer = "";
+
+  const consumeAgentStdoutChunk = (chunk: string): void => {
+    stdoutBuffer += chunk;
     const lines = stdoutBuffer.split("\n");
     stdoutBuffer = lines.pop() ?? "";
 
@@ -513,6 +716,11 @@ async function spawnLocalRun(
       try {
         const parsed = JSON.parse(line) as Record<string, unknown>;
         const type = typeof parsed.type === "string" ? parsed.type : "unknown";
+        const streamSessionId = extractAgentSessionId(parsed);
+        if (streamSessionId !== null && runProcess.sessionId !== streamSessionId) {
+          runProcess.sessionId = streamSessionId;
+          batcher.setSessionId(streamSessionId);
+        }
         eventType = `agent.stream.${type}`;
         payload = parsed;
       } catch {
@@ -522,6 +730,26 @@ async function spawnLocalRun(
 
       batcher.push(eventType, payload);
     }
+  };
+
+  // Stream stdout line-by-line (batched)
+  child.stdout?.on("data", (chunk: Buffer) => {
+    if (transport === "ht") {
+      ptyBuffer += chunk.toString();
+      const lines = ptyBuffer.split("\n");
+      ptyBuffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        const event = parsePtyOutputLine(line);
+        if (event?.type === "output" && typeof event.data?.seq === "string") {
+          consumeAgentStdoutChunk(event.data.seq.replace(/\r\n/g, "\n"));
+        }
+      }
+
+      return;
+    }
+
+    consumeAgentStdoutChunk(chunk.toString());
   });
 
   // Stream stderr line-by-line (batched)
@@ -542,6 +770,12 @@ async function spawnLocalRun(
 
   child.on("close", (code: number | null, signal: string | null) => {
     // Flush remaining line buffers into the batcher
+    if (transport === "ht" && ptyBuffer.trim()) {
+      const event = parsePtyOutputLine(ptyBuffer.trim());
+      if (event?.type === "output" && typeof event.data?.seq === "string") {
+        consumeAgentStdoutChunk(event.data.seq.replace(/\r\n/g, "\n"));
+      }
+    }
     if (stdoutBuffer.trim()) {
       batcher.push("agent.stdout", { raw: stdoutBuffer });
     }
@@ -602,6 +836,109 @@ async function spawnLocalRun(
   });
 }
 
+import type { AgentRunner } from "./runners/types.js";
+
+async function runWithSdkRunner(
+  runner: AgentRunner,
+  run: PendingRun,
+  projectSlug: string | null,
+  projectPath: string,
+  planFilePath: string | null,
+  log: (message: string) => void,
+  onStatusChange?: () => void,
+): Promise<void> {
+  const runProcess: RunProcess = {
+    runId: run.id,
+    runUlid: run.ulid,
+    taskUlid: run.task?.ulid ?? null,
+    taskTitle: run.task?.title ?? null,
+    projectSlug,
+    projectPath,
+    planFilePath,
+    agent: run.requested_agent ?? null,
+    model: run.requested_model ?? null,
+    sessionId: null,
+    child: null,
+    sdkHandle: {
+      interrupt: () => runner.interrupt(),
+      terminate: (signal: NodeJS.Signals) => runner.terminate(signal),
+    },
+    transport: "sdk",
+    writeInput: (message: string) => runner.writeInput(message),
+    interrupt: () => runner.interrupt(),
+    terminate: (signal: NodeJS.Signals) => runner.terminate(signal),
+    batcher: runner.batcher,
+    startedAt: new Date(),
+    cancelRequested: false,
+  };
+  activeProcesses.set(run.id, runProcess);
+  stats.totalSpawned++;
+  onStatusChange?.();
+
+  await runner.start();
+}
+
+function handleSdkComplete(
+  run: PendingRun,
+  code: number,
+  log: (message: string) => void,
+  planFilePath: string | null,
+  onStatusChange?: () => void,
+): void {
+  removePlanFile(planFilePath);
+  const proc = activeProcesses.get(run.id);
+  if (!proc) {
+    return;
+  }
+
+  activeProcesses.delete(run.id);
+
+  proc.batcher
+    .destroy()
+    .then(() => {
+      if (code === 0) {
+        log(`Run ${run.ulid} completed successfully (SDK)`);
+        stats.totalCompleted++;
+        sendRunStatus(run.ulid, run.id, "completed");
+      } else {
+        const reason = `SDK runner exited with code ${code}`;
+        log(`Run ${run.ulid} failed: ${reason}`);
+        stats.totalFailed++;
+        sendRunStatus(run.ulid, run.id, "failed", reason);
+      }
+      onStatusChange?.();
+    })
+    .catch(() => {
+      if (code === 0) {
+        stats.totalCompleted++;
+        sendRunStatus(run.ulid, run.id, "completed");
+      } else {
+        stats.totalFailed++;
+        sendRunStatus(run.ulid, run.id, "failed", `SDK runner exited with code ${code}`);
+      }
+      onStatusChange?.();
+    });
+}
+
+function handleSdkError(
+  run: PendingRun,
+  err: Error,
+  log: (message: string) => void,
+  planFilePath: string | null,
+  onStatusChange?: () => void,
+): void {
+  removePlanFile(planFilePath);
+  const proc = activeProcesses.get(run.id);
+  if (proc) {
+    activeProcesses.delete(run.id);
+    proc.batcher.destroy().catch(() => {});
+  }
+  log(`SDK error for run ${run.ulid}: ${err.message}`);
+  stats.totalFailed++;
+  sendRunStatus(run.ulid, run.id, "failed", `SDK error: ${err.message}`);
+  onStatusChange?.();
+}
+
 async function spawnSpriteRun(
   run: PendingRun,
   machineId: number,
@@ -622,7 +959,7 @@ async function spawnSpriteRun(
     return;
   }
 
-  const taskPrd = claimResponse.task?.prd ?? run.task?.prd ?? null;
+  const taskPrd = resolveTaskInstructions(claimResponse.task ?? run.task);
   const taskUlid = claimResponse.task?.ulid ?? run.task?.ulid ?? null;
   const continuationCandidate =
     claimResponse.run?.continue_session_id ?? run.continue_session_id ?? null;
@@ -630,7 +967,7 @@ async function spawnSpriteRun(
     typeof continuationCandidate === "string" && isUuid(continuationCandidate)
       ? continuationCandidate
       : null;
-  const sessionId = continueSessionId ?? randomUUID();
+  const sessionId = null;
 
   const remoteRun: RemoteRunProcess = {
     runId: run.id,
@@ -646,9 +983,7 @@ async function spawnSpriteRun(
   stats.totalSpawned++;
   onStatusChange?.();
 
-  const batcher = new EventBatcher(run.id, run.ulid);
-  batcher.setSessionId(sessionId);
-
+  const batcher = new EventBatcher(run.id, run.ulid, { log });
   let sandboxId: string | null = null;
   let sandboxStartedAt: Date | null = null;
 
@@ -794,6 +1129,7 @@ async function spawnSpriteRun(
     const { command, args } = buildAgentCommand(
       run,
       taskPrd,
+      taskUlid,
       sessionId,
       continueSessionId,
     );
@@ -823,6 +1159,10 @@ async function spawnSpriteRun(
       try {
         const parsed = JSON.parse(line) as Record<string, unknown>;
         const type = typeof parsed.type === "string" ? parsed.type : "unknown";
+        const streamSessionId = extractAgentSessionId(parsed);
+        if (streamSessionId !== null) {
+          batcher.setSessionId(streamSessionId);
+        }
         batcher.push(`agent.stream.${type}`, parsed);
       } catch {
         batcher.push("agent.stdout", { raw: line });
@@ -944,7 +1284,7 @@ export async function gracefulShutdown(
   log(`Graceful shutdown: sending SIGTERM to ${count} active process(es)`);
 
   for (const [, proc] of activeProcesses) {
-    proc.child.kill("SIGTERM");
+    proc.terminate("SIGTERM");
   }
 
   // Wait up to 10 seconds for processes to exit
@@ -966,7 +1306,7 @@ export async function gracefulShutdown(
           "Daemon shutdown — process force killed",
         )
         .catch(() => {});
-      proc.child.kill("SIGKILL");
+      proc.terminate("SIGKILL");
     }
     activeProcesses.clear();
   }
