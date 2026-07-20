@@ -49,6 +49,9 @@ import {
   graphHubsCommand,
   graphSyncCommand,
 } from "./commands/graph.js";
+import { connectCommand } from "./commands/connect.js";
+import { mapProjectCommand } from "./commands/map.js";
+import { loadEnvironmentConfig } from "./lib/config.js";
 import { checkForUpdate } from "./lib/update-check.js";
 import pkg from "../package.json";
 
@@ -164,6 +167,24 @@ projects
   .option("-d, --directory <path>", "Target directory for clone")
   .action(async (slug: string | undefined, options: { directory?: string }) => {
     await projectsSetupCommand(slug, options);
+  });
+
+program
+  .command("connect")
+  .description("Connect this machine to a helm-web backend as an agent runner")
+  .option("--url <url>", "helm-web base URL (e.g. https://your-helm-web.test)")
+  .option("--env <name>", "Environment name to store this connection under", "web")
+  .action(async (options: { url?: string; env?: string }) => {
+    await connectCommand(options);
+  });
+
+program
+  .command("map")
+  .description("Register a local checkout for a helm-web project on this machine")
+  .argument("<projectId>", "helm-web project id")
+  .argument("[path]", "Local checkout path (defaults to the current directory)")
+  .action(async (projectId: string, localPath?: string) => {
+    await mapProjectCommand(projectId, localPath);
   });
 
 const daemon = program
@@ -639,8 +660,14 @@ program
 
 // When spawned as the background daemon, run the loop directly
 // and skip Commander.js (avoids Bun compiled binary arg issues).
+// The active environment's backend picks the protocol: helm-web
+// environments (helm connect) run the web loop, everything else Admiral.
 if (process.env.HELM_DAEMON_MODE === "1") {
-  import("./lib/daemon-loop.js").then((m) => m.runDaemonLoop());
+  if (loadEnvironmentConfig().backend === "web") {
+    import("./lib/daemon-loop-web.js").then((m) => m.runWebDaemonLoop());
+  } else {
+    import("./lib/daemon-loop.js").then((m) => m.runDaemonLoop());
+  }
 } else {
   checkForUpdate();
   program.parse();

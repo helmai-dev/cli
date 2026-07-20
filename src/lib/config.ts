@@ -691,6 +691,8 @@ export function getHelmDir(): string {
 
 export interface EnvironmentConfig {
   url?: string;
+  /** Which backend protocol this environment speaks. Default: admiral. */
+  backend?: "admiral" | "web";
 }
 
 function getEnvironmentConfigPath(name?: string): string {
