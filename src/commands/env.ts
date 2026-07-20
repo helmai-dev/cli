@@ -78,7 +78,7 @@ export async function envSwitchCommand(name: string): Promise<void> {
 
   if (!creds) {
     console.log(
-      chalk.yellow(`    No credentials — run \`helm init\` to authenticate.`),
+      chalk.yellow(`    No credentials — run \`helm connect\` to authenticate.`),
     );
   }
 
@@ -127,5 +127,5 @@ export async function envCreateCommand(
     console.log(chalk.gray(`    URL: ${url}`));
   }
   console.log(chalk.gray(`    Switch with: helm env switch ${name}`));
-  console.log(chalk.gray(`    Then run: helm init\n`));
+  console.log(chalk.gray(`    Then run: helm connect --url <helm-web-url>\n`));
 }

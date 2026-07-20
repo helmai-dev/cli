@@ -1,6 +1,5 @@
 /**
- * Daemon loop for the helm-web backend. Selected instead of the Admiral
- * loop when the active environment's config has backend: "web".
+ * The daemon loop: this machine as a helm-web agent runner.
  *
  * Shape: heartbeat every 30s (device registry + capabilities + project
  * states), claim every 3s (claiming doubles as polling — the claim endpoint

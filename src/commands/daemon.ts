@@ -211,7 +211,7 @@ export async function daemonStartCommand(): Promise<void> {
     const machine = loadMachineIdentity();
 
     if (!machine) {
-        console.log(chalk.red('\n  No machine identity found. Run `helm init` first.\n'));
+        console.log(chalk.red('\n  No machine identity found. Run `helm connect` first.\n'));
         process.exit(1);
     }
 
@@ -257,7 +257,7 @@ export async function daemonStatusCommand(): Promise<void> {
     if (machine) {
         console.log(chalk.gray(`  Machine: ${machine.name} (${machine.ulid})`));
     } else {
-        console.log(chalk.gray('  Machine: Not registered (run `helm init`)'));
+        console.log(chalk.gray('  Machine: Not registered (run `helm connect`)'));
     }
 
     const logPath = getDaemonLogPath();
@@ -348,14 +348,9 @@ export async function daemonInfoCommand(): Promise<void> {
     if (activeCount > 0) {
         console.log('');
         for (const run of status.active_runs) {
-            const duration = formatTimeAgo(run.started_at).replace(' ago', '');
-            const agent = run.agent ?? 'unknown';
-            const model = run.model ? ` (${run.model})` : '';
-            const project = run.project_slug ? chalk.gray(` [${run.project_slug}]`) : '';
-            const childPid = run.child_pid ? chalk.gray(` pid:${run.child_pid}`) : '';
-
-            console.log(`  ${chalk.yellow('▶')} ${run.task_title ?? run.run_ulid}${project}`);
-            console.log(`    ${chalk.gray(`${agent}${model} · ${duration}${childPid}`)}`);
+            const duration = formatTimeAgo(run.startedAt).replace(' ago', '');
+            console.log(`  ${chalk.yellow('▶')} ${run.provider} · session ${run.sessionId ?? 'pending'}`);
+            console.log(`    ${chalk.gray(`work ${run.workPackageId} · ${duration}`)}`);
         }
     }
 

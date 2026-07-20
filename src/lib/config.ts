@@ -274,13 +274,6 @@ export function getApiUrl(): string {
   return "https://tryhelm.ai";
 }
 
-export function getAdmiralMachineStreamUrl(machineId: number): string {
-  if (process.env.HELM_ADMIRAL_STREAM_URL) {
-    return process.env.HELM_ADMIRAL_STREAM_URL;
-  }
-
-  return `${getApiUrl()}/api/v1/admiral/machines/${machineId}/stream`;
-}
 
 // --- Local config (shared, not per-env) ---
 
@@ -588,36 +581,20 @@ export function getDaemonStatusPath(): string {
   return envFile("daemon-status.json");
 }
 
-export function getTunnelStatePath(): string {
-  return envFile("tunnel-state.json");
+export interface DaemonStatusActiveRun {
+  workPackageId: string;
+  sessionId: string | null;
+  provider: string;
+  startedAt: string;
 }
 
 export interface DaemonStatus {
   pid: number;
   version: string;
+  backend: string;
   started_at: string;
   last_heartbeat_at: string | null;
-  transport: {
-    stream_url: string | null;
-    stream_connected: boolean;
-    last_stream_error: string | null;
-  };
-  active_runs: Array<{
-    run_id: number;
-    run_ulid: string;
-    task_title: string | null;
-    project_slug: string | null;
-    agent: string | null;
-    model: string | null;
-    child_pid: number | null;
-    started_at: string;
-  }>;
-  active_tunnels?: Array<{
-    project_slug: string;
-    status: string;
-    public_url: string | null;
-    local_port: number | null;
-  }>;
+  active_runs: DaemonStatusActiveRun[];
   stats: {
     total_spawned: number;
     total_completed: number;
@@ -626,21 +603,6 @@ export interface DaemonStatus {
   };
 }
 
-export interface TunnelState {
-  project_slug: string;
-  mode: "preview";
-  status: "starting" | "active" | "stopped" | "failed";
-  provider: string;
-  public_url: string | null;
-  local_port: number | null;
-  local_command: string | null;
-  machine_id: number | null;
-  tunnel_record_ulid?: string | null;
-  dev_pid?: number | null;
-  tunnel_pid?: number | null;
-  started_at: string;
-  updated_at: string;
-}
 
 export function loadDaemonStatus(): DaemonStatus | null {
   const statusPath = getDaemonStatusPath();
@@ -656,32 +618,7 @@ export function loadDaemonStatus(): DaemonStatus | null {
   }
 }
 
-export function loadTunnelState(): TunnelState | null {
-  const statePath = getTunnelStatePath();
-  if (!fs.existsSync(statePath)) {
-    return null;
-  }
 
-  try {
-    const content = fs.readFileSync(statePath, "utf-8");
-    return JSON.parse(content) as TunnelState;
-  } catch {
-    return null;
-  }
-}
-
-export function saveTunnelState(state: TunnelState): void {
-  ensureHelmDir();
-  ensureEnvironmentDir();
-  fs.writeFileSync(getTunnelStatePath(), JSON.stringify(state, null, 2));
-}
-
-export function clearTunnelState(): void {
-  const statePath = getTunnelStatePath();
-  if (fs.existsSync(statePath)) {
-    fs.unlinkSync(statePath);
-  }
-}
 
 export function getHelmDir(): string {
   return HELM_DIR;
@@ -691,8 +628,8 @@ export function getHelmDir(): string {
 
 export interface EnvironmentConfig {
   url?: string;
-  /** Which backend protocol this environment speaks. Default: admiral. */
-  backend?: "admiral" | "web";
+  /** Backend marker written by `helm connect`; the daemon is helm-web only. */
+  backend?: "web";
 }
 
 function getEnvironmentConfigPath(name?: string): string {

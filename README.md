@@ -1,18 +1,17 @@
-# Helm CLI
+# Helm Daemon
 
-Intelligent context injection for AI coding assistants.
+Run Helm agents on this machine, controlled from Helm.
 
-Helm hooks into Claude Code and Cursor to automatically inject your project rules, knowledge, and team context into every prompt — without you having to think about it.
+Install this on any always-on machine — a desktop at home, an office
+workstation, a home server — and it becomes a run target for your Helm
+team: agent sessions started from the Helm desktop app (or the web) are
+queued to this machine's daemon, executed here with Claude Code or Codex,
+and streamed back live.
+
+The [Helm desktop app](https://tryhelm.ai) is the product. This CLI is the
+headless runner for machines that don't need the full app.
 
 ## Installation
-
-### macOS / Linux
-
-```bash
-curl -fsSL https://tryhelm.ai/install | bash
-```
-
-### All platforms (macOS, Linux, Windows)
 
 ```bash
 npm install -g @helmai/cli
@@ -20,96 +19,48 @@ npm install -g @helmai/cli
 
 Also works with `pnpm add -g @helmai/cli` and `bun add -g @helmai/cli`.
 
-**Requirements:** Node.js 18+ (npm install only)
+**Requirements:** Node.js 18+, plus the agent CLIs you want this machine
+to offer (`claude` and/or `codex` on PATH).
 
-## Getting Started
+## Getting started
 
 ```bash
-helm init
+# 1. Connect this machine (opens a browser approval on any device)
+helm connect --url https://your-helm-web-host
+
+# 2. Register local checkouts for the projects this machine should run
+helm map <project-id> ~/code/my-project
+
+# 3. Start the daemon
+helm daemon start
 ```
 
-This detects your IDE and coding agents, authenticates via browser, and connects to [Helm](https://tryhelm.ai) for team rule sync and Admiral agent orchestration.
+The machine now appears in Helm's "Run agents on" picker for you and your
+teammates. Queued agent starts are claimed within seconds, run locally,
+and their output streams back into the Helm canvas.
 
 ## Commands
 
-### Core
-
 | Command | Description |
 |---|---|
-| `helm init` | Set up Helm in your project or globally |
-| `helm status` | Show current config, detected IDEs, and stack |
-| `helm dashboard` | Open the Helm dashboard |
+| `helm connect` | Connect this machine to a helm-web backend (device-code auth) |
+| `helm map <project-id> [path]` | Register a local checkout for a project |
+| `helm daemon start` | Start the background agent-runner daemon |
+| `helm daemon stop` | Stop the daemon |
+| `helm daemon status` | Show daemon state and recent log lines |
+| `helm daemon info` | Show live runs and stats |
+| `helm logout` | Clear credentials for the active environment |
 | `helm update` | Update to the latest version |
-| `helm logout` | Clear saved credentials |
 
-### Rules & Knowledge
+## How it works
 
-| Command | Description |
-|---|---|
-| `helm rule add <text>` | Add a rule to `.helm/standing-orders.md` |
-| `helm save [title]` | Save a knowledge snippet for context injection |
-| `helm sync` | Pull rules from your organization |
-| `helm sync --push` | Push local rules to your organization |
-| `helm link` | Link this project to Helm |
-| `helm project` | Create or link a project to Helm Admiral |
+The daemon heartbeats into Helm's device registry every 30 seconds
+(advertising which agent runtimes are installed) and claims queued work
+every 3 seconds. Claimed `agent.start` packages run through the Claude
+Agent SDK or Codex SDK in the mapped project checkout; output relays to
+Helm as live session chunks, and lifecycle events (started, completed,
+failed) report back onto the work package. Work this machine can't run —
+an unmapped project, a missing runtime — fails loudly and immediately so
+nothing ever hangs "claimed".
 
-### MCPs
-
-| Command | Description |
-|---|---|
-| `helm mcps` | Show MCP status |
-| `helm mcps list` | Browse the full MCP catalog |
-| `helm mcps install <name>` | Install an MCP |
-| `helm mcps remove <name>` | Remove an MCP |
-| `helm mcps configure <name>` | Set API key / config for an MCP |
-
-### Other
-
-| Command | Description |
-|---|---|
-| `helm qc` | Run quality checks on staged files |
-| `helm clean` | Remove Helm hooks and config traces |
-| `helm skills promote <skill>` | Promote a skill for your team |
-
-## `helm init` Options
-
-```bash
-helm init                        # Interactive setup
-helm init --yes                  # Non-interactive, auto-confirm
-helm init --team <invite-token>  # Join an existing team
-```
-
-## Supported IDEs
-
-- **Claude Code**
-- **Cursor**
-
-## Features
-
-- **Context injection** — Automatically injects project rules, knowledge, and team context into every AI prompt
-- **Team rule sync** — Share and sync rules across your organization
-- **Admiral** — Orchestrate multiple AI coding agents from a single dashboard
-- **MCP management** — Install, configure, and manage Model Context Protocol servers
-- **Quality checks** — Run pre-commit quality checks powered by your project rules
-
-## Sprite Execution (MVP)
-
-When a run is marked for hosted execution, the daemon can execute it in a Sprite sandbox.
-
-Required environment variables on the runner machine:
-
-- `SPRITE_TOKEN` (or `SPRITES_TOKEN`)
-
-Optional:
-
-- `SPRITES_API_URL` (defaults to `https://api.sprites.dev`)
-- `HELM_SPRITE_HOURLY_RATE_USD` (used for estimated compute-cost events)
-
-Agent provider variables should also be available to the daemon for in-sandbox runs:
-
-- `ANTHROPIC_API_KEY`
-- `OPENAI_API_KEY`
-
-## License
-
-MIT
+State lives in `~/.helm/environments/<env>/` (credentials are chmod 600).
