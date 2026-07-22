@@ -1,7 +1,7 @@
 {
     "name": "@helmai/cli",
-    "version": "1.2.44",
-    "description": "Helm daemon \u2014 connect a machine to helm-web and run Helm agent sessions on it",
+    "version": "1.2.45",
+    "description": "Helm daemon — connect a machine to helm-web and run Helm agent sessions on it",
     "main": "dist/index.js",
     "bin": {
         "helm": "bin/helm.js"
