@@ -8,10 +8,26 @@
 import type { SessionChunk, SessionResultBody, SessionUsageBody } from "./web-chunks.js";
 import { getApiUrl, loadCredentials } from "./config.js";
 
-interface WebApiError {
+interface WebApiErrorBody {
   message?: string;
   code?: string;
   errors?: Record<string, string[]>;
+}
+
+/** Error thrown for non-2xx responses; carries the HTTP status so callers
+ * can distinguish auth failures (401) from transient server trouble. */
+export class WebApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "WebApiError";
+    this.status = status;
+  }
+}
+
+export function isAuthError(err: unknown): boolean {
+  return err instanceof WebApiError && err.status === 401;
 }
 
 async function request<T>(
@@ -36,10 +52,10 @@ async function request<T>(
   }
 
   const response = await fetch(url, { ...options, headers });
-  const data = (await response.json().catch(() => ({}))) as T | WebApiError;
+  const data = (await response.json().catch(() => ({}))) as T | WebApiErrorBody;
 
   if (!response.ok) {
-    const error = data as WebApiError;
+    const error = data as WebApiErrorBody;
     const messages = [error.message || `Request failed: ${response.status}`];
     if (error.errors) {
       for (const [field, fieldErrors] of Object.entries(error.errors)) {
@@ -48,7 +64,7 @@ async function request<T>(
         }
       }
     }
-    throw new Error(messages.join("\n"));
+    throw new WebApiError(messages.join("\n"), response.status);
   }
 
   return data as T;

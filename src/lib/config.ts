@@ -592,6 +592,8 @@ export interface DaemonStatus {
   pid: number;
   version: string;
   backend: string;
+  /** "failed" when the API rejected our token (401) — re-run `helm connect`. */
+  auth_state?: "ok" | "failed";
   started_at: string;
   last_heartbeat_at: string | null;
   active_runs: DaemonStatusActiveRun[];

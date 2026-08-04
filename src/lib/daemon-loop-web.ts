@@ -17,6 +17,7 @@ import pkg from "../../package.json";
 import {
   claimWorkPackages,
   heartbeatDevice,
+  isAuthError,
   publishProjectDeviceState,
   reportWorkPackageEvent,
   type WebWorkPackage,
@@ -104,16 +105,37 @@ export async function runWebDaemonLoop(): Promise<void> {
   const startedAt = new Date().toISOString();
   let lastHeartbeatAt: string | null = null;
   let heartbeatBackoffMs = HEARTBEAT_INTERVAL_MS;
+  let claimBackoffMs = CLAIM_INTERVAL_MS;
+  let authFailed = false;
   let runtimes: Record<string, { available: boolean; version: string | null }> = {};
   let heartbeatTimer: NodeJS.Timeout | undefined;
   let claimTimer: NodeJS.Timeout | undefined;
   let shuttingDown = false;
+
+  /** 401 = token expired or revoked. Log ONE clear actionable line, mark the
+   * status file, and back off hard — retrying fast can't fix a dead token. */
+  function noteAuthFailure(): void {
+    if (!authFailed) {
+      authFailed = true;
+      log("[web] authentication expired or revoked — run `helm connect` on this machine to re-link it");
+      writeStatus();
+    }
+  }
+
+  function noteAuthSuccess(): void {
+    if (authFailed) {
+      authFailed = false;
+      log("[web] authentication restored");
+      writeStatus();
+    }
+  }
 
   function writeStatus(): void {
     const status = {
       pid: process.pid,
       version: pkg.version,
       backend: "web",
+      auth_state: authFailed ? ("failed" as const) : ("ok" as const),
       started_at: startedAt,
       last_heartbeat_at: lastHeartbeatAt,
       active_runs: [...active.values()],
@@ -168,6 +190,7 @@ export async function runWebDaemonLoop(): Promise<void> {
       });
       lastHeartbeatAt = new Date().toISOString();
       heartbeatBackoffMs = HEARTBEAT_INTERVAL_MS;
+      noteAuthSuccess();
 
       // Persist the server-side device id once the heartbeat reveals it, so
       // `helm daemon status` can show which registered device this is.
@@ -189,8 +212,13 @@ export async function runWebDaemonLoop(): Promise<void> {
         );
       }
     } catch (err) {
-      heartbeatBackoffMs = Math.min(heartbeatBackoffMs * 2, MAX_BACKOFF_MS);
-      log(`[web] heartbeat failed (retry in ${Math.round(heartbeatBackoffMs / 1000)}s): ${message(err)}`);
+      if (isAuthError(err)) {
+        heartbeatBackoffMs = MAX_BACKOFF_MS;
+        noteAuthFailure();
+      } else {
+        heartbeatBackoffMs = Math.min(heartbeatBackoffMs * 2, MAX_BACKOFF_MS);
+        log(`[web] heartbeat failed (retry in ${Math.round(heartbeatBackoffMs / 1000)}s): ${message(err)}`);
+      }
     } finally {
       writeStatus();
       if (!shuttingDown) {
@@ -280,15 +308,24 @@ export async function runWebDaemonLoop(): Promise<void> {
           runtime_keys: runtimeKeys,
           limit: slots,
         });
+        // A successful claim resets the backoff to the normal cadence.
+        claimBackoffMs = CLAIM_INTERVAL_MS;
+        noteAuthSuccess();
         for (const pkgRow of data) {
           void runPackage(pkgRow);
         }
       }
     } catch (err) {
-      log(`[web] claim failed: ${message(err)}`);
+      if (isAuthError(err)) {
+        claimBackoffMs = MAX_BACKOFF_MS;
+        noteAuthFailure();
+      } else {
+        claimBackoffMs = Math.min(claimBackoffMs * 2, MAX_BACKOFF_MS);
+        log(`[web] claim failed (retry in ${Math.round(claimBackoffMs / 1000)}s): ${message(err)}`);
+      }
     } finally {
       if (!shuttingDown) {
-        claimTimer = setTimeout(() => void claimTick(), CLAIM_INTERVAL_MS);
+        claimTimer = setTimeout(() => void claimTick(), claimBackoffMs);
       }
     }
   }

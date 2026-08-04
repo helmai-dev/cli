@@ -254,6 +254,11 @@ export async function daemonStatusCommand(): Promise<void> {
         console.log(chalk.yellow('  Status: Stopped'));
     }
 
+    const status = loadDaemonStatus();
+    if (running && status?.auth_state === 'failed') {
+        console.log(chalk.red('  Auth:   expired — run `helm connect` to re-link this machine'));
+    }
+
     if (machine) {
         console.log(chalk.gray(`  Machine: ${machine.name} (${machine.ulid})`));
     } else {
@@ -332,6 +337,9 @@ export async function daemonInfoCommand(): Promise<void> {
     // Process info
     console.log(`  ${chalk.bold('PID:')}       ${status.pid}`);
     console.log(`  ${chalk.bold('Version:')}   ${status.version}`);
+    if (status.auth_state === 'failed') {
+        console.log(`  ${chalk.bold('Auth:')}      ${chalk.red('expired — run `helm connect` to re-link this machine')}`);
+    }
     console.log(`  ${chalk.bold('Uptime:')}    ${formatUptime(status.stats.uptime_seconds)}`);
     if (status.last_heartbeat_at) {
         console.log(`  ${chalk.bold('Heartbeat:')} ${formatTimeAgo(status.last_heartbeat_at)}`);
