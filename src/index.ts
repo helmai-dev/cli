@@ -13,6 +13,10 @@ import {
   daemonStatusCommand,
   daemonStopCommand,
 } from "./commands/daemon.js";
+import {
+  daemonInstallCommand,
+  daemonUninstallCommand,
+} from "./commands/daemon-install.js";
 import { connectCommand } from "./commands/connect.js";
 import { mapProjectCommand } from "./commands/map.js";
 import { envCreateCommand, envListCommand, envSwitchCommand } from "./commands/env.js";
@@ -51,8 +55,12 @@ const daemon = program
 daemon
   .command("start")
   .description("Start the daemon (claims and runs queued agent work)")
-  .action(async () => {
-    await daemonStartCommand();
+  .option(
+    "--foreground",
+    "Run the daemon loop in this process (used by launchd/systemd supervision)",
+  )
+  .action(async (options: { foreground?: boolean }) => {
+    await daemonStartCommand(options);
   });
 
 daemon
@@ -60,6 +68,20 @@ daemon
   .description("Stop the daemon")
   .action(async () => {
     await daemonStopCommand();
+  });
+
+daemon
+  .command("install")
+  .description("Keep the daemon running across reboots (launchd/systemd/scheduled task)")
+  .action(async () => {
+    await daemonInstallCommand();
+  });
+
+daemon
+  .command("uninstall")
+  .description("Remove the reboot-persistence unit installed by `helm daemon install`")
+  .action(async () => {
+    await daemonUninstallCommand();
   });
 
 daemon

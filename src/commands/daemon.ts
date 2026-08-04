@@ -11,6 +11,7 @@ import {
     rotateDaemonLogIfNeeded,
 } from '../lib/config.js';
 import { resolveDaemonSpawn } from '../lib/daemon-spawn.js';
+import { getPersistenceState } from './daemon-install.js';
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -212,12 +213,21 @@ export async function startDaemon(): Promise<{ started: boolean; alreadyRunning:
     }
 }
 
-export async function daemonStartCommand(): Promise<void> {
+export async function daemonStartCommand(options: { foreground?: boolean } = {}): Promise<void> {
     const machine = loadMachineIdentity();
 
     if (!machine) {
         console.log(chalk.red('\n  No machine identity found. Run `helm connect` first.\n'));
         process.exit(1);
+    }
+
+    if (options.foreground) {
+        // Run the loop in THIS process — for launchd/systemd supervision
+        // (no double-fork) and for debugging. Lazy import keeps normal CLI
+        // startup free of the agent SDK dependency graph.
+        const { runWebDaemonLoop } = await import('../lib/daemon-loop-web.js');
+        await runWebDaemonLoop();
+        return;
     }
 
     const result = await startDaemon();
@@ -269,9 +279,18 @@ export async function daemonStatusCommand(): Promise<void> {
     }
 
     if (machine) {
-        console.log(chalk.gray(`  Machine: ${machine.name} (${machine.ulid})`));
+        console.log(chalk.gray(`  Machine: ${machine.name}${machine.ulid ? ` (${machine.ulid})` : ''}`));
     } else {
         console.log(chalk.gray('  Machine: Not registered (run `helm connect`)'));
+    }
+
+    const persistence = getPersistenceState();
+    if (persistence.supported) {
+        if (persistence.installed) {
+            console.log(chalk.gray(`  Persistence: ${persistence.kind} unit installed (${persistence.path})`));
+        } else {
+            console.log(chalk.gray('  Persistence: not installed — `helm daemon install` survives reboots'));
+        }
     }
 
     const logPath = getDaemonLogPath();
@@ -379,6 +398,11 @@ export async function daemonInfoCommand(): Promise<void> {
     // Active runs
     const activeCount = status.active_runs.length;
     console.log(`  ${chalk.bold('Active:')}    ${activeCount === 0 ? chalk.gray('none') : chalk.yellow(String(activeCount))}`);
+
+    const persistence = getPersistenceState();
+    if (persistence.supported) {
+        console.log(`  ${chalk.bold('Persist:')}   ${persistence.installed ? `${persistence.kind} unit installed` : chalk.gray('not installed (helm daemon install)')}`);
+    }
 
     if (activeCount > 0) {
         console.log('');
