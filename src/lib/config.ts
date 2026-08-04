@@ -581,6 +581,33 @@ export function getDaemonStatusPath(): string {
   return envFile("daemon-status.json");
 }
 
+const MAX_DAEMON_LOG_BYTES = 5 * 1024 * 1024; // ~5MB
+
+/**
+ * Simple size-capped rotation for daemon.log: when it exceeds ~5MB, move it
+ * to daemon.log.1 (replacing any previous one). Called on daemon start, so a
+ * long-lived daemon caps out at roughly 10MB of logs across two files.
+ */
+export function rotateDaemonLogIfNeeded(): void {
+  const logPath = getDaemonLogPath();
+  try {
+    const stat = fs.statSync(logPath);
+    if (stat.size <= MAX_DAEMON_LOG_BYTES) {
+      return;
+    }
+    const rotated = `${logPath}.1`;
+    try {
+      // Windows rename fails onto an existing target — remove it first.
+      fs.unlinkSync(rotated);
+    } catch {
+      // No previous rotation
+    }
+    fs.renameSync(logPath, rotated);
+  } catch {
+    // No log yet, or rotation failed — never block daemon start on this.
+  }
+}
+
 export interface DaemonStatusActiveRun {
   workPackageId: string;
   sessionId: string | null;

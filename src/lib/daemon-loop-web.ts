@@ -29,6 +29,7 @@ import {
   getDaemonStatusPath,
   loadCredentials,
   loadMachineIdentity,
+  rotateDaemonLogIfNeeded,
   saveMachineIdentity,
 } from "./config.js";
 import { executeAgentStartPackage } from "./web-executor.js";
@@ -71,6 +72,9 @@ export async function detectWebRuntimes(): Promise<
 }
 
 export async function runWebDaemonLoop(): Promise<void> {
+  // Rotate here too (not just in `helm daemon start`) so supervised
+  // foreground runs (launchd/systemd) also get capped logs.
+  rotateDaemonLogIfNeeded();
   const log = createLogger();
   const pidPath = getDaemonPidPath();
 

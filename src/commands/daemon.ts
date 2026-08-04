@@ -8,9 +8,14 @@ import {
     getDaemonPidPath,
     loadDaemonStatus,
     loadMachineIdentity,
+    rotateDaemonLogIfNeeded,
 } from '../lib/config.js';
 
-export function stopDaemonIfRunning(): boolean {
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function stopDaemonIfRunning(): Promise<boolean> {
     const { running, pid } = isDaemonRunning();
 
     if (!running || pid === null) {
@@ -18,6 +23,10 @@ export function stopDaemonIfRunning(): boolean {
     }
 
     try {
+        // Note: on Windows SIGTERM maps to TerminateProcess — the daemon dies
+        // immediately without running its graceful-shutdown handler, so any
+        // active runs are only reconciled on the NEXT daemon start (see the
+        // stale-run sweep in runWebDaemonLoop).
         process.kill(pid, 'SIGTERM');
     } catch {
         // Process already gone — clean up PID file and return
@@ -25,7 +34,7 @@ export function stopDaemonIfRunning(): boolean {
         return true;
     }
 
-    // Wait for the process to actually exit (up to 15 seconds)
+    // Poll for the process to actually exit (up to 15 seconds)
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
         try {
@@ -34,11 +43,7 @@ export function stopDaemonIfRunning(): boolean {
             // Process is gone
             break;
         }
-        // Busy-wait in small increments (sync — this is a CLI command, not the daemon)
-        const waitUntil = Date.now() + 250;
-        while (Date.now() < waitUntil) {
-            // spin
-        }
+        await sleep(250);
     }
 
     cleanupPidFile();
@@ -134,7 +139,7 @@ function acquireDaemonLock(): (() => void) | null {
     }
 }
 
-export function startDaemon(): { started: boolean; alreadyRunning: boolean; pid?: number } {
+export async function startDaemon(): Promise<{ started: boolean; alreadyRunning: boolean; pid?: number }> {
     const { running, pid: existingPid } = isDaemonRunning();
 
     if (running) {
@@ -146,11 +151,7 @@ export function startDaemon(): { started: boolean; alreadyRunning: boolean; pid?
     if (!releaseLock) {
         // Another process is starting the daemon right now — treat as already running
         // Wait briefly and re-check PID file
-        const waitUntil = Date.now() + 3_000;
-        while (Date.now() < waitUntil) {
-            const waitMs = Date.now() + 100;
-            while (Date.now() < waitMs) { /* spin */ }
-        }
+        await sleep(3_000);
 
         const recheck = isDaemonRunning();
         return {
@@ -182,6 +183,7 @@ export function startDaemon(): { started: boolean; alreadyRunning: boolean; pid?
 
         // Spawn detached process with HELM_DAEMON_MODE env var
         // (avoids Bun compiled binary arg parsing issues)
+        rotateDaemonLogIfNeeded();
         const logPath = getDaemonLogPath();
         const logFd = fs.openSync(logPath, 'a');
 
@@ -215,7 +217,7 @@ export async function daemonStartCommand(): Promise<void> {
         process.exit(1);
     }
 
-    const result = startDaemon();
+    const result = await startDaemon();
 
     if (result.alreadyRunning) {
         console.log(chalk.yellow(`\n  Daemon already running (PID: ${result.pid})\n`));
@@ -232,7 +234,7 @@ export async function daemonStartCommand(): Promise<void> {
 }
 
 export async function daemonStopCommand(): Promise<void> {
-    const stopped = stopDaemonIfRunning();
+    const stopped = await stopDaemonIfRunning();
 
     if (!stopped) {
         console.log(chalk.yellow('\n  Daemon is not running.\n'));
@@ -269,9 +271,10 @@ export async function daemonStatusCommand(): Promise<void> {
     if (fs.existsSync(logPath)) {
         console.log(chalk.gray(`  Log: ${logPath}`));
 
-        // Show last few log lines
+        // Show last few log lines — read only the tail, never the whole file
+        // (daemon.log can be megabytes; we print 3 lines).
         try {
-            const content = fs.readFileSync(logPath, 'utf-8');
+            const content = readFileTail(logPath, 64 * 1024);
             const lines = content.trim().split('\n');
             const recent = lines.slice(-3);
             if (recent.length > 0) {
@@ -286,6 +289,23 @@ export async function daemonStatusCommand(): Promise<void> {
     }
 
     console.log('');
+}
+
+function readFileTail(filePath: string, maxBytes: number): string {
+    const stat = fs.statSync(filePath);
+    const readSize = Math.min(stat.size, maxBytes);
+    if (readSize === 0) {
+        return '';
+    }
+
+    const fd = fs.openSync(filePath, 'r');
+    try {
+        const buffer = Buffer.alloc(readSize);
+        fs.readSync(fd, buffer, 0, readSize, stat.size - readSize);
+        return buffer.toString('utf-8');
+    } finally {
+        fs.closeSync(fd);
+    }
 }
 
 function formatUptime(seconds: number): string {

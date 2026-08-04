@@ -129,7 +129,7 @@ program
 
     // Stop the daemon before updating so replacing the binary can't crash a
     // live run mid-claim; restart it afterwards.
-    const daemonWasRunning = stopDaemonIfRunning();
+    const daemonWasRunning = await stopDaemonIfRunning();
     if (daemonWasRunning) {
       console.log(chalk.gray("  Stopped daemon for update..."));
     }

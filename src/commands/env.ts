@@ -60,7 +60,7 @@ export async function envSwitchCommand(name: string): Promise<void> {
   }
 
   // Stop the daemon for the old environment
-  const wasRunning = stopDaemonIfRunning();
+  const wasRunning = await stopDaemonIfRunning();
   if (wasRunning) {
     console.log(chalk.gray(`\n  Stopped daemon for "${current}".`));
   }
@@ -84,7 +84,7 @@ export async function envSwitchCommand(name: string): Promise<void> {
 
   // Restart daemon if it was running and we have credentials + machine
   if (wasRunning && creds) {
-    const result = startDaemon();
+    const result = await startDaemon();
     if (result.started) {
       console.log(chalk.gray(`    Daemon restarted (PID: ${result.pid})`));
     }
