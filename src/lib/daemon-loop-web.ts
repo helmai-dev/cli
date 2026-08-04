@@ -159,7 +159,7 @@ export async function runWebDaemonLoop(): Promise<void> {
   async function heartbeat(): Promise<void> {
     try {
       runtimes = await detectWebRuntimes();
-      await heartbeatDevice({
+      const response = await heartbeatDevice({
         fingerprint,
         name: machineName,
         platform: process.platform,
@@ -168,6 +168,14 @@ export async function runWebDaemonLoop(): Promise<void> {
       });
       lastHeartbeatAt = new Date().toISOString();
       heartbeatBackoffMs = HEARTBEAT_INTERVAL_MS;
+
+      // Persist the server-side device id once the heartbeat reveals it, so
+      // `helm daemon status` can show which registered device this is.
+      const deviceId = response.device?.id ? String(response.device.id) : "";
+      if (deviceId && identity && identity.ulid !== deviceId) {
+        identity = { ...identity, ulid: deviceId };
+        saveMachineIdentity(identity);
+      }
 
       // Publish local checkout states so target auto-selection ranks us.
       for (const project of loadWebProjects()) {

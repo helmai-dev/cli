@@ -29,8 +29,8 @@ program
 program
   .command("connect")
   .description("Connect this machine to a helm-web backend as an agent runner")
-  .option("--url <url>", "helm-web base URL (e.g. https://your-helm-web.test)")
-  .option("--env <name>", "Environment name to store this connection under", "web")
+  .option("--url <url>", "helm-web base URL (defaults to https://tryhelm.ai)")
+  .option("--env <name>", "Environment name to store this connection under (defaults to the active environment)")
   .action(async (options: { url?: string; env?: string }) => {
     await connectCommand(options);
   });

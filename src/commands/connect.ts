@@ -15,6 +15,8 @@ import {
   startDeviceAuth,
 } from "../lib/api-web.js";
 import {
+  getActiveEnvironment,
+  getWellKnownUrl,
   loadEnvironmentConfig,
   saveCredentials,
   saveEnvironmentConfig,
@@ -30,9 +32,18 @@ export interface ConnectOptions {
 }
 
 export async function connectCommand(options: ConnectOptions): Promise<void> {
-  const envName = options.env ?? "web";
+  // Default to the active environment so `helm connect` followed by
+  // `helm daemon start` reads the SAME environment with zero flags.
+  // Fresh installs resolve to "production" (the hosted tryhelm.ai backend);
+  // existing environments keep their name and any saved URL.
+  const envName = options.env ?? getActiveEnvironment();
   const existing = loadEnvironmentConfig(envName);
-  const url = (options.url ?? existing.url)?.replace(/\/+$/, "");
+  const url = (
+    options.url ??
+    existing.url ??
+    getWellKnownUrl(envName) ??
+    getWellKnownUrl("production")
+  )?.replace(/\/+$/, "");
 
   if (!url) {
     console.error(chalk.red("No backend URL known for this environment."));
@@ -93,13 +104,24 @@ export async function connectCommand(options: ConnectOptions): Promise<void> {
   saveMachineIdentity({ id: 0, ulid: "", name: deviceName, fingerprint });
 
   const agents = await detectWebRuntimes();
-  await heartbeatDevice({
+  const heartbeat = await heartbeatDevice({
     fingerprint,
     name: deviceName,
     platform: process.platform,
     app_version: pkg.version,
     capabilities: { agents },
   });
+
+  // Persist the real device id from the heartbeat response so status output
+  // can show it (previously we saved ulid: "" and discarded the id forever).
+  if (heartbeat.device?.id) {
+    saveMachineIdentity({
+      id: 0,
+      ulid: String(heartbeat.device.id),
+      name: deviceName,
+      fingerprint,
+    });
+  }
 
   const available = Object.entries(agents)
     .filter(([, value]) => value.available)
