@@ -10,6 +10,7 @@ import {
     loadMachineIdentity,
     rotateDaemonLogIfNeeded,
 } from '../lib/config.js';
+import { resolveDaemonSpawn } from '../lib/daemon-spawn.js';
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -139,7 +140,7 @@ function acquireDaemonLock(): (() => void) | null {
     }
 }
 
-export async function startDaemon(): Promise<{ started: boolean; alreadyRunning: boolean; pid?: number }> {
+export async function startDaemon(): Promise<{ started: boolean; alreadyRunning: boolean; pid?: number; reason?: string }> {
     const { running, pid: existingPid } = isDaemonRunning();
 
     if (running) {
@@ -164,22 +165,23 @@ export async function startDaemon(): Promise<{ started: boolean; alreadyRunning:
     try {
         const machine = loadMachineIdentity();
         if (!machine) {
-            return { started: false, alreadyRunning: false };
+            return { started: false, alreadyRunning: false, reason: 'No machine identity — run `helm connect` first.' };
         }
 
         ensureHelmDir();
 
-        // Use process.execPath to get the compiled binary path
-        // (process.argv[0] returns the embedded Bun runtime in compiled binaries)
-        const helmBin = process.execPath;
-
-        // Detect if running via npm link / node (dev mode) vs compiled binary.
-        // In dev mode, process.execPath is the node binary — we need to pass
-        // the actual entry script as an argument.
-        const isDevMode = helmBin.endsWith('/node') || helmBin.endsWith('/node.exe');
-        const spawnArgs = isDevMode && process.argv[1]
-            ? [process.argv[1]]
-            : [];
+        // Decide how to re-invoke ourselves: a compiled standalone binary
+        // spawns itself; node/bun installs spawn the runtime + entry script.
+        // (process.execPath, not argv[0]: argv[0] is the embedded Bun runtime
+        // in compiled binaries.)
+        const plan = resolveDaemonSpawn(process.execPath, process.argv[1]);
+        if (!plan) {
+            return {
+                started: false,
+                alreadyRunning: false,
+                reason: 'Cannot determine the helm entry script to spawn the daemon from this runtime.',
+            };
+        }
 
         // Spawn detached process with HELM_DAEMON_MODE env var
         // (avoids Bun compiled binary arg parsing issues)
@@ -187,10 +189,11 @@ export async function startDaemon(): Promise<{ started: boolean; alreadyRunning:
         const logPath = getDaemonLogPath();
         const logFd = fs.openSync(logPath, 'a');
 
-        const child = spawn(helmBin, spawnArgs, {
+        const child = spawn(plan.command, plan.args, {
             detached: true,
             stdio: ['ignore', logFd, logFd],
             env: { ...process.env, HELM_DAEMON_MODE: '1' },
+            windowsHide: true,
         });
 
         child.unref();
@@ -228,7 +231,11 @@ export async function daemonStartCommand(): Promise<void> {
         console.log(chalk.green(`\n  ✓ Daemon started (PID: ${result.pid})`));
         console.log(chalk.gray(`    Log: ${getDaemonLogPath()}\n`));
     } else {
-        console.log(chalk.red('\n  Failed to start daemon.\n'));
+        console.log(chalk.red('\n  Failed to start daemon.'));
+        if (result.reason) {
+            console.log(chalk.gray(`  ${result.reason}`));
+        }
+        console.log('');
         process.exit(1);
     }
 }

@@ -137,10 +137,11 @@ program
     console.log(chalk.gray("  Updating...\n"));
 
     try {
+      // No explicit shell: execSync picks the platform default
+      // (/bin/sh on unix, cmd.exe on Windows).
       execSync(updateCommand, {
         encoding: "utf-8",
         stdio: "inherit",
-        shell: "/bin/sh",
         env: { ...process.env, HELM_UPDATE_ONLY: "1" },
       });
       console.log(chalk.green("\n  ✓ Update complete"));

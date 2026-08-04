@@ -62,7 +62,15 @@ export async function detectWebRuntimes(): Promise<
   const agents: Record<string, { available: boolean; version: string | null }> = {};
   for (const binary of ["claude", "codex"]) {
     try {
-      const { stdout } = await execFileAsync(binary, ["--version"], { timeout: 5000 });
+      const { stdout } = await execFileAsync(binary, ["--version"], {
+        timeout: 5000,
+        // npm-global CLIs on Windows are .cmd shims, which Node refuses to
+        // execFile without a shell (post-CVE-2024-27980 hardening) — without
+        // this the daemon reports no runtimes and never claims work. The
+        // binary names are fixed constants, so there is nothing to inject.
+        shell: process.platform === "win32",
+        windowsHide: true,
+      });
       agents[binary] = { available: true, version: stdout.trim().split("\n")[0] || null };
     } catch {
       agents[binary] = { available: false, version: null };
@@ -366,11 +374,63 @@ export async function runWebDaemonLoop(): Promise<void> {
     process.exit(0);
   }
 
+  // Windows limitation: SIGTERM maps to TerminateProcess there — the process
+  // dies immediately and these handlers never run, so active runs can't be
+  // reported as failed on the way out. The orphaned-run sweep below (executed
+  // on the NEXT daemon start) is the recovery path for that case, as well as
+  // for crashes and reboots on every platform.
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
 
+  await reportOrphanedRuns(fingerprint, machineName, log);
+
   await heartbeat();
   await claimTick();
+}
+
+/**
+ * If a previous daemon died without its graceful shutdown (crash, reboot,
+ * kill -9, Windows TerminateProcess), its status file may still list active
+ * runs that nobody will ever finish — they'd hang "running" server-side
+ * forever. Report them failed before this daemon starts claiming.
+ */
+async function reportOrphanedRuns(
+  fingerprint: string,
+  machineName: string,
+  log: (msg: string) => void,
+): Promise<void> {
+  let previous: { pid?: number; active_runs?: ActiveRun[] } | null = null;
+  try {
+    previous = JSON.parse(fs.readFileSync(getDaemonStatusPath(), "utf-8")) as {
+      pid?: number;
+      active_runs?: ActiveRun[];
+    };
+  } catch {
+    return; // no stale status file
+  }
+
+  const runs = previous?.active_runs ?? [];
+  if (runs.length === 0) {
+    return;
+  }
+  // Safety net: never reap runs owned by a daemon that is still alive.
+  if (previous?.pid && previous.pid !== process.pid && isProcessAlive(previous.pid)) {
+    return;
+  }
+
+  for (const run of runs) {
+    log(`[web] reporting run ${run.workPackageId} orphaned by an ungraceful shutdown`);
+    await reportWorkPackageEvent(run.workPackageId, {
+      work_package_id: run.workPackageId,
+      local_work_id: `${fingerprint.slice(0, 12)}-${run.workPackageId}`,
+      event: "failed",
+      status: "failed",
+      machine_id: fingerprint,
+      occurred_at: new Date().toISOString(),
+      ...(run.sessionId ? { session_id: run.sessionId } : {}),
+      error: `Daemon on ${machineName} was terminated without a graceful shutdown; this run was orphaned.`,
+    }).catch(() => {});
+  }
 }
 
 function cleanupFiles(): void {
