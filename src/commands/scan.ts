@@ -67,41 +67,55 @@ export async function scanCommand(options: ScanCommandOptions): Promise<void> {
   const summary = await scanClaudeTranscripts({ days });
 
   if (options.json) {
-    console.log(JSON.stringify(summary, null, 2));
+    // JSON mode prints exactly one JSON document (after upload), below.
   } else {
     printSummary(summary, days);
   }
 
-  if (options.upload === false || summary.events.length === 0) {
-    return;
+  const upload: { attempted: boolean; accepted: number; error: string | null } = {
+    attempted: false,
+    accepted: 0,
+    error: null,
+  };
+
+  if (options.upload !== false && summary.events.length > 0) {
+    const credentials = loadCredentials();
+    if (!credentials?.api_key) {
+      upload.error = "not_connected";
+      if (!options.json) {
+        console.log(
+          chalk.yellow("  Not connected — run `helm connect` to sync this report to your team.\n"),
+        );
+      }
+    } else {
+      upload.attempted = true;
+      const machine = loadMachineIdentity();
+      try {
+        for (let i = 0; i < summary.events.length; i += UPLOAD_BATCH_SIZE) {
+          const batch = summary.events.slice(i, i + UPLOAD_BATCH_SIZE);
+          const response = await sendUsageEvents({
+            source: "scan",
+            device_ulid: machine?.ulid ?? null,
+            events: batch,
+          });
+          upload.accepted += response.accepted ?? batch.length;
+        }
+        if (!options.json) {
+          console.log(chalk.green(`  ✓ Synced ${upload.accepted} usage rows to helm-web\n`));
+        }
+      } catch (error) {
+        upload.error = error instanceof Error ? error.message : String(error);
+        if (!options.json) {
+          console.log(
+            chalk.yellow(`  Upload failed (report above is still complete): ${upload.error}\n`),
+          );
+        }
+        process.exitCode = 1;
+      }
+    }
   }
 
-  const credentials = loadCredentials();
-  if (!credentials?.api_key) {
-    console.log(
-      chalk.yellow("  Not connected — run `helm connect` to sync this report to your team.\n"),
-    );
-    return;
-  }
-
-  const machine = loadMachineIdentity();
-  let accepted = 0;
-  try {
-    for (let i = 0; i < summary.events.length; i += UPLOAD_BATCH_SIZE) {
-      const batch = summary.events.slice(i, i + UPLOAD_BATCH_SIZE);
-      const response = await sendUsageEvents({
-        source: "scan",
-        device_ulid: machine?.ulid ?? null,
-        events: batch,
-      });
-      accepted += response.accepted ?? batch.length;
-    }
-    if (!options.json) {
-      console.log(chalk.green(`  ✓ Synced ${accepted} usage rows to helm-web\n`));
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.log(chalk.yellow(`  Upload failed (report above is still complete): ${message}\n`));
-    process.exitCode = 1;
+  if (options.json) {
+    console.log(JSON.stringify({ ...summary, days, upload }, null, 2));
   }
 }
