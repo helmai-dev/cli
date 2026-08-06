@@ -40,6 +40,53 @@ program
   });
 
 program
+  .command("scan")
+  .description("Report AI usage from local agent transcripts and sync it to your team")
+  .option("--days <n>", "How many days back to scan (default 30)")
+  .option("--no-upload", "Print the report without syncing to helm-web")
+  .option("--json", "Emit the full summary as JSON")
+  .action(async (options: { days?: string; upload?: boolean; json?: boolean }) => {
+    const { scanCommand } = await import("./commands/scan.js");
+    await scanCommand(options);
+  });
+
+const hooks = program
+  .command("hooks")
+  .description("Manage Helm's zero-touch context hooks for Claude Code");
+
+hooks
+  .command("install")
+  .description("Install Helm context injection for every Claude Code session on this machine")
+  .action(async () => {
+    const { hooksInstallCommand } = await import("./commands/hooks.js");
+    await hooksInstallCommand();
+  });
+
+hooks
+  .command("uninstall")
+  .description("Remove Helm's Claude Code hooks")
+  .action(async () => {
+    const { hooksUninstallCommand } = await import("./commands/hooks.js");
+    await hooksUninstallCommand();
+  });
+
+hooks
+  .command("status")
+  .description("Show whether Helm's Claude Code hooks are installed")
+  .action(async () => {
+    const { hooksStatusCommand } = await import("./commands/hooks.js");
+    await hooksStatusCommand();
+  });
+
+program
+  .command("inject", { hidden: true })
+  .description("Hook handler: print team context for the current session (reads stdin)")
+  .action(async () => {
+    const { injectCommand } = await import("./commands/inject.js");
+    await injectCommand();
+  });
+
+program
   .command("map")
   .description("Register a local checkout for a helm-web project on this machine")
   .argument("<projectId>", "helm-web project id")

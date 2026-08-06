@@ -241,6 +241,37 @@ export async function reportWorkPackageEvent(
   });
 }
 
+// --- Usage ledger ---
+
+export interface UsageEventUpload {
+  provider: string;
+  model: string;
+  project_hint: string;
+  project_id: string | null;
+  day: string;
+  sessions: number;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_write_tokens: number;
+  cache_read_tokens: number;
+  cost_usd: number;
+  metrics?: Record<string, number>;
+}
+
+export interface UsageEventsBody {
+  source: "scan" | "live" | "daemon";
+  device_ulid: string | null;
+  events: UsageEventUpload[];
+}
+
+export async function sendUsageEvents(body: UsageEventsBody): Promise<{ accepted: number }> {
+  return request<{ accepted: number }>("/usage/events", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 // --- Session relay ---
 
 export async function sendSessionChunk(chunk: SessionChunk): Promise<void> {
