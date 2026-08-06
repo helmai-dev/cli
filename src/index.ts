@@ -87,6 +87,14 @@ hooks
   });
 
 program
+  .command("auth-import", { hidden: true })
+  .description("Provision credentials from a trusted local caller (reads JSON on stdin)")
+  .action(async () => {
+    const { authImportCommand } = await import("./commands/auth-import.js");
+    await authImportCommand();
+  });
+
+program
   .command("inject", { hidden: true })
   .description("Hook handler: print team context for the current session (reads stdin)")
   .action(async () => {
