@@ -19,13 +19,13 @@ function assistantLine({ id, requestId, model, ts, usage }) {
 
 test("aggregates assistant usage into project/model/day cells", () => {
   const agg = new UsageAggregator();
-  agg.addEntry("helm-desktop", "sess-1", assistantLine({
+  agg.addClaudeEntry("helm-desktop", "sess-1", assistantLine({
     id: "msg-1",
     model: "claude-fable-5",
     ts: "2026-08-01T10:00:00Z",
     usage: { input_tokens: 100, output_tokens: 200, cache_creation_input_tokens: 300, cache_read_input_tokens: 4000 },
   }));
-  agg.addEntry("helm-desktop", "sess-2", assistantLine({
+  agg.addClaudeEntry("helm-desktop", "sess-2", assistantLine({
     id: "msg-2",
     model: "claude-fable-5",
     ts: "2026-08-01T12:00:00Z",
@@ -54,8 +54,8 @@ test("dedupes repeated message id + request id (streamed responses)", () => {
     ts: "2026-08-02T10:00:00Z",
     usage: { input_tokens: 10, output_tokens: 20 },
   });
-  assert.equal(agg.addEntry("p", "s", line), true);
-  assert.equal(agg.addEntry("p", "s", line), false);
+  assert.equal(agg.addClaudeEntry("p", "s", line), true);
+  assert.equal(agg.addClaudeEntry("p", "s", line), false);
   const summary = agg.finish();
   assert.equal(summary.events[0].calls, 1);
   assert.equal(summary.events[0].input_tokens, 10);
@@ -64,22 +64,22 @@ test("dedupes repeated message id + request id (streamed responses)", () => {
 test("skips synthetic models and non-assistant lines", () => {
   const agg = new UsageAggregator();
   assert.equal(
-    agg.addEntry("p", "s", assistantLine({ id: "m", model: "<synthetic>", usage: { input_tokens: 5 } })),
+    agg.addClaudeEntry("p", "s", assistantLine({ id: "m", model: "<synthetic>", usage: { input_tokens: 5 } })),
     false,
   );
-  assert.equal(agg.addEntry("p", "s", { type: "user", message: { content: [] } }), false);
+  assert.equal(agg.addClaudeEntry("p", "s", { type: "user", message: { content: [] } }), false);
   assert.equal(agg.finish().events.length, 0);
 });
 
 test("splits days and models into separate events", () => {
   const agg = new UsageAggregator();
-  agg.addEntry("p", "s", assistantLine({
+  agg.addClaudeEntry("p", "s", assistantLine({
     id: "m1", model: "claude-fable-5", ts: "2026-08-01T23:00:00Z", usage: { input_tokens: 1, output_tokens: 1 },
   }));
-  agg.addEntry("p", "s", assistantLine({
+  agg.addClaudeEntry("p", "s", assistantLine({
     id: "m2", model: "claude-fable-5", ts: "2026-08-02T01:00:00Z", usage: { input_tokens: 1, output_tokens: 1 },
   }));
-  agg.addEntry("p", "s", assistantLine({
+  agg.addClaudeEntry("p", "s", assistantLine({
     id: "m3", model: "claude-opus-5", ts: "2026-08-02T01:00:00Z", usage: { input_tokens: 1, output_tokens: 1 },
   }));
   assert.equal(agg.finish().events.length, 3);
