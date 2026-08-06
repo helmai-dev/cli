@@ -40,6 +40,14 @@ program
   });
 
 program
+  .command("setup")
+  .description("Guided setup: connect, enable team context hooks, and run your first scan")
+  .action(async () => {
+    const { setupCommand } = await import("./commands/setup.js");
+    await setupCommand();
+  });
+
+program
   .command("scan")
   .description("Report AI usage from local agent transcripts and sync it to your team")
   .option("--days <n>", "How many days back to scan (default 30)")

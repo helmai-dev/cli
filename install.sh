@@ -172,9 +172,15 @@ if [[ "$platform" == "windows" ]] && [[ ":$PATH:" != *":$install_dir:"* ]]; then
 fi
 
 if [[ "${HELM_UPDATE_ONLY:-}" != "1" ]]; then
-  echo ""
-  echo "Next steps:"
-  echo "  helm connect          link this machine to helm-web (device-code auth)"
-  echo "  helm daemon start     start running agent work on this machine"
-  echo ""
+  # Chain straight into guided setup. Under `curl | bash` stdin is the pipe,
+  # so re-attach the terminal explicitly; skip cleanly when headless.
+  if [[ "${HELM_SKIP_SETUP:-}" != "1" ]] && [[ -e /dev/tty ]] && [[ -r /dev/tty ]]; then
+    "$install_dir/$HELM_BIN_NAME" setup < /dev/tty || true
+  else
+    echo ""
+    echo "Next steps:"
+    echo "  helm setup            guided setup (connect, context hooks, first scan)"
+    echo "  helm daemon start     start running agent work on this machine"
+    echo ""
+  fi
 fi
