@@ -144,7 +144,11 @@ jobs:
             releases.json
 
       - name: Publish to npm
+        # npm is a secondary channel — the GitHub release above is what
+        # install.sh consumes. A missing/invalid NPM_TOKEN must not redden
+        # the release (it 404s on publish for scoped packages).
         if: steps.guard.outputs.skip == 'false'
+        continue-on-error: true
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
