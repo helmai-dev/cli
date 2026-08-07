@@ -58,41 +58,76 @@ export async function connectCommand(options: ConnectOptions): Promise<void> {
   const deviceName = os.hostname();
   console.log(`Connecting ${chalk.bold(deviceName)} to ${chalk.cyan(url)} ...`);
 
-  const start = await startDeviceAuth(deviceName);
+  let start: Awaited<ReturnType<typeof startDeviceAuth>>;
+  try {
+    start = await startDeviceAuth(deviceName);
+  } catch (error) {
+    console.error(chalk.red(`\nCouldn't reach ${url}.`));
+    console.error(`  ${friendlyError(error)}`);
+    console.error(`  Check your connection, or pass a different host with ${chalk.cyan("--url")}.`);
+    process.exitCode = 1;
+    return;
+  }
 
   console.log("");
-  console.log(`  Open ${chalk.cyan(start.verification_uri_complete)}`);
-  console.log(`  and approve this device. Code: ${chalk.bold(start.user_code)}`);
+  console.log(`  1. Open this link in your browser (sign in if asked):`);
+  console.log(`     ${chalk.cyan(start.verification_uri_complete)}`);
+  console.log(`  2. Approve the device. Code: ${chalk.bold(start.user_code)}`);
   console.log("");
-  void open(start.verification_uri_complete).catch(() => {});
+
+  // Best-effort auto-open. Under `curl | bash` or headless machines there's
+  // often no browser to launch — say so instead of leaving the user staring
+  // at a link they didn't realize they must open themselves.
+  try {
+    await open(start.verification_uri_complete);
+  } catch {
+    console.log(chalk.yellow("  (Couldn't open your browser automatically — open the link above.)"));
+    console.log("");
+  }
 
   const intervalMs = Math.max(2, start.interval) * 1000;
   const deadline = Date.now() + start.expires_in * 1000;
+  const startedAt = Date.now();
 
   let token: string | null = null;
   let userId: string = "";
-  while (Date.now() < deadline) {
-    await sleep(intervalMs);
-    const poll = await pollDeviceAuth(start.device_code);
-    if (poll.status === "ok") {
-      token = poll.token;
-      userId = String(poll.user_id);
-      break;
+  const stopWaiting = beginWaitingIndicator(startedAt);
+  try {
+    // Poll immediately so an already-approved device connects without delay,
+    // then on the server's requested interval.
+    while (Date.now() < deadline) {
+      let poll: Awaited<ReturnType<typeof pollDeviceAuth>>;
+      try {
+        poll = await pollDeviceAuth(start.device_code);
+      } catch {
+        // Transient network blips shouldn't abort a 15-minute approval window.
+        poll = { status: "pending" };
+      }
+      if (poll.status === "ok") {
+        token = poll.token;
+        userId = String(poll.user_id);
+        break;
+      }
+      if (poll.status === "denied") {
+        stopWaiting();
+        console.error(chalk.red("Device was denied in the browser."));
+        process.exitCode = 1;
+        return;
+      }
+      if (poll.status === "invalid") {
+        stopWaiting();
+        console.error(chalk.red("Device code expired or is invalid. Run helm connect again."));
+        process.exitCode = 1;
+        return;
+      }
+      await sleep(intervalMs);
     }
-    if (poll.status === "denied") {
-      console.error(chalk.red("Device was denied in the browser."));
-      process.exitCode = 1;
-      return;
-    }
-    if (poll.status === "invalid") {
-      console.error(chalk.red("Device code expired or is invalid. Run helm connect again."));
-      process.exitCode = 1;
-      return;
-    }
+  } finally {
+    stopWaiting();
   }
 
   if (!token) {
-    console.error(chalk.red("Timed out waiting for approval. Run helm connect again."));
+    console.error(chalk.red("Timed out waiting for approval. Run `helm connect` again."));
     process.exitCode = 1;
     return;
   }
@@ -140,4 +175,40 @@ export async function connectCommand(options: ConnectOptions): Promise<void> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function friendlyError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  // First line only — hide multi-line runtime stack dumps from users.
+  return message.split("\n")[0] || "Request failed.";
+}
+
+/**
+ * Keeps the terminal visibly alive while the user approves in the browser, so
+ * the wait never reads as a freeze. Animated spinner on a TTY; a periodic
+ * "still waiting" line when output is piped (e.g. under `curl | bash`).
+ * Returns a function that clears the indicator.
+ */
+function beginWaitingIndicator(startedAt: number): () => void {
+  const label = "Waiting for you to approve in the browser";
+  const elapsed = () => Math.round((Date.now() - startedAt) / 1000);
+
+  if (process.stdout.isTTY) {
+    const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let i = 0;
+    const timer = setInterval(() => {
+      process.stdout.write(`\r  ${chalk.cyan(frames[i % frames.length])} ${label}… ${chalk.gray(`(${elapsed()}s)`)}`);
+      i++;
+    }, 120);
+    return () => {
+      clearInterval(timer);
+      process.stdout.write(`\r${" ".repeat(label.length + 24)}\r`);
+    };
+  }
+
+  console.log(`  ${label}…`);
+  const timer = setInterval(() => {
+    console.log(chalk.gray(`  …still waiting (${elapsed()}s). Approve at the link above.`));
+  }, 30000);
+  return () => clearInterval(timer);
 }
