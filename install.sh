@@ -3,10 +3,11 @@ set -euo pipefail
 
 HELM_RELEASES_URL="https://github.com/helmai-dev/cli/releases/latest/download/releases.json"
 HELM_INSTALL_DIR_DEFAULT=""
-HELM_BIN_NAME="helm"
+HELM_BIN_NAME="${HELM_BIN_NAME:-helm}"
 
 desired_version="latest"
 install_dir="${HELM_INSTALL_DIR:-}"
+force_install="${HELM_FORCE_INSTALL:-0}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -17,6 +18,14 @@ while [[ $# -gt 0 ]]; do
     --dir)
       install_dir="${2:-$HELM_INSTALL_DIR_DEFAULT}"
       shift 2
+      ;;
+    --bin-name)
+      HELM_BIN_NAME="${2:-helm}"
+      shift 2
+      ;;
+    --force)
+      force_install=1
+      shift
       ;;
     *)
       echo "Unknown option: $1"
@@ -57,8 +66,40 @@ if [[ -z "$install_dir" ]]; then
   fi
 fi
 
+# The published artifact is always named `helm`; HELM_BIN_NAME only controls
+# what we call it once installed, so --bin-name cannot break the download.
+HELM_ARTIFACT_NAME="helm"
 if [[ "$platform" == "windows" ]]; then
-  HELM_BIN_NAME="helm.exe"
+  HELM_ARTIFACT_NAME="helm.exe"
+  [[ "$HELM_BIN_NAME" == *.exe ]] || HELM_BIN_NAME="$HELM_BIN_NAME.exe"
+fi
+
+# Kubernetes Helm also installs a binary called `helm`, and it is on a great
+# many developer machines. Overwriting it would break their cluster tooling
+# with no warning, so refuse and explain rather than clobber. Identify the
+# incumbent by its version output: Kubernetes Helm prints a Go
+# `version.BuildInfo{...}` struct, ours prints a bare semver.
+existing_bin="$(command -v "$HELM_BIN_NAME" 2>/dev/null || true)"
+if [[ -n "$existing_bin" && "$force_install" != "1" ]]; then
+  existing_version="$("$existing_bin" --version 2>&1 || true)"
+  if [[ "$existing_version" == *"version.BuildInfo"* || "$existing_version" == *"Kubernetes"* ]]; then
+    echo ""
+    echo "Kubernetes Helm is already installed as '$HELM_BIN_NAME':"
+    echo "  $existing_bin"
+    echo ""
+    echo "Installing here would overwrite it. Pick one:"
+    echo ""
+    echo "  # install the Helm CLI under a different name (recommended)"
+    echo "  curl -fsSL https://tryhelm.ai/install | bash -s -- --bin-name helmcode"
+    echo ""
+    echo "  # or install somewhere else and put it earlier in PATH yourself"
+    echo "  curl -fsSL https://tryhelm.ai/install | bash -s -- --dir \"$HOME/.helm/bin\""
+    echo ""
+    echo "  # or replace Kubernetes Helm on purpose"
+    echo "  curl -fsSL https://tryhelm.ai/install | bash -s -- --force"
+    echo ""
+    exit 1
+  fi
 fi
 
 tmp_dir="$(mktemp -d)"
@@ -131,21 +172,21 @@ if [[ "$platform" == "windows" ]]; then
     exit 1
   fi
 
-  cp "$tmp_dir/$HELM_BIN_NAME" "$install_dir/$HELM_BIN_NAME"
+  cp "$tmp_dir/$HELM_ARTIFACT_NAME" "$install_dir/$HELM_BIN_NAME"
 else
   if [[ ! -d "$install_dir" ]]; then
     mkdir -p "$install_dir" 2>/dev/null || true
   fi
 
   if [[ -w "$install_dir" ]]; then
-    cp "$tmp_dir/$HELM_BIN_NAME" "$install_dir/$HELM_BIN_NAME"
+    cp "$tmp_dir/$HELM_ARTIFACT_NAME" "$install_dir/$HELM_BIN_NAME"
     chmod 0755 "$install_dir/$HELM_BIN_NAME"
   else
     echo ""
     echo "Helm needs elevated permissions to install to $install_dir"
     echo ""
     sudo mkdir -p "$install_dir"
-    sudo cp "$tmp_dir/$HELM_BIN_NAME" "$install_dir/$HELM_BIN_NAME"
+    sudo cp "$tmp_dir/$HELM_ARTIFACT_NAME" "$install_dir/$HELM_BIN_NAME"
     sudo chmod 0755 "$install_dir/$HELM_BIN_NAME"
   fi
 
