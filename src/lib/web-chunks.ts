@@ -7,7 +7,11 @@
 export interface SessionChunk {
   session_id: string;
   provider: string;
-  kind: "assistant_text" | "tool_call" | "tool_result" | "status";
+  // `user_message` and `plan_updated` are not produced by this CLI's own SDK
+  // executors, but helm-web's relay accepts both and harnesses publishing
+  // through `helm relay` do emit them — the fork engine sends prompts as
+  // chunks rather than a session-start payload.
+  kind: "user_message" | "assistant_text" | "tool_call" | "tool_result" | "status" | "plan_updated";
   content: string;
   tool_id?: string;
   tool_name?: string;

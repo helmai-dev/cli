@@ -95,6 +95,23 @@ program
   });
 
 program
+  .command("whoami")
+  .description("Show which account and machine this CLI is connected as")
+  .option("--json", "Emit machine-readable JSON (no token is ever printed)")
+  .action(async (options: { json?: boolean }) => {
+    const { whoamiCommand } = await import("./commands/whoami.js");
+    await whoamiCommand(options);
+  });
+
+program
+  .command("relay", { hidden: true })
+  .description("Publish a local harness's agent activity (reads NDJSON on stdin)")
+  .action(async () => {
+    const { relayCommand } = await import("./commands/relay.js");
+    await relayCommand();
+  });
+
+program
   .command("inject", { hidden: true })
   .description("Hook handler: print team context for the current session (reads stdin)")
   .action(async () => {
