@@ -1,0 +1,46 @@
+# CI — build and test on every push and pull request.
+#
+# The release workflow publishes to npm but never runs the test suite, so
+# until now nothing verified helm-cli on push. That matters more than usual
+# here: helm-cli is the harness-agnostic layer every surface talks through
+# (Claude Code, Codex, Helm Code), so a regression is a regression for all of
+# them at once.
+#
+# Deliberately mirrors release.yml's Node version so a green CI means the
+# published artifact builds the same way.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm test` builds first, so this covers compilation too.
+      - name: Build and test
+        run: npm test
+
+      # The published entry point must actually run. `--version` is the
+      # cheapest end-to-end check that the built bin is not broken.
+      - name: Smoke-test the built CLI
+        run: node dist/index.js --version
