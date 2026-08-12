@@ -70,6 +70,105 @@ async function request<T>(
   return data as T;
 }
 
+export interface HelmWebProjectSummary {
+  id: string;
+  name: string;
+}
+
+export interface HelmWebTeamSession {
+  session_id: string;
+  project_id: string;
+  provider: string;
+  status: string;
+  title: string | null;
+  last_message: string | null;
+  user_id: string;
+  user_name: string;
+  created_at: string | null;
+  completed_at: string | null;
+}
+
+export interface HelmWebSessionMessage {
+  id: string;
+  kind: string;
+  content: string;
+  tool_name: string | null;
+  is_error: boolean;
+  created_at: string | null;
+}
+
+export interface HelmWebSessionDetail {
+  session_id: string;
+  project_id: string;
+  provider: string;
+  status: string;
+  title: string | null;
+  messages: HelmWebSessionMessage[];
+}
+
+export async function fetchHelmWebProjects(): Promise<HelmWebProjectSummary[]> {
+  const response = await request<{ data: HelmWebProjectSummary[] }>("/projects", {
+    method: "GET",
+  });
+  return response.data;
+}
+
+export async function fetchHelmWebProjectSessions(
+  projectId: string,
+): Promise<HelmWebTeamSession[]> {
+  const response = await request<{ data: HelmWebTeamSession[] }>(
+    `/projects/${encodeURIComponent(projectId)}/sessions`,
+    { method: "GET" },
+  );
+  return response.data;
+}
+
+export async function fetchHelmWebSession(
+  sessionId: string,
+): Promise<HelmWebSessionDetail> {
+  return request<HelmWebSessionDetail>(`/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "GET",
+  });
+}
+
+export async function authorizeHelmWebBroadcast(input: {
+  socketId: string;
+  channelName: string;
+}): Promise<{ auth: string; channel_data?: string }> {
+  const credentials = loadCredentials();
+  if (!credentials?.api_key) {
+    throw new WebApiError("Not connected. Run `helm connect` first.", 401);
+  }
+
+  const response = await fetch(`${getApiUrl()}/broadcasting/auth`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${credentials.api_key}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      socket_id: input.socketId,
+      channel_name: input.channelName,
+    }).toString(),
+  });
+  const data = (await response.json().catch(() => ({}))) as {
+    auth?: unknown;
+    channel_data?: unknown;
+    message?: unknown;
+  };
+  if (!response.ok || typeof data.auth !== "string") {
+    throw new WebApiError(
+      typeof data.message === "string" ? data.message : `Broadcast auth failed: ${response.status}`,
+      response.status,
+    );
+  }
+  return {
+    auth: data.auth,
+    ...(typeof data.channel_data === "string" ? { channel_data: data.channel_data } : {}),
+  };
+}
+
 // --- Device-code auth ---
 
 export interface DeviceAuthStartResponse {

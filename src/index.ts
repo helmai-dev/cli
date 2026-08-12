@@ -113,6 +113,14 @@ program
   });
 
 program
+  .command("code-bridge", { hidden: true })
+  .description("Serve token-blind read/auth requests for a trusted local Helm Code process")
+  .action(async () => {
+    const { codeBridgeCommand } = await import("./commands/code-bridge.js");
+    await codeBridgeCommand();
+  });
+
+program
   .command("inject", { hidden: true })
   .description("Hook handler: print team context for the current session (reads stdin)")
   .action(async () => {
