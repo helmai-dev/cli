@@ -115,9 +115,10 @@ program
 program
   .command("code-bridge", { hidden: true })
   .description("Serve token-blind read/auth requests for a trusted local Helm Code process")
-  .action(async () => {
+  .option("--inbound", "Allow the fixed Helm Code inbound work surface")
+  .action(async (options: { inbound?: boolean }) => {
     const { codeBridgeCommand } = await import("./commands/code-bridge.js");
-    await codeBridgeCommand();
+    await codeBridgeCommand(options);
   });
 
 program

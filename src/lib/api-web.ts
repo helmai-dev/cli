@@ -286,6 +286,7 @@ export interface WebWorkPackageAgentStart {
   context_refs?: unknown;
   project_awareness_preflight?: unknown;
   project_source?: Record<string, unknown> | null;
+  local_engine_prompt?: string | null;
 }
 
 export interface WebWorkPackage {
@@ -307,6 +308,8 @@ export interface ClaimWorkPackagesRequest {
   runtime_keys: string[];
   limit?: number;
   project_id?: string;
+  claim_scope?: "helm_code_sessions";
+  session_ids?: string[];
 }
 
 export async function claimWorkPackages(
