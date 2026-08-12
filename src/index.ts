@@ -13,10 +13,7 @@ import {
   daemonStatusCommand,
   daemonStopCommand,
 } from "./commands/daemon.js";
-import {
-  daemonInstallCommand,
-  daemonUninstallCommand,
-} from "./commands/daemon-install.js";
+import { daemonInstallCommand, daemonUninstallCommand } from "./commands/daemon-install.js";
 import { connectCommand } from "./commands/connect.js";
 import { mapProjectCommand } from "./commands/map.js";
 import { envCreateCommand, envListCommand, envSwitchCommand } from "./commands/env.js";
@@ -34,8 +31,12 @@ program
   .command("connect")
   .description("Connect this machine to a helm-web backend as an agent runner")
   .option("--url <url>", "helm-web base URL (defaults to https://tryhelm.ai)")
-  .option("--env <name>", "Environment name to store this connection under (defaults to the active environment)")
-  .action(async (options: { url?: string; env?: string }) => {
+  .option(
+    "--env <name>",
+    "Environment name to store this connection under (defaults to the active environment)",
+  )
+  .option("--json", "Emit token-free NDJSON events for a trusted local UI")
+  .action(async (options: { url?: string; env?: string; json?: boolean }) => {
     await connectCommand(options);
   });
 
@@ -128,9 +129,7 @@ program
     await mapProjectCommand(projectId, localPath);
   });
 
-const daemon = program
-  .command("daemon")
-  .description("Manage the background agent-runner daemon");
+const daemon = program.command("daemon").description("Manage the background agent-runner daemon");
 
 daemon
   .command("start")

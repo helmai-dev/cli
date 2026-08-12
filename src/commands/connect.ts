@@ -29,6 +29,61 @@ import pkg from "../../package.json";
 export interface ConnectOptions {
   url?: string;
   env?: string;
+  json?: boolean;
+}
+
+export interface ConnectVerificationEvent {
+  type: "verification_required";
+  verification_uri_complete: string;
+  user_code: string;
+  expires_in: number;
+  interval: number;
+}
+
+export interface ConnectSuccessEvent {
+  type: "connected";
+  connected: true;
+  api_url: string;
+  environment: string;
+  user_id: string;
+  machine_name: string;
+}
+
+export function buildConnectVerificationEvent(
+  start: Awaited<ReturnType<typeof startDeviceAuth>>,
+): ConnectVerificationEvent {
+  return {
+    type: "verification_required",
+    verification_uri_complete: start.verification_uri_complete,
+    user_code: start.user_code,
+    expires_in: start.expires_in,
+    interval: start.interval,
+  };
+}
+
+export function buildConnectSuccessEvent(input: {
+  apiUrl: string;
+  environment: string;
+  userId: string;
+  machineName: string;
+}): ConnectSuccessEvent {
+  return {
+    type: "connected",
+    connected: true,
+    api_url: input.apiUrl,
+    environment: input.environment,
+    user_id: input.userId,
+    machine_name: input.machineName,
+  };
+}
+
+function emitJson(payload: object): void {
+  process.stdout.write(`${JSON.stringify(payload)}\n`);
+}
+
+function failJson(code: string, message: string): void {
+  emitJson({ type: "error", code, message });
+  process.exitCode = 1;
 }
 
 export async function connectCommand(options: ConnectOptions): Promise<void> {
@@ -46,6 +101,10 @@ export async function connectCommand(options: ConnectOptions): Promise<void> {
   )?.replace(/\/+$/, "");
 
   if (!url) {
+    if (options.json) {
+      failJson("backend_url_missing", "No backend URL known for this environment.");
+      return;
+    }
     console.error(chalk.red("No backend URL known for this environment."));
     console.error(`  Run: ${chalk.cyan(`helm connect --url https://<your-helm-web-host>`)}`);
     process.exitCode = 1;
@@ -56,12 +115,18 @@ export async function connectCommand(options: ConnectOptions): Promise<void> {
   setActiveEnvironment(envName);
 
   const deviceName = os.hostname();
-  console.log(`Connecting ${chalk.bold(deviceName)} to ${chalk.cyan(url)} ...`);
+  if (!options.json) {
+    console.log(`Connecting ${chalk.bold(deviceName)} to ${chalk.cyan(url)} ...`);
+  }
 
   let start: Awaited<ReturnType<typeof startDeviceAuth>>;
   try {
     start = await startDeviceAuth(deviceName);
   } catch (error) {
+    if (options.json) {
+      failJson("backend_unreachable", `Couldn't reach ${url}: ${friendlyError(error)}`);
+      return;
+    }
     console.error(chalk.red(`\nCouldn't reach ${url}.`));
     console.error(`  ${friendlyError(error)}`);
     console.error(`  Check your connection, or pass a different host with ${chalk.cyan("--url")}.`);
@@ -69,20 +134,26 @@ export async function connectCommand(options: ConnectOptions): Promise<void> {
     return;
   }
 
-  console.log("");
-  console.log(`  1. Open this link in your browser (sign in if asked):`);
-  console.log(`     ${chalk.cyan(start.verification_uri_complete)}`);
-  console.log(`  2. Approve the device. Code: ${chalk.bold(start.user_code)}`);
-  console.log("");
-
-  // Best-effort auto-open. Under `curl | bash` or headless machines there's
-  // often no browser to launch — say so instead of leaving the user staring
-  // at a link they didn't realize they must open themselves.
-  try {
-    await open(start.verification_uri_complete);
-  } catch {
-    console.log(chalk.yellow("  (Couldn't open your browser automatically — open the link above.)"));
+  if (options.json) {
+    emitJson(buildConnectVerificationEvent(start));
+  } else {
     console.log("");
+    console.log(`  1. Open this link in your browser (sign in if asked):`);
+    console.log(`     ${chalk.cyan(start.verification_uri_complete)}`);
+    console.log(`  2. Approve the device. Code: ${chalk.bold(start.user_code)}`);
+    console.log("");
+
+    // Best-effort auto-open. Under `curl | bash` or headless machines there's
+    // often no browser to launch — say so instead of leaving the user staring
+    // at a link they didn't realize they must open themselves.
+    try {
+      await open(start.verification_uri_complete);
+    } catch {
+      console.log(
+        chalk.yellow("  (Couldn't open your browser automatically — open the link above.)"),
+      );
+      console.log("");
+    }
   }
 
   const intervalMs = Math.max(2, start.interval) * 1000;
@@ -91,7 +162,7 @@ export async function connectCommand(options: ConnectOptions): Promise<void> {
 
   let token: string | null = null;
   let userId: string = "";
-  const stopWaiting = beginWaitingIndicator(startedAt);
+  const stopWaiting = options.json ? () => {} : beginWaitingIndicator(startedAt);
   try {
     // Poll immediately so an already-approved device connects without delay,
     // then on the server's requested interval.
@@ -110,12 +181,20 @@ export async function connectCommand(options: ConnectOptions): Promise<void> {
       }
       if (poll.status === "denied") {
         stopWaiting();
+        if (options.json) {
+          failJson("access_denied", "Device was denied in the browser.");
+          return;
+        }
         console.error(chalk.red("Device was denied in the browser."));
         process.exitCode = 1;
         return;
       }
       if (poll.status === "invalid") {
         stopWaiting();
+        if (options.json) {
+          failJson("device_code_invalid", "Device code expired or is invalid.");
+          return;
+        }
         console.error(chalk.red("Device code expired or is invalid. Run helm connect again."));
         process.exitCode = 1;
         return;
@@ -127,6 +206,10 @@ export async function connectCommand(options: ConnectOptions): Promise<void> {
   }
 
   if (!token) {
+    if (options.json) {
+      failJson("approval_timeout", "Timed out waiting for approval.");
+      return;
+    }
     console.error(chalk.red("Timed out waiting for approval. Run `helm connect` again."));
     process.exitCode = 1;
     return;
@@ -161,6 +244,18 @@ export async function connectCommand(options: ConnectOptions): Promise<void> {
   const available = Object.entries(agents)
     .filter(([, value]) => value.available)
     .map(([key]) => key);
+
+  if (options.json) {
+    emitJson(
+      buildConnectSuccessEvent({
+        apiUrl: url,
+        environment: envName,
+        userId,
+        machineName: deviceName,
+      }),
+    );
+    return;
+  }
 
   console.log(chalk.green(`Connected${user?.name ? ` as ${user.name}` : ""}.`));
   console.log(`  Device: ${deviceName}`);
@@ -197,7 +292,9 @@ function beginWaitingIndicator(startedAt: number): () => void {
     const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     let i = 0;
     const timer = setInterval(() => {
-      process.stdout.write(`\r  ${chalk.cyan(frames[i % frames.length])} ${label}… ${chalk.gray(`(${elapsed()}s)`)}`);
+      process.stdout.write(
+        `\r  ${chalk.cyan(frames[i % frames.length])} ${label}… ${chalk.gray(`(${elapsed()}s)`)}`,
+      );
       i++;
     }, 120);
     return () => {
