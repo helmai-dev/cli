@@ -27,6 +27,7 @@ export async function hooksInstallCommand(): Promise<void> {
   console.log(
     chalk.gray(
       "  Every Claude Code session on this machine now starts with your team's shared context.\n" +
+        "  Recent aggregate usage syncs automatically when each session ends.\n" +
         "  Hooks fail open — if the Helm daemon is unreachable, sessions run exactly as before.\n",
     ),
   );

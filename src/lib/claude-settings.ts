@@ -1,10 +1,12 @@
 /**
  * Installs Helm's zero-touch context hooks into Claude Code's user-scope
- * settings (~/.claude/settings.json). Two hooks, both running `helm inject`:
+ * settings (~/.claude/settings.json). Context is injected while the session is
+ * active, then recent aggregate usage is synced when the session ends:
  *
  *  - SessionStart      → inject the full project context pack
  *  - UserPromptSubmit  → inject a delta digest (inject dedupes by content
  *                        hash per session, so unchanged context emits nothing)
+ *  - SessionEnd       → quietly scan and sync the last two days of usage
  *
  * The merge is surgical: only entries whose command matches HELM_HOOK_COMMAND
  * are ours to add or remove; everything else in the file is preserved
@@ -16,7 +18,12 @@ import * as path from "node:path";
 import * as os from "node:os";
 
 export const HELM_HOOK_COMMAND = "helm inject";
-const HOOK_EVENTS = ["SessionStart", "UserPromptSubmit"] as const;
+export const HELM_USAGE_SYNC_HOOK_COMMAND = "helm scan --days 2 --quiet";
+const HELM_HOOKS = {
+  SessionStart: HELM_HOOK_COMMAND,
+  UserPromptSubmit: HELM_HOOK_COMMAND,
+  SessionEnd: HELM_USAGE_SYNC_HOOK_COMMAND,
+} as const;
 
 interface HookEntry {
   type: string;
@@ -36,21 +43,23 @@ export interface ClaudeSettings {
 }
 
 function isHelmEntry(entry: HookEntry): boolean {
-  return entry.type === "command" && typeof entry.command === "string" &&
-    entry.command.includes(HELM_HOOK_COMMAND);
+  return entry.type === "command" &&
+    typeof entry.command === "string" &&
+    Object.values(HELM_HOOKS).includes(entry.command as (typeof HELM_HOOKS)[keyof typeof HELM_HOOKS]);
 }
 
-function matcherHasHelm(matcher: HookMatcher): boolean {
-  return Array.isArray(matcher.hooks) && matcher.hooks.some(isHelmEntry);
+function matcherHasCommand(matcher: HookMatcher, command: string): boolean {
+  return Array.isArray(matcher.hooks) &&
+    matcher.hooks.some((entry) => entry.type === "command" && entry.command === command);
 }
 
 /** Pure: returns a new settings object with Helm hooks present. */
 export function mergeHelmHooks(settings: ClaudeSettings): ClaudeSettings {
   const next: ClaudeSettings = { ...settings, hooks: { ...(settings.hooks ?? {}) } };
-  for (const event of HOOK_EVENTS) {
+  for (const [event, command] of Object.entries(HELM_HOOKS)) {
     const matchers = [...(next.hooks![event] ?? [])];
-    if (!matchers.some(matcherHasHelm)) {
-      matchers.push({ hooks: [{ type: "command", command: HELM_HOOK_COMMAND }] });
+    if (!matchers.some((matcher) => matcherHasCommand(matcher, command))) {
+      matchers.push({ hooks: [{ type: "command", command }] });
     }
     next.hooks![event] = matchers;
   }
@@ -90,8 +99,8 @@ export function removeHelmHooks(settings: ClaudeSettings): ClaudeSettings {
 }
 
 export function helmHooksInstalled(settings: ClaudeSettings): boolean {
-  return HOOK_EVENTS.every((event) =>
-    (settings.hooks?.[event] ?? []).some(matcherHasHelm),
+  return Object.entries(HELM_HOOKS).every(([event, command]) =>
+    (settings.hooks?.[event] ?? []).some((matcher) => matcherHasCommand(matcher, command)),
   );
 }
 

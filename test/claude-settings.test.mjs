@@ -7,12 +7,14 @@ import {
   removeHelmHooks,
 } from "../dist/lib/claude-settings.js";
 
-test("merge installs both hook events into empty settings", () => {
+test("merge installs context and automatic usage hooks into empty settings", () => {
   const merged = mergeHelmHooks({});
   assert.equal(helmHooksInstalled(merged), true);
   assert.equal(merged.hooks.SessionStart.length, 1);
   assert.equal(merged.hooks.UserPromptSubmit.length, 1);
+  assert.equal(merged.hooks.SessionEnd.length, 1);
   assert.equal(merged.hooks.SessionStart[0].hooks[0].command, "helm inject");
+  assert.equal(merged.hooks.SessionEnd[0].hooks[0].command, "helm scan --days 2 --quiet");
 });
 
 test("merge is idempotent", () => {
@@ -32,6 +34,7 @@ test("merge preserves unrelated settings and existing hooks", () => {
   const merged = mergeHelmHooks(settings);
   assert.equal(merged.model, "claude-opus-5");
   assert.equal(merged.hooks.Stop[0].hooks[0].command, "say done");
+  assert.equal(merged.hooks.SessionEnd[0].hooks[0].command, "helm scan --days 2 --quiet");
   assert.equal(merged.hooks.UserPromptSubmit.length, 2);
   assert.equal(merged.hooks.UserPromptSubmit[0].hooks[0].command, "other-tool run");
 });
@@ -50,6 +53,7 @@ test("remove strips only helm entries, keeps shared matchers", () => {
   assert.equal(removed.hooks.UserPromptSubmit.length, 1);
   assert.equal(removed.hooks.UserPromptSubmit[0].hooks[0].command, "other-tool run");
   assert.equal(removed.hooks.Stop[0].hooks[0].command, "say done");
+  assert.equal(removed.hooks.SessionEnd, undefined);
 });
 
 test("remove on untouched settings is a no-op shape", () => {

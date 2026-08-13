@@ -54,7 +54,8 @@ program
   .option("--days <n>", "How many days back to scan (default 30)")
   .option("--no-upload", "Print the report without syncing to helm-web")
   .option("--json", "Emit the full summary as JSON")
-  .action(async (options: { days?: string; upload?: boolean; json?: boolean }) => {
+  .option("--quiet", "Suppress output and fail open (used by automatic session-end sync)")
+  .action(async (options: { days?: string; upload?: boolean; json?: boolean; quiet?: boolean }) => {
     const { scanCommand } = await import("./commands/scan.js");
     await scanCommand(options);
   });

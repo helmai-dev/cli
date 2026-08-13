@@ -1,6 +1,6 @@
 /**
  * `helm scan` — retroactive usage report from local agent transcripts.
- * Scans Claude Code session logs (Codex support tracked separately), prints
+ * Scans Claude Code and Codex session logs, prints
  * the spend summary, and uploads day-level aggregates to helm-web so the
  * team dashboard fills in. Aggregates only; transcript content never leaves
  * this machine.
@@ -22,6 +22,7 @@ export interface ScanCommandOptions {
   days?: string;
   upload?: boolean;
   json?: boolean;
+  quiet?: boolean;
 }
 
 function usd(n: number): string {
@@ -75,7 +76,7 @@ export async function scanCommand(options: ScanCommandOptions): Promise<void> {
   const summary = aggregator.finish();
   summary.files = claudeFiles + codexFiles;
 
-  if (options.json) {
+  if (options.json || options.quiet) {
     // JSON mode prints exactly one JSON document (after upload), below.
   } else {
     printSummary(summary, days);
@@ -91,7 +92,7 @@ export async function scanCommand(options: ScanCommandOptions): Promise<void> {
     const credentials = loadCredentials();
     if (!credentials?.api_key) {
       upload.error = "not_connected";
-      if (!options.json) {
+      if (!options.json && !options.quiet) {
         console.log(
           chalk.yellow("  Not connected — run `helm connect` to sync this report to your team.\n"),
         );
@@ -109,17 +110,19 @@ export async function scanCommand(options: ScanCommandOptions): Promise<void> {
           });
           upload.accepted += response.accepted ?? batch.length;
         }
-        if (!options.json) {
+        if (!options.json && !options.quiet) {
           console.log(chalk.green(`  ✓ Synced ${upload.accepted} usage rows to helm-web\n`));
         }
       } catch (error) {
         upload.error = error instanceof Error ? error.message : String(error);
-        if (!options.json) {
+        if (!options.json && !options.quiet) {
           console.log(
             chalk.yellow(`  Upload failed (report above is still complete): ${upload.error}\n`),
           );
         }
-        process.exitCode = 1;
+        if (!options.quiet) {
+          process.exitCode = 1;
+        }
       }
     }
   }
