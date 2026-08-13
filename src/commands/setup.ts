@@ -1,6 +1,6 @@
 /**
  * `helm setup` — the one-command onboarding wizard. Walks a fresh machine
- * through the whole wedge: connect (device-code auth) → enable Claude Code
+ * through the whole wedge: connect (device-code auth) → enable coding-agent
  * context hooks → first usage scan → dashboard URL. Every step is skippable
  * and re-runnable; running setup on an already-configured machine is a
  * fast no-op checklist.
@@ -15,7 +15,7 @@ import * as tty from "node:tty";
 import chalk from "chalk";
 import { fetchAuthenticatedUser } from "../lib/api-web.js";
 import { getApiUrl, loadCredentials } from "../lib/config.js";
-import { helmHooksInstalled, readClaudeSettings } from "../lib/claude-settings.js";
+import { allAgentHooksInstalled } from "./hooks.js";
 
 /** Pure: interpret a y/n answer with a default. Exported for tests. */
 export function parseYesNo(input: string, defaultYes: boolean): boolean {
@@ -95,7 +95,7 @@ export async function setupCommand(): Promise<void> {
     console.log(chalk.yellow("\nhelm setup is interactive — run it in a terminal.\n"));
     console.log("Or run the steps individually:");
     console.log("  helm connect        link this machine to your team");
-    console.log("  helm hooks install  enable team context in Claude Code");
+    console.log("  helm hooks install  enable team context in supported coding agents");
     console.log("  helm scan           report + sync your AI usage\n");
     return;
   }
@@ -104,7 +104,7 @@ export async function setupCommand(): Promise<void> {
     console.log(chalk.cyan.bold("\n  ⎈ Helm Setup\n"));
     console.log(
       chalk.gray(
-        "  Three steps: connect this machine, enable team context for Claude Code,\n" +
+        "  Three steps: connect this machine, enable team context for your coding agents,\n" +
           "  and scan your recent AI usage. Each step asks first; nothing is silent.\n",
       ),
     );
@@ -131,20 +131,15 @@ export async function setupCommand(): Promise<void> {
     }
 
     // Step 2 — hooks
-    let hooksOn = false;
-    try {
-      hooksOn = helmHooksInstalled(readClaudeSettings());
-    } catch {
-      // Unreadable settings — hooksInstallCommand will explain if chosen.
-    }
+    const hooksOn = allAgentHooksInstalled();
     if (hooksOn) {
       console.log(
-        chalk.green("  ✓ Claude Code context and automatic usage hooks already installed\n"),
+        chalk.green("  ✓ Coding-agent integrations already installed\n"),
       );
     } else if (
       await ask(
         promptInput.input,
-        "Enable shared team context for every Claude Code session? (fail-open; removable with `helm hooks uninstall`)",
+        "Enable shared team context for Claude Code, Codex, Cursor, and OpenCode? (fail-open; removable with `helm hooks uninstall`)",
       )
     ) {
       const { hooksInstallCommand } = await import("./hooks.js");
@@ -168,7 +163,7 @@ export async function setupCommand(): Promise<void> {
 
     console.log(chalk.cyan.bold("  Setup complete."));
     console.log(
-      chalk.gray("  Recent Claude Code usage now syncs automatically when a session ends."),
+      chalk.gray("  Recent Claude Code and Codex usage now syncs automatically after sessions."),
     );
     console.log(`  Your team dashboard: ${chalk.underline(`${getApiUrl()}/usage`)}\n`);
   } finally {

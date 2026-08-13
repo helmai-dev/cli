@@ -62,11 +62,11 @@ program
 
 const hooks = program
   .command("hooks")
-  .description("Manage Helm's zero-touch context hooks for Claude Code");
+  .description("Manage Helm's zero-touch coding-agent integrations");
 
 hooks
   .command("install")
-  .description("Install Helm context injection for every Claude Code session on this machine")
+  .description("Install Helm context injection for supported coding agents on this machine")
   .action(async () => {
     const { hooksInstallCommand } = await import("./commands/hooks.js");
     await hooksInstallCommand();
@@ -74,7 +74,7 @@ hooks
 
 hooks
   .command("uninstall")
-  .description("Remove Helm's Claude Code hooks")
+  .description("Remove Helm's coding-agent integrations")
   .action(async () => {
     const { hooksUninstallCommand } = await import("./commands/hooks.js");
     await hooksUninstallCommand();
@@ -82,7 +82,7 @@ hooks
 
 hooks
   .command("status")
-  .description("Show whether Helm's Claude Code hooks are installed")
+  .description("Show Helm integration status for each coding agent")
   .action(async () => {
     const { hooksStatusCommand } = await import("./commands/hooks.js");
     await hooksStatusCommand();
@@ -274,5 +274,11 @@ if (process.env.HELM_DAEMON_MODE === "1") {
   import("./lib/daemon-loop-web.js").then((m) => m.runWebDaemonLoop());
 } else {
   checkForUpdate();
-  program.parse();
+  program.parseAsync().then(
+    () => process.exit(process.exitCode ?? 0),
+    (error: unknown) => {
+      console.error(error);
+      process.exit(1);
+    },
+  );
 }

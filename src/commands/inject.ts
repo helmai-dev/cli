@@ -25,10 +25,48 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 1500;
 const MAX_CONTEXT_CHARS = 8000;
 
-interface HookPayload {
+export interface HookPayload {
   session_id?: string;
+  conversation_id?: string;
   cwd?: string;
+  workspace_roots?: string[];
   hook_event_name?: string;
+  cursor_version?: string;
+}
+
+export interface NormalizedHookPayload {
+  cwd: string;
+  sessionId: string;
+  eventName: string | undefined;
+  output: "plain" | "cursor-json";
+}
+
+export function normalizeHookPayload(payload: HookPayload): NormalizedHookPayload {
+  const eventAliases: Record<string, string> = {
+    sessionStart: "SessionStart",
+    beforeSubmitPrompt: "UserPromptSubmit",
+  };
+  return {
+    cwd: payload.cwd ?? payload.workspace_roots?.[0] ?? process.cwd(),
+    sessionId: payload.session_id ?? payload.conversation_id ?? "unknown-session",
+    eventName: payload.hook_event_name
+      ? (eventAliases[payload.hook_event_name] ?? payload.hook_event_name)
+      : undefined,
+    output:
+      typeof payload.cursor_version === "string" ||
+      payload.hook_event_name === "sessionStart" ||
+      payload.hook_event_name === "beforeSubmitPrompt"
+        ? "cursor-json"
+        : "plain",
+  };
+}
+
+function emitContext(context: string | null, output: NormalizedHookPayload["output"]): void {
+  if (output === "cursor-json") {
+    process.stdout.write(JSON.stringify(context ? { additional_context: context } : {}));
+  } else if (context) {
+    process.stdout.write(context);
+  }
 }
 
 async function readStdin(): Promise<string> {
@@ -189,12 +227,15 @@ function rememberInjectedHash(sessionId: string, hash: string): void {
 }
 
 export async function injectCommand(): Promise<void> {
+  let output: NormalizedHookPayload["output"] = "plain";
   try {
     const raw = await readStdin();
     const payload = (raw ? JSON.parse(raw) : {}) as HookPayload;
-    const cwd = payload.cwd ?? process.cwd();
-    const projectId = resolveProjectId(cwd);
+    const normalized = normalizeHookPayload(payload);
+    output = normalized.output;
+    const projectId = resolveProjectId(normalized.cwd);
     if (!projectId) {
+      emitContext(null, output);
       return;
     }
 
@@ -213,17 +254,22 @@ export async function injectCommand(): Promise<void> {
 
     const rendered = renderContextPack(pack);
     if (!rendered) {
+      emitContext(null, output);
       return;
     }
 
-    const sessionId = payload.session_id ?? "unknown-session";
     const hash = crypto.createHash("sha1").update(rendered).digest("hex");
-    if (payload.hook_event_name === "UserPromptSubmit" && lastInjectedHash(sessionId) === hash) {
+    if (
+      normalized.eventName === "UserPromptSubmit" &&
+      lastInjectedHash(normalized.sessionId) === hash
+    ) {
+      emitContext(null, output);
       return; // unchanged context — emit nothing, keep the turn clean
     }
-    rememberInjectedHash(sessionId, hash);
-    process.stdout.write(rendered);
+    rememberInjectedHash(normalized.sessionId, hash);
+    emitContext(rendered, output);
   } catch {
     // Fail-open: a broken Helm must never break the user's harness.
+    emitContext(null, output);
   }
 }

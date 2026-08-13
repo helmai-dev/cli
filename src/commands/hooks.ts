@@ -1,61 +1,145 @@
-/**
- * `helm hooks install|uninstall|status` — manage Helm's zero-touch context
- * hooks in Claude Code's user-scope settings. Install once; every project on
- * this machine (including future ones) gets team context injected with no
- * per-project setup.
- */
+/** `helm hooks install|uninstall|status` — manage all supported agent hooks. */
 
 import chalk from "chalk";
 import {
   getClaudeSettingsPath,
-  helmHooksInstalled,
+  helmHooksInstalled as claudeHooksInstalled,
   mergeHelmHooks,
   readClaudeSettings,
   removeHelmHooks,
   writeClaudeSettings,
 } from "../lib/claude-settings.js";
+import {
+  codexHooksInstalled,
+  getCodexHooksPath,
+  mergeCodexHooks,
+  readCodexHooks,
+  removeCodexHooks,
+  writeCodexHooks,
+} from "../lib/codex-hooks.js";
+import {
+  cursorHooksInstalled,
+  getCursorHooksPath,
+  mergeCursorHooks,
+  readCursorHooks,
+  removeCursorHooks,
+  writeCursorHooks,
+} from "../lib/cursor-hooks.js";
+import {
+  assertOpenCodePluginWritable,
+  getOpenCodePluginPath,
+  openCodeHooksInstalled,
+  removeOpenCodePlugin,
+  writeOpenCodePlugin,
+} from "../lib/opencode-hooks.js";
+
+export interface AgentHookStatus {
+  name: string;
+  path: string;
+  installed: boolean;
+}
+
+export function getAgentHookStatus(): AgentHookStatus[] {
+  const claudePath = getClaudeSettingsPath();
+  const codexPath = getCodexHooksPath();
+  const cursorPath = getCursorHooksPath();
+  const openCodePath = getOpenCodePluginPath();
+  return [
+    {
+      name: "Claude Code",
+      path: claudePath,
+      installed: claudeHooksInstalled(readClaudeSettings(claudePath)),
+    },
+    {
+      name: "Codex",
+      path: codexPath,
+      installed: codexHooksInstalled(readCodexHooks(codexPath)),
+    },
+    {
+      name: "Cursor",
+      path: cursorPath,
+      installed: cursorHooksInstalled(readCursorHooks(cursorPath)),
+    },
+    { name: "OpenCode", path: openCodePath, installed: openCodeHooksInstalled(openCodePath) },
+  ];
+}
+
+export function allAgentHooksInstalled(): boolean {
+  try {
+    return getAgentHookStatus().every((provider) => provider.installed);
+  } catch {
+    return false;
+  }
+}
 
 export async function hooksInstallCommand(): Promise<void> {
-  const settingsPath = getClaudeSettingsPath();
-  const settings = readClaudeSettings(settingsPath);
-  if (helmHooksInstalled(settings)) {
-    console.log(chalk.green(`\n✓ Helm hooks already installed in ${settingsPath}\n`));
-    return;
+  const claudePath = getClaudeSettingsPath();
+  const codexPath = getCodexHooksPath();
+  const cursorPath = getCursorHooksPath();
+  const openCodePath = getOpenCodePluginPath();
+
+  // Validate every destination before writing any of them, so malformed JSON
+  // or an unrelated OpenCode plugin cannot leave a partial installation.
+  const claude = readClaudeSettings(claudePath);
+  const codex = readCodexHooks(codexPath);
+  const cursor = readCursorHooks(cursorPath);
+  assertOpenCodePluginWritable(openCodePath);
+
+  writeClaudeSettings(mergeHelmHooks(claude), claudePath);
+  writeCodexHooks(mergeCodexHooks(codex), codexPath);
+  writeCursorHooks(mergeCursorHooks(cursor), cursorPath);
+  writeOpenCodePlugin(openCodePath);
+
+  console.log(chalk.green("\n✓ Installed Helm agent integrations"));
+  for (const { name, path } of getAgentHookStatus()) {
+    console.log(chalk.gray(`  ${name.padEnd(12)} ${path}`));
   }
-  writeClaudeSettings(mergeHelmHooks(settings), settingsPath);
-  console.log(chalk.green(`\n✓ Installed Helm context hooks in ${settingsPath}`));
   console.log(
     chalk.gray(
-      "  Every Claude Code session on this machine now starts with your team's shared context.\n" +
-        "  Recent aggregate usage syncs automatically when each session ends.\n" +
-        "  Hooks fail open — if the Helm daemon is unreachable, sessions run exactly as before.\n",
+      "\n  Shared team context is now available in Claude Code, Codex, Cursor, and OpenCode.\n" +
+        "  Hooks fail open — Helm being unavailable never blocks an agent session.\n",
+    ),
+  );
+  console.log(
+    chalk.yellow(
+      "  Codex will ask you to review and trust newly installed user hooks the first time.\n",
     ),
   );
 }
 
 export async function hooksUninstallCommand(): Promise<void> {
-  const settingsPath = getClaudeSettingsPath();
-  const settings = readClaudeSettings(settingsPath);
-  if (!helmHooksInstalled(settings)) {
-    console.log(chalk.gray(`\nNo Helm hooks found in ${settingsPath}\n`));
-    return;
-  }
-  writeClaudeSettings(removeHelmHooks(settings), settingsPath);
-  console.log(chalk.green(`\n✓ Removed Helm hooks from ${settingsPath}\n`));
+  const claudePath = getClaudeSettingsPath();
+  const codexPath = getCodexHooksPath();
+  const cursorPath = getCursorHooksPath();
+  const openCodePath = getOpenCodePluginPath();
+
+  const claude = readClaudeSettings(claudePath);
+  const codex = readCodexHooks(codexPath);
+  const cursor = readCursorHooks(cursorPath);
+
+  writeClaudeSettings(removeHelmHooks(claude), claudePath);
+  writeCodexHooks(removeCodexHooks(codex), codexPath);
+  writeCursorHooks(removeCursorHooks(cursor), cursorPath);
+  removeOpenCodePlugin(openCodePath);
+  console.log(chalk.green("\n✓ Removed Helm agent integrations\n"));
 }
 
 export async function hooksStatusCommand(): Promise<void> {
-  const settingsPath = getClaudeSettingsPath();
-  let installed = false;
+  let statuses: AgentHookStatus[];
   try {
-    installed = helmHooksInstalled(readClaudeSettings(settingsPath));
-  } catch {
-    console.log(chalk.yellow(`\n${settingsPath} is not valid JSON — cannot determine status.\n`));
+    statuses = getAgentHookStatus();
+  } catch (error) {
+    console.log(chalk.yellow(`\n${error instanceof Error ? error.message : String(error)}\n`));
     return;
   }
-  console.log(
-    installed
-      ? chalk.green(`\n✓ Helm hooks installed (${settingsPath})\n`)
-      : chalk.gray(`\nHelm hooks not installed. Run \`helm hooks install\`.\n`),
-  );
+  console.log("");
+  for (const provider of statuses) {
+    const icon = provider.installed ? chalk.green("✓") : chalk.gray("○");
+    console.log(`  ${icon} ${provider.name.padEnd(12)} ${chalk.gray(provider.path)}`);
+  }
+  if (!statuses.every((provider) => provider.installed)) {
+    console.log(chalk.gray("\n  Run `helm hooks install` to install missing integrations.\n"));
+  } else {
+    console.log("");
+  }
 }
