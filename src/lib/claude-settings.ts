@@ -1,15 +1,18 @@
 /**
  * Installs Helm's zero-touch context hooks into Claude Code's user-scope
  * settings (~/.claude/settings.json). Context is injected while the session is
- * active, then recent aggregate usage is synced when the session ends:
+ * active, bounded tool evidence is captured locally, completed turns become
+ * reviewable team-learning candidates, and aggregate usage is synced:
  *
  *  - SessionStart      → inject the full project context pack
  *  - UserPromptSubmit  → inject a delta digest (inject dedupes by content
  *                        hash per session, so unchanged context emits nothing)
- *  - SessionEnd       → quietly scan and sync the last two days of usage
+ *  - PostToolUse       → retain sanitized, bounded evidence for this turn
+ *  - Stop              → submit a fail-open, review-required learning candidate
+ *  - SessionEnd        → quietly scan and sync the last two days of usage
  *
- * The merge is surgical: only entries whose command matches HELM_HOOK_COMMAND
- * are ours to add or remove; everything else in the file is preserved
+ * The merge is surgical: only entries whose command matches a managed Helm
+ * command are ours to add or remove; everything else in the file is preserved
  * byte-for-byte semantically. Installing twice is a no-op.
  */
 
@@ -19,9 +22,13 @@ import * as os from "node:os";
 
 export const HELM_HOOK_COMMAND = "helm inject";
 export const HELM_USAGE_SYNC_HOOK_COMMAND = "helm scan --days 2 --quiet";
+export const HELM_OBSERVE_HOOK_COMMAND = "helm observe";
+export const HELM_LEARN_HOOK_COMMAND = "helm learn";
 const HELM_HOOKS = {
   SessionStart: HELM_HOOK_COMMAND,
   UserPromptSubmit: HELM_HOOK_COMMAND,
+  PostToolUse: HELM_OBSERVE_HOOK_COMMAND,
+  Stop: HELM_LEARN_HOOK_COMMAND,
   SessionEnd: HELM_USAGE_SYNC_HOOK_COMMAND,
 } as const;
 

@@ -14,6 +14,10 @@ test("Cursor merge installs supported hooks and preserves existing entries", () 
   });
   assert.equal(cursorHooksInstalled(once), true);
   assert.equal(once.hooks.sessionStart[0].command, "helm inject");
+  assert.equal(once.hooks.beforeSubmitPrompt[0].command, "helm inject");
+  assert.equal(once.hooks.postToolUse[0].command, "helm observe");
+  assert.equal(once.hooks.afterAgentResponse[0].command, "helm learn");
+  assert.equal(once.hooks.stop[0].command, "helm learn");
   assert.equal(once.hooks.sessionEnd[0].command, "helm scan --days 2 --quiet");
   assert.equal(once.hooks.afterResponse[0].command, "other-tool");
   assert.deepEqual(mergeCursorHooks(once), once);

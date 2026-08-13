@@ -1,8 +1,8 @@
 /**
- * `helm inject` — Claude Code hook handler (SessionStart + UserPromptSubmit).
+ * `helm inject` — coding-agent hook handler for team-context injection.
  * Reads the hook payload from stdin, resolves the cwd to a mapped helm-web
- * project, and prints a <helm-team-context> block for Claude Code to add to
- * the model's context.
+ * project, and emits a <helm-team-context> block using the requesting agent's
+ * plain-text or JSON hook protocol.
  *
  * Contract with the harness: FAST and FAIL-OPEN. Anything unexpected —
  * no mapping, no credentials, network trouble, malformed payload — exits 0
@@ -18,8 +18,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import { fetchHelmWebProjects } from "../lib/api-web.js";
+import { rememberPrompt } from "../lib/ambient-state.js";
 import { getApiUrl, getEnvironmentDir, loadCredentials } from "../lib/config.js";
-import { loadWebProjects } from "../lib/web-projects.js";
+import {
+  inspectLocalRepository,
+  matchProjectForRepository,
+} from "../lib/project-resolution.js";
+import { loadWebProjects, registerWebProject } from "../lib/web-projects.js";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 1500;
@@ -27,46 +33,130 @@ const MAX_CONTEXT_CHARS = 8000;
 
 export interface HookPayload {
   session_id?: string;
+  sessionId?: string;
   conversation_id?: string;
   cwd?: string;
   workspace_roots?: string[];
+  workspaceRoots?: string[];
   hook_event_name?: string;
+  hookEventName?: string;
   cursor_version?: string;
+  prompt?: string;
+  user_prompt?: string;
+  userPrompt?: string;
+  message?: string;
+  provider?: string;
+  input?: {
+    prompt?: string;
+    message?: string;
+  };
 }
 
 export interface NormalizedHookPayload {
   cwd: string;
   sessionId: string;
   eventName: string | undefined;
-  output: "plain" | "cursor-json";
+  output: InjectOutput;
+  prompt: string | null;
+  query: string;
+  provider: string;
 }
 
-export function normalizeHookPayload(payload: HookPayload): NormalizedHookPayload {
+export type InjectOutput = "plain" | "cursor-json" | "gemini-json" | "copilot-json";
+
+export interface InjectOptions {
+  format?: string;
+}
+
+function requestedOutput(format: string | undefined): InjectOutput | null {
+  switch (format) {
+    case undefined:
+    case "plain":
+      return format === "plain" ? "plain" : null;
+    case "codex":
+      return "plain";
+    case "cursor":
+      return "cursor-json";
+    case "gemini":
+      return "gemini-json";
+    case "copilot":
+      return "copilot-json";
+    default:
+      return null;
+  }
+}
+
+export function normalizeHookPayload(
+  payload: HookPayload,
+  format?: string,
+): NormalizedHookPayload {
   const eventAliases: Record<string, string> = {
     sessionStart: "SessionStart",
     beforeSubmitPrompt: "UserPromptSubmit",
+    BeforeAgent: "UserPromptSubmit",
   };
+  const explicitOutput = requestedOutput(format);
+  const rawEventName = payload.hook_event_name ?? payload.hookEventName;
+  const promptCandidates = [
+    payload.prompt,
+    payload.user_prompt,
+    payload.userPrompt,
+    payload.input?.prompt,
+    payload.input?.message,
+    payload.message,
+  ];
+  const prompt = promptCandidates.find((candidate) =>
+    typeof candidate === "string" && candidate.trim() !== ""
+  )?.trim() ?? null;
+  const output = explicitOutput ??
+    (typeof payload.cursor_version === "string" ||
+        payload.hook_event_name === "sessionStart" ||
+        payload.hook_event_name === "beforeSubmitPrompt"
+      ? "cursor-json"
+      : "plain");
   return {
-    cwd: payload.cwd ?? payload.workspace_roots?.[0] ?? process.cwd(),
-    sessionId: payload.session_id ?? payload.conversation_id ?? "unknown-session",
-    eventName: payload.hook_event_name
-      ? (eventAliases[payload.hook_event_name] ?? payload.hook_event_name)
-      : undefined,
-    output:
-      typeof payload.cursor_version === "string" ||
-      payload.hook_event_name === "sessionStart" ||
-      payload.hook_event_name === "beforeSubmitPrompt"
-        ? "cursor-json"
-        : "plain",
+    cwd: payload.cwd ?? payload.workspace_roots?.[0] ?? payload.workspaceRoots?.[0] ?? process.cwd(),
+    sessionId: payload.session_id ?? payload.sessionId ?? payload.conversation_id ?? "unknown-session",
+    eventName: rawEventName ? (eventAliases[rawEventName] ?? rawEventName) : undefined,
+    output,
+    prompt,
+    query: prompt ?? "Current project decisions, constraints, active work, and relevant team learnings.",
+    provider: payload.provider ??
+      (format === "codex"
+        ? "codex"
+        :
+      (output === "cursor-json"
+        ? "cursor"
+        : output === "gemini-json"
+          ? "gemini"
+          : output === "copilot-json"
+            ? "copilot"
+            : "claude-compatible")),
   };
 }
 
-function emitContext(context: string | null, output: NormalizedHookPayload["output"]): void {
-  if (output === "cursor-json") {
-    process.stdout.write(JSON.stringify(context ? { additional_context: context } : {}));
-  } else if (context) {
-    process.stdout.write(context);
+export function formatContextOutput(
+  context: string | null,
+  output: NormalizedHookPayload["output"],
+): string {
+  switch (output) {
+    case "cursor-json":
+      return JSON.stringify(context ? { additional_context: context } : {});
+    case "gemini-json":
+      return JSON.stringify(
+        context
+          ? { hookSpecificOutput: { additionalContext: context }, suppressOutput: true }
+          : { suppressOutput: true },
+      );
+    case "copilot-json":
+      return JSON.stringify(context ? { additionalContext: context } : {});
+    case "plain":
+      return context ?? "";
   }
+}
+
+function emitContext(context: string | null, output: NormalizedHookPayload["output"]): void {
+  process.stdout.write(formatContextOutput(context, output));
 }
 
 async function readStdin(): Promise<string> {
@@ -77,7 +167,7 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf-8");
 }
 
-function resolveProjectId(cwd: string): string | null {
+export async function resolveProjectId(cwd: string): Promise<string | null> {
   let best: { projectId: string; length: number } | null = null;
   for (const entry of loadWebProjects()) {
     const base = entry.localPath.replace(/[\\/]+$/, "");
@@ -87,7 +177,30 @@ function resolveProjectId(cwd: string): string | null {
       }
     }
   }
-  return best?.projectId ?? null;
+  if (best) {
+    return best.projectId;
+  }
+
+  const repository = inspectLocalRepository(cwd);
+  if (!repository) {
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 700);
+  try {
+    const projects = await fetchHelmWebProjects(controller.signal);
+    const project = matchProjectForRepository(repository, projects);
+    if (!project) {
+      return null;
+    }
+    registerWebProject({ projectId: project.id, localPath: repository.root, name: project.name });
+    return project.id;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 interface CachedPack {
@@ -95,21 +208,22 @@ interface CachedPack {
   payload: unknown;
 }
 
-function cachePath(projectId: string): string {
-  return path.join(getEnvironmentDir(), "inject-cache", `${projectId}.json`);
+function cachePath(projectId: string, query: string): string {
+  const queryHash = crypto.createHash("sha256").update(query).digest("hex").slice(0, 24);
+  return path.join(getEnvironmentDir(), "inject-cache", projectId, `${queryHash}.json`);
 }
 
-function readCache(projectId: string): CachedPack | null {
+function readCache(projectId: string, query: string): CachedPack | null {
   try {
-    return JSON.parse(fs.readFileSync(cachePath(projectId), "utf-8")) as CachedPack;
+    return JSON.parse(fs.readFileSync(cachePath(projectId, query), "utf-8")) as CachedPack;
   } catch {
     return null;
   }
 }
 
-function writeCache(projectId: string, payload: unknown): void {
+function writeCache(projectId: string, query: string, payload: unknown): void {
   try {
-    const file = cachePath(projectId);
+    const file = cachePath(projectId, query);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ fetchedAt: Date.now(), payload }));
   } catch {
@@ -117,7 +231,7 @@ function writeCache(projectId: string, payload: unknown): void {
   }
 }
 
-async function fetchContextPack(projectId: string): Promise<unknown | null> {
+async function fetchContextPack(projectId: string, query: string): Promise<unknown | null> {
   const credentials = loadCredentials();
   if (!credentials?.api_key) {
     return null;
@@ -132,7 +246,12 @@ async function fetchContextPack(projectId: string): Promise<unknown | null> {
         Accept: "application/json",
         Authorization: `Bearer ${credentials.api_key}`,
       },
-      body: JSON.stringify({ surface: "daemon-inject" }),
+      body: JSON.stringify({
+        query,
+        purpose: "ambient_pre_prompt",
+        token_budget: 900,
+        limit: 6,
+      }),
       signal: controller.signal,
     });
     if (!response.ok) {
@@ -226,27 +345,35 @@ function rememberInjectedHash(sessionId: string, hash: string): void {
   }
 }
 
-export async function injectCommand(): Promise<void> {
+export async function injectCommand(options: InjectOptions = {}): Promise<void> {
   let output: NormalizedHookPayload["output"] = "plain";
   try {
     const raw = await readStdin();
     const payload = (raw ? JSON.parse(raw) : {}) as HookPayload;
-    const normalized = normalizeHookPayload(payload);
+    const normalized = normalizeHookPayload(payload, options.format);
     output = normalized.output;
-    const projectId = resolveProjectId(normalized.cwd);
+    const projectId = await resolveProjectId(normalized.cwd);
     if (!projectId) {
       emitContext(null, output);
       return;
     }
 
     let pack: unknown | null = null;
-    const cached = readCache(projectId);
+    rememberPrompt({
+      sessionId: normalized.sessionId,
+      projectId,
+      cwd: normalized.cwd,
+      prompt: normalized.prompt ?? "",
+      provider: normalized.provider,
+    });
+
+    const cached = readCache(projectId, normalized.query);
     if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
       pack = cached.payload;
     } else {
-      pack = await fetchContextPack(projectId);
+      pack = await fetchContextPack(projectId, normalized.query);
       if (pack != null) {
-        writeCache(projectId, pack);
+        writeCache(projectId, normalized.query, pack);
       } else if (cached) {
         pack = cached.payload; // stale beats nothing, never blocks
       }

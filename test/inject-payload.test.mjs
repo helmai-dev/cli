@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { normalizeHookPayload } from "../dist/commands/inject.js";
+import { formatContextOutput, normalizeHookPayload } from "../dist/commands/inject.js";
 
 test("normalizes Claude and Codex payloads to plain context", () => {
   assert.deepEqual(
@@ -15,6 +15,9 @@ test("normalizes Claude and Codex payloads to plain context", () => {
       sessionId: "session-1",
       eventName: "UserPromptSubmit",
       output: "plain",
+      prompt: null,
+      query: "Current project decisions, constraints, active work, and relevant team learnings.",
+      provider: "claude-compatible",
     },
   );
 });
@@ -32,6 +35,51 @@ test("normalizes Cursor payloads and requests JSON output", () => {
       sessionId: "conversation-1",
       eventName: "SessionStart",
       output: "cursor-json",
+      prompt: null,
+      query: "Current project decisions, constraints, active work, and relevant team learnings.",
+      provider: "cursor",
     },
   );
+});
+
+test("explicit Gemini and Copilot formats override payload auto-detection", () => {
+  const payload = {
+    session_id: "session-2",
+    cwd: "/repo",
+    hook_event_name: "BeforeAgent",
+  };
+  assert.equal(normalizeHookPayload(payload, "gemini").output, "gemini-json");
+  assert.equal(normalizeHookPayload(payload, "gemini").eventName, "UserPromptSubmit");
+  assert.equal(normalizeHookPayload(payload, "copilot").output, "copilot-json");
+});
+
+test("explicit Codex format keeps plain output and attributes captured turns", () => {
+  const normalized = normalizeHookPayload({ prompt: "Fix auth" }, "codex");
+  assert.equal(normalized.output, "plain");
+  assert.equal(normalized.provider, "codex");
+});
+
+test("uses the submitted prompt as the context retrieval query", () => {
+  const normalized = normalizeHookPayload({
+    session_id: "session-3",
+    cwd: "/repo",
+    hook_event_name: "UserPromptSubmit",
+    prompt: "Why does the refresh token have a 90 second skew?",
+  });
+
+  assert.equal(normalized.prompt, "Why does the refresh token have a 90 second skew?");
+  assert.equal(normalized.query, normalized.prompt);
+});
+
+test("Gemini and Copilot hook output is strict protocol JSON", () => {
+  assert.deepEqual(JSON.parse(formatContextOutput("team context", "gemini-json")), {
+    hookSpecificOutput: { additionalContext: "team context" },
+    suppressOutput: true,
+  });
+  assert.deepEqual(JSON.parse(formatContextOutput(null, "gemini-json")), {
+    suppressOutput: true,
+  });
+  assert.deepEqual(JSON.parse(formatContextOutput("team context", "copilot-json")), {
+    additionalContext: "team context",
+  });
 });

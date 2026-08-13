@@ -83,9 +83,10 @@ hooks
 hooks
   .command("status")
   .description("Show Helm integration status for each coding agent")
-  .action(async () => {
+  .option("--json", "Emit machine-readable integration status")
+  .action(async (options: { json?: boolean }) => {
     const { hooksStatusCommand } = await import("./commands/hooks.js");
-    await hooksStatusCommand();
+    await hooksStatusCommand(options);
   });
 
 program
@@ -125,9 +126,28 @@ program
 program
   .command("inject", { hidden: true })
   .description("Hook handler: print team context for the current session (reads stdin)")
-  .action(async () => {
+  .option("--format <format>", "Hook output protocol (plain, codex, cursor, gemini, or copilot)")
+  .action(async (options: { format?: string }) => {
     const { injectCommand } = await import("./commands/inject.js");
-    await injectCommand();
+    await injectCommand(options);
+  });
+
+program
+  .command("observe", { hidden: true })
+  .description("Hook handler: retain bounded local tool evidence for the active turn")
+  .option("--format <format>", "Hook output protocol (plain, codex, or gemini)")
+  .action(async (options: { format?: string }) => {
+    const { observeCommand } = await import("./commands/observe.js");
+    await observeCommand(options);
+  });
+
+program
+  .command("learn", { hidden: true })
+  .description("Hook handler: submit a reviewable learning candidate after a turn")
+  .option("--format <format>", "Hook output protocol (plain or gemini)")
+  .action(async (options: { format?: string }) => {
+    const { learnCommand } = await import("./commands/learn.js");
+    await learnCommand(options);
   });
 
 program

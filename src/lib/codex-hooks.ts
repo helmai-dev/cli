@@ -3,7 +3,15 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { HELM_HOOK_COMMAND, HELM_USAGE_SYNC_HOOK_COMMAND } from "./claude-settings.js";
+import {
+  HELM_HOOK_COMMAND,
+  HELM_LEARN_HOOK_COMMAND,
+  HELM_OBSERVE_HOOK_COMMAND,
+  HELM_USAGE_SYNC_HOOK_COMMAND,
+} from "./claude-settings.js";
+
+export const HELM_CODEX_INJECT_COMMAND = "helm inject --format codex";
+export const HELM_CODEX_LEARN_COMMAND = `${HELM_LEARN_HOOK_COMMAND} --format codex`;
 
 interface HookEntry {
   type: string;
@@ -24,8 +32,10 @@ export interface CodexHooks {
 }
 
 const HELM_CODEX_HOOKS = {
-  SessionStart: { command: HELM_HOOK_COMMAND },
-  UserPromptSubmit: { command: HELM_HOOK_COMMAND },
+  SessionStart: { command: HELM_CODEX_INJECT_COMMAND },
+  UserPromptSubmit: { command: HELM_CODEX_INJECT_COMMAND },
+  PostToolUse: { command: HELM_OBSERVE_HOOK_COMMAND, timeout: 2 },
+  Stop: { command: HELM_CODEX_LEARN_COMMAND, timeout: 3 },
   SessionEnd: { command: HELM_USAGE_SYNC_HOOK_COMMAND, timeout: 3 },
 } as const;
 
@@ -36,11 +46,16 @@ function matcherHasCommand(matcher: HookMatcher, command: string): boolean {
 
 function isHelmEntry(entry: HookEntry): boolean {
   return entry.type === "command" &&
-    (entry.command === HELM_HOOK_COMMAND || entry.command === HELM_USAGE_SYNC_HOOK_COMMAND);
+    (entry.command === HELM_CODEX_INJECT_COMMAND ||
+      entry.command === HELM_HOOK_COMMAND ||
+      entry.command === HELM_OBSERVE_HOOK_COMMAND ||
+      entry.command === HELM_CODEX_LEARN_COMMAND ||
+      entry.command === HELM_USAGE_SYNC_HOOK_COMMAND);
 }
 
 export function mergeCodexHooks(config: CodexHooks): CodexHooks {
-  const next: CodexHooks = { ...config, hooks: { ...(config.hooks ?? {}) } };
+  const cleaned = removeCodexHooks(config);
+  const next: CodexHooks = { ...cleaned, hooks: { ...(cleaned.hooks ?? {}) } };
   for (const [event, definition] of Object.entries(HELM_CODEX_HOOKS)) {
     const matchers = [...(next.hooks![event] ?? [])];
     if (!matchers.some((matcher) => matcherHasCommand(matcher, definition.command))) {

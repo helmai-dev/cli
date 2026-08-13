@@ -3,7 +3,12 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { HELM_HOOK_COMMAND, HELM_USAGE_SYNC_HOOK_COMMAND } from "./claude-settings.js";
+import {
+  HELM_HOOK_COMMAND,
+  HELM_LEARN_HOOK_COMMAND,
+  HELM_OBSERVE_HOOK_COMMAND,
+  HELM_USAGE_SYNC_HOOK_COMMAND,
+} from "./claude-settings.js";
 
 interface CursorHookEntry {
   command?: string;
@@ -16,10 +21,15 @@ export interface CursorHooks {
   [key: string]: unknown;
 }
 
-// Cursor can add context from sessionStart. beforeSubmitPrompt can only allow
-// or block a prompt, so installing `helm inject` there would not inject data.
+// Cursor's IDE fires all of these hooks. Cursor CLI releases have historically
+// shipped subsets, so each command is independently fail-open; supported
+// events still contribute without making the session depend on Helm.
 const HELM_CURSOR_HOOKS = {
   sessionStart: HELM_HOOK_COMMAND,
+  beforeSubmitPrompt: HELM_HOOK_COMMAND,
+  postToolUse: HELM_OBSERVE_HOOK_COMMAND,
+  afterAgentResponse: HELM_LEARN_HOOK_COMMAND,
+  stop: HELM_LEARN_HOOK_COMMAND,
   sessionEnd: HELM_USAGE_SYNC_HOOK_COMMAND,
 } as const;
 
@@ -47,7 +57,10 @@ export function removeCursorHooks(config: CursorHooks): CursorHooks {
   for (const [event, entries] of Object.entries(config.hooks)) {
     const kept = entries.filter(
       (entry) =>
-        entry.command !== HELM_HOOK_COMMAND && entry.command !== HELM_USAGE_SYNC_HOOK_COMMAND,
+        entry.command !== HELM_HOOK_COMMAND &&
+        entry.command !== HELM_OBSERVE_HOOK_COMMAND &&
+        entry.command !== HELM_LEARN_HOOK_COMMAND &&
+        entry.command !== HELM_USAGE_SYNC_HOOK_COMMAND,
     );
     if (kept.length > 0) {
       hooks[event] = kept;

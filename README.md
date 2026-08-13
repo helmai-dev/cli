@@ -33,17 +33,16 @@ Also works with `pnpm add -g @helmai/cli` and `bun add -g @helmai/cli`.
 ## Getting started
 
 ```bash
-# 1. Connect this machine (opens a browser approval on any device).
-#    Defaults to https://tryhelm.ai — pass --url for a self-hosted backend.
-helm connect
+# Interactive setup: connect, install coding-agent integrations, and scan usage.
+helm setup
 
-# 2. Register local checkouts for the projects this machine should run
+# Register local checkouts for projects this machine should run
 helm map <project-id> ~/code/my-project
 
-# 3. Start the daemon
+# Start the daemon
 helm daemon start
 
-# 4. (Recommended) Keep it running across reboots and logouts
+# (Recommended) Keep it running across reboots and logouts
 helm daemon install
 ```
 
@@ -55,7 +54,12 @@ and their output streams back into the Helm canvas.
 
 | Command | Description |
 |---|---|
+| `helm setup` | Connect, enable team context in supported coding agents, and run the first usage scan |
 | `helm connect` | Connect this machine to a helm-web backend (device-code auth) |
+| `helm hooks install` | Install fail-open team-context integrations for supported local coding agents |
+| `helm hooks status` | Show each integration, runtime detection, and derived coverage (`--json` for Desktop/automation) |
+| `helm hooks uninstall` | Remove only files and hook entries managed by Helm |
+| `helm scan` | Report local Claude Code and Codex usage and sync it to the team dashboard |
 | `helm map <project-id> [path]` | Register a local checkout for a project |
 | `helm daemon start` | Start the background agent-runner daemon (`--foreground` runs it in-process for supervisors) |
 | `helm daemon stop` | Stop the daemon |
@@ -65,6 +69,26 @@ and their output streams back into the Helm canvas.
 | `helm daemon info` | Show live runs and stats |
 | `helm logout` | Clear credentials for the active environment |
 | `helm update` | Update to the latest version |
+
+## Coding-agent integrations
+
+`helm setup` calls `helm hooks install`. It currently configures Claude Code,
+Codex, Cursor, OpenCode, Gemini CLI, GitHub Copilot CLI, Pi, Amp, and Kilo.
+Grok Code reads the Claude Code hooks through its compatibility layer, so Helm
+reports Grok as derived coverage and does not install a duplicate hook.
+
+The integration files fail open: a missing, disconnected, or slow Helm CLI does
+not prevent an agent session from running. Existing unrelated hooks and settings
+are preserved, and standalone plugin files are overwritten only when they carry
+Helm's ownership marker. Run `helm hooks status` to inspect the exact paths.
+
+For agents that expose turn lifecycle hooks, Helm uses the submitted prompt to
+retrieve a small relevant team-context pack before work begins. It then retains
+bounded, sanitized tool evidence locally and submits a deduplicated learning
+candidate when the turn completes. Candidates require an explicit team-admin
+review before they become shared Context Memory; rejected candidates never enter
+retrieval. Repository remotes are matched automatically, so normal usage does not
+require `helm map` or another per-project CLI step.
 
 ## How it works
 

@@ -12,8 +12,12 @@ test("merge installs context and automatic usage hooks into empty settings", () 
   assert.equal(helmHooksInstalled(merged), true);
   assert.equal(merged.hooks.SessionStart.length, 1);
   assert.equal(merged.hooks.UserPromptSubmit.length, 1);
+  assert.equal(merged.hooks.PostToolUse.length, 1);
+  assert.equal(merged.hooks.Stop.length, 1);
   assert.equal(merged.hooks.SessionEnd.length, 1);
   assert.equal(merged.hooks.SessionStart[0].hooks[0].command, "helm inject");
+  assert.equal(merged.hooks.PostToolUse[0].hooks[0].command, "helm observe");
+  assert.equal(merged.hooks.Stop[0].hooks[0].command, "helm learn");
   assert.equal(merged.hooks.SessionEnd[0].hooks[0].command, "helm scan --days 2 --quiet");
 });
 
@@ -53,6 +57,7 @@ test("remove strips only helm entries, keeps shared matchers", () => {
   assert.equal(removed.hooks.UserPromptSubmit.length, 1);
   assert.equal(removed.hooks.UserPromptSubmit[0].hooks[0].command, "other-tool run");
   assert.equal(removed.hooks.Stop[0].hooks[0].command, "say done");
+  assert.equal(removed.hooks.PostToolUse, undefined);
   assert.equal(removed.hooks.SessionEnd, undefined);
 });
 

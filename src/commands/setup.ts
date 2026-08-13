@@ -139,7 +139,7 @@ export async function setupCommand(): Promise<void> {
     } else if (
       await ask(
         promptInput.input,
-        "Enable shared team context for Claude Code, Codex, Cursor, and OpenCode? (fail-open; removable with `helm hooks uninstall`)",
+        "Enable shared team context in supported coding agents? (fail-open; removable with `helm hooks uninstall`)",
       )
     ) {
       const { hooksInstallCommand } = await import("./hooks.js");
@@ -163,7 +163,9 @@ export async function setupCommand(): Promise<void> {
 
     console.log(chalk.cyan.bold("  Setup complete."));
     console.log(
-      chalk.gray("  Recent Claude Code and Codex usage now syncs automatically after sessions."),
+      chalk.gray(
+        "  Team context is available across supported agents; Claude Code and Codex usage syncs automatically.",
+      ),
     );
     console.log(`  Your team dashboard: ${chalk.underline(`${getApiUrl()}/usage`)}\n`);
   } finally {

@@ -73,6 +73,10 @@ async function request<T>(
 export interface HelmWebProjectSummary {
   id: string;
   name: string;
+  repository_path?: string | null;
+  github_repository_full_name?: string | null;
+  github_html_url?: string | null;
+  github_clone_url?: string | null;
 }
 
 export interface HelmWebTeamSession {
@@ -106,9 +110,10 @@ export interface HelmWebSessionDetail {
   messages: HelmWebSessionMessage[];
 }
 
-export async function fetchHelmWebProjects(): Promise<HelmWebProjectSummary[]> {
+export async function fetchHelmWebProjects(signal?: AbortSignal): Promise<HelmWebProjectSummary[]> {
   const response = await request<{ data: HelmWebProjectSummary[] }>("/projects", {
     method: "GET",
+    signal,
   });
   return response.data;
 }
@@ -129,6 +134,47 @@ export async function fetchHelmWebSession(
   return request<HelmWebSessionDetail>(`/sessions/${encodeURIComponent(sessionId)}`, {
     method: "GET",
   });
+}
+
+export interface AmbientLearningCandidateRequest {
+  client_event_id: string;
+  session_id: string;
+  provider: string;
+  summary: string;
+  prompt_excerpt: string;
+  response_excerpt: string;
+  observations: Array<{
+    toolName: string;
+    inputHash: string;
+    outputHash: string;
+    inputExcerpt: string | null;
+    outputExcerpt: string | null;
+    capturedAt: string;
+  }>;
+  repository: {
+    head_sha: string | null;
+    branch: string | null;
+    changed_files: string[];
+  };
+  sensitivity: "internal";
+  captured_at: string;
+}
+
+export async function sendAmbientLearningCandidate(
+  projectId: string,
+  body: AmbientLearningCandidateRequest,
+): Promise<{ data: { id: string; status: string } }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  try {
+    return await request(`/projects/${encodeURIComponent(projectId)}/learning-candidates`, {
+      method: "POST",
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function authorizeHelmWebBroadcast(input: {
