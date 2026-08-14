@@ -12,10 +12,13 @@ import {
   authorizeHelmWebBroadcast,
   claimWorkPackages,
   createHelmWebSessionComment,
+  createHelmWebProjectMessage,
   fetchHelmWebProjects,
+  fetchHelmWebProjectMessages,
   fetchHelmWebProjectSessions,
   fetchHelmWebSession,
   reportWorkPackageEvent,
+  updateHelmWebSessionSidebar,
   type ClaimWorkPackagesRequest,
   type WorkPackageEventRequest,
 } from "../lib/api-web.js";
@@ -45,6 +48,14 @@ type CodeBridgeRequest =
   | { id: string; op: "bootstrap" }
   | { id: string; op: "session"; session_id: string }
   | { id: string; op: "create_session_comment"; session_id: string; body: string }
+  | { id: string; op: "create_project_message"; project_id: string; body: string; parent_id?: string | null }
+  | {
+      id: string;
+      op: "update_session_sidebar";
+      session_id: string;
+      action: "archive" | "unarchive" | "pin" | "unpin" | "reorder_pin";
+      pin_order_key?: string | null;
+    }
   | { id: string; op: "broadcast_auth"; socket_id: string; channel_name: string }
   | { id: string; op: "claim"; sessions: CodeBridgeOwnedSession[] }
   | {
@@ -111,6 +122,41 @@ export function parseCodeBridgeRequest(
       op: row.op,
       session_id: row.session_id,
       body: row.body,
+    };
+  }
+  if (
+    row.op === "create_project_message" &&
+    typeof row.project_id === "string" &&
+    row.project_id !== "" &&
+    typeof row.body === "string" &&
+    row.body.trim() !== "" &&
+    row.body.length <= 10_000
+  ) {
+    return {
+      id: row.id,
+      op: row.op,
+      project_id: row.project_id,
+      body: row.body,
+      ...((typeof row.parent_id === "string" || row.parent_id === null) ? { parent_id: row.parent_id } : {}),
+    };
+  }
+  if (
+    row.op === "update_session_sidebar" &&
+    typeof row.session_id === "string" &&
+    row.session_id !== "" &&
+    (row.action === "archive" ||
+      row.action === "unarchive" ||
+      row.action === "pin" ||
+      row.action === "unpin" ||
+      row.action === "reorder_pin") &&
+    (row.pin_order_key === undefined || row.pin_order_key === null || typeof row.pin_order_key === "string")
+  ) {
+    return {
+      id: row.id,
+      op: row.op,
+      session_id: row.session_id,
+      action: row.action,
+      ...(row.pin_order_key !== undefined ? { pin_order_key: row.pin_order_key } : {}),
     };
   }
   if (
@@ -230,16 +276,29 @@ export async function handleCodeBridgeRequest(request: CodeBridgeRequest): Promi
   if (request.op === "create_session_comment") {
     return createHelmWebSessionComment(request.session_id, request.body);
   }
+  if (request.op === "create_project_message") {
+    return createHelmWebProjectMessage(request.project_id, request.body, request.parent_id);
+  }
+  if (request.op === "update_session_sidebar") {
+    return updateHelmWebSessionSidebar(request.session_id, {
+      action: request.action,
+      ...(request.pin_order_key !== undefined ? { pin_order_key: request.pin_order_key } : {}),
+    });
+  }
   if (request.op === "session") return fetchHelmWebSession(request.session_id);
 
   const projects = await fetchHelmWebProjects();
   const sessions = (
     await Promise.all(projects.map((project) => fetchHelmWebProjectSessions(project.id)))
   ).flat();
+  const messages = (
+    await Promise.all(projects.map((project) => fetchHelmWebProjectMessages(project.id)))
+  ).flat();
   return {
     reverb: resolveCodeBridgeReverbConfig(getApiUrl()),
     projects,
     sessions,
+    messages,
   };
 }
 

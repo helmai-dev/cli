@@ -90,13 +90,37 @@ export interface HelmWebTeamSession {
   user_name: string;
   created_at: string | null;
   completed_at: string | null;
+  archived_at: string | null;
+  pinned_at: string | null;
+  pin_order_key: string | null;
+  snoozed_at: string | null;
+  snoozed_until: string | null;
+  comments: HelmWebSessionComment[];
+}
+
+export interface HelmWebProjectMessage {
+  id: string;
+  project_id: string;
+  user_name: string;
+  body: string;
+  parent_id: string | null;
+  created_at: string | null;
+  agent_thread: {
+    thread_id: string;
+    session_id: string | null;
+    status: string;
+    title: string | null;
+  } | null;
 }
 
 export interface HelmWebSessionMessage {
   id: string;
   kind: string;
-  content: string;
+  content: string | null;
+  tool_id: string | null;
   tool_name: string | null;
+  turn: number | null;
+  metadata: unknown;
   is_error: boolean;
   created_at: string | null;
 }
@@ -156,6 +180,49 @@ export async function createHelmWebSessionComment(
     {
       method: "POST",
       body: JSON.stringify({ body }),
+    },
+  );
+  return response.data;
+}
+
+export async function updateHelmWebSessionSidebar(
+  sessionId: string,
+  input: {
+    action: "archive" | "unarchive" | "pin" | "unpin" | "reorder_pin";
+    pin_order_key?: string | null;
+  },
+): Promise<Pick<HelmWebTeamSession, "session_id" | "archived_at" | "pinned_at" | "pin_order_key">> {
+  const response = await request<{
+    data: Pick<HelmWebTeamSession, "session_id" | "archived_at" | "pinned_at" | "pin_order_key">;
+  }>(`/sessions/${encodeURIComponent(sessionId)}/sidebar`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+  return response.data;
+}
+
+export async function fetchHelmWebProjectMessages(projectId: string): Promise<HelmWebProjectMessage[]> {
+  const response = await request<{ data: HelmWebProjectMessage[] }>(
+    `/projects/${encodeURIComponent(projectId)}/messages`,
+    { method: "GET" },
+  );
+  return response.data;
+}
+
+export async function createHelmWebProjectMessage(
+  projectId: string,
+  body: string,
+  parentId?: string | null,
+): Promise<HelmWebProjectMessage> {
+  const response = await request<{ data: HelmWebProjectMessage }>(
+    `/projects/${encodeURIComponent(projectId)}/messages`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        body,
+        message_kind: "human",
+        ...(parentId ? { parent_id: parentId } : {}),
+      }),
     },
   );
   return response.data;

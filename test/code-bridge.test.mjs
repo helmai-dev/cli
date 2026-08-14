@@ -67,6 +67,45 @@ test("code bridge exposes one bounded session discussion write", () => {
   );
 });
 
+test("code bridge exposes bounded team chats and viewer-only sidebar organization", () => {
+  assert.deepEqual(
+    parseCodeBridgeRequest({
+      id: "message-1",
+      op: "create_project_message",
+      project_id: "project-1",
+      body: "Investigate the flaky build.",
+      parent_id: "message-root",
+    }),
+    {
+      id: "message-1",
+      op: "create_project_message",
+      project_id: "project-1",
+      body: "Investigate the flaky build.",
+      parent_id: "message-root",
+    },
+  );
+  assert.deepEqual(
+    parseCodeBridgeRequest({
+      id: "sidebar-1",
+      op: "update_session_sidebar",
+      session_id: "session-1",
+      action: "reorder_pin",
+      pin_order_key: "gn",
+    }),
+    {
+      id: "sidebar-1",
+      op: "update_session_sidebar",
+      session_id: "session-1",
+      action: "reorder_pin",
+      pin_order_key: "gn",
+    },
+  );
+  assert.throws(
+    () => parseCodeBridgeRequest({ id: "sidebar-2", op: "update_session_sidebar", session_id: "session-1", action: "delete" }),
+    /unsupported/,
+  );
+});
+
 test("production Reverb metadata is public and token-free", () => {
   const config = resolveCodeBridgeReverbConfig("https://tryhelm.ai", {});
   assert.equal(config.port, 443);

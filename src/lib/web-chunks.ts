@@ -16,6 +16,14 @@ export interface SessionChunk {
   tool_id?: string;
   tool_name?: string;
   is_error?: boolean;
+  timeline?: {
+    activity_id: string;
+    activity_kind: string;
+    turn_id: string | null;
+    tone: "thinking" | "tool" | "approval" | "info" | "error";
+    summary: string;
+    payload: unknown;
+  };
 }
 
 export interface SessionResultBody {
