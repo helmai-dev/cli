@@ -108,6 +108,17 @@ export interface HelmWebSessionDetail {
   status: string;
   title: string | null;
   messages: HelmWebSessionMessage[];
+  comments: HelmWebSessionComment[];
+}
+
+export interface HelmWebSessionComment {
+  id: string;
+  session_id: string;
+  user_id: string | number;
+  user_name: string;
+  user_avatar_url: string | null;
+  body: string;
+  created_at: string | null;
 }
 
 export async function fetchHelmWebProjects(signal?: AbortSignal): Promise<HelmWebProjectSummary[]> {
@@ -134,6 +145,20 @@ export async function fetchHelmWebSession(
   return request<HelmWebSessionDetail>(`/sessions/${encodeURIComponent(sessionId)}`, {
     method: "GET",
   });
+}
+
+export async function createHelmWebSessionComment(
+  sessionId: string,
+  body: string,
+): Promise<HelmWebSessionComment> {
+  const response = await request<{ data: HelmWebSessionComment }>(
+    `/sessions/${encodeURIComponent(sessionId)}/comments`,
+    {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    },
+  );
+  return response.data;
 }
 
 export interface AmbientLearningCandidateRequest {

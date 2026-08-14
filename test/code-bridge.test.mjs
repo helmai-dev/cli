@@ -39,6 +39,34 @@ test("code bridge accepts only the fixed read and private-channel auth surface",
   assert.throws(() => parseCodeBridgeRequest({ id: "4", op: "request", path: "/api/user" }));
 });
 
+test("code bridge exposes one bounded session discussion write", () => {
+  const request = {
+    id: "comment-1",
+    op: "create_session_comment",
+    session_id: "session-1",
+    body: "Please check the failing test.",
+  };
+  assert.deepEqual(parseCodeBridgeRequest(request), request);
+  assert.throws(
+    () => parseCodeBridgeRequest({ ...request, body: "   " }),
+    /unsupported/,
+  );
+  assert.throws(
+    () => parseCodeBridgeRequest({ ...request, body: "x".repeat(10_001) }),
+    /unsupported/,
+  );
+  assert.throws(
+    () =>
+      parseCodeBridgeRequest({
+        id: "comment-2",
+        op: "create_session_comment",
+        session_id: "",
+        body: "No unscoped writes.",
+      }),
+    /unsupported/,
+  );
+});
+
 test("production Reverb metadata is public and token-free", () => {
   const config = resolveCodeBridgeReverbConfig("https://tryhelm.ai", {});
   assert.equal(config.port, 443);

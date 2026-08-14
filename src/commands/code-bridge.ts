@@ -11,6 +11,7 @@ import { createInterface } from "node:readline";
 import {
   authorizeHelmWebBroadcast,
   claimWorkPackages,
+  createHelmWebSessionComment,
   fetchHelmWebProjects,
   fetchHelmWebProjectSessions,
   fetchHelmWebSession,
@@ -43,6 +44,7 @@ export interface CodeBridgeReverbConfig {
 type CodeBridgeRequest =
   | { id: string; op: "bootstrap" }
   | { id: string; op: "session"; session_id: string }
+  | { id: string; op: "create_session_comment"; session_id: string; body: string }
   | { id: string; op: "broadcast_auth"; socket_id: string; channel_name: string }
   | { id: string; op: "claim"; sessions: CodeBridgeOwnedSession[] }
   | {
@@ -95,6 +97,21 @@ export function parseCodeBridgeRequest(
   if (row.op === "bootstrap") return { id: row.id, op: row.op };
   if (row.op === "session" && typeof row.session_id === "string" && row.session_id !== "") {
     return { id: row.id, op: row.op, session_id: row.session_id };
+  }
+  if (
+    row.op === "create_session_comment" &&
+    typeof row.session_id === "string" &&
+    row.session_id !== "" &&
+    typeof row.body === "string" &&
+    row.body.trim() !== "" &&
+    row.body.length <= 10_000
+  ) {
+    return {
+      id: row.id,
+      op: row.op,
+      session_id: row.session_id,
+      body: row.body,
+    };
   }
   if (
     row.op === "broadcast_auth" &&
@@ -209,6 +226,9 @@ export async function handleCodeBridgeRequest(request: CodeBridgeRequest): Promi
       socketId: request.socket_id,
       channelName: request.channel_name,
     });
+  }
+  if (request.op === "create_session_comment") {
+    return createHelmWebSessionComment(request.session_id, request.body);
   }
   if (request.op === "session") return fetchHelmWebSession(request.session_id);
 
