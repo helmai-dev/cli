@@ -60,6 +60,27 @@ program
     await scanCommand(options);
   });
 
+program
+  .command("audit")
+  .description("Print observed AI spend from local transcripts. Does not require a Helm Web account.")
+  .option("--days <n>", "How many days back to scan (default 30)")
+  .option("--no-upload", "Skip syncing even if this CLI is already linked")
+  .option("--json", "Emit the audit snapshot as JSON")
+  .option("--users <n>", "Self-reported people on the team who use AI coding tools")
+  .option("--teams <n>", "Self-reported team count. Does not multiply the replay scenario")
+  .action(
+    async (options: {
+      days?: string;
+      upload?: boolean;
+      json?: boolean;
+      users?: string;
+      teams?: string;
+    }) => {
+      const { auditCommand } = await import("./commands/audit.js");
+      await auditCommand(options);
+    },
+  );
+
 const hooks = program
   .command("hooks")
   .description("Manage Helm's zero-touch coding-agent integrations");
