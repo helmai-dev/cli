@@ -1,9 +1,10 @@
 /**
  * `helm scan` — retroactive usage report from local agent transcripts.
- * Scans Claude Code and Codex session logs, prints
- * the spend summary, and uploads day-level aggregates to helm-web so the
- * team dashboard fills in. Aggregates only; transcript content never leaves
- * this machine.
+ * Scans Claude Code and Codex session logs, prints the spend summary, and
+ * uploads day-level aggregates to helm-web so the team dashboard fills in.
+ * The default product path requires a linked Helm Web account. `--no-upload`
+ * is a local diagnostic. `--quiet` fails open for session-end hooks.
+ * Aggregates only; transcript content never leaves this machine.
  */
 
 import chalk from "chalk";
@@ -13,8 +14,9 @@ import {
   type ScanSummary,
 } from "../lib/claude-scan.js";
 import { collectCodexTranscripts } from "../lib/codex-scan.js";
+import { decideScanAuth, hasLinkedAccount, refuseUnlinkedAccount } from "../lib/account-link.js";
 import { sendUsageEvents } from "../lib/api-web.js";
-import { loadCredentials, loadMachineIdentity } from "../lib/config.js";
+import { getApiUrl, loadCredentials, loadMachineIdentity } from "../lib/config.js";
 
 const UPLOAD_BATCH_SIZE = 500;
 
@@ -69,6 +71,20 @@ function printSummary(summary: ScanSummary, days: number): void {
 }
 
 export async function scanCommand(options: ScanCommandOptions): Promise<void> {
+  const decision = decideScanAuth({
+    linked: hasLinkedAccount(loadCredentials()),
+    upload: options.upload !== false,
+    quiet: Boolean(options.quiet),
+  });
+
+  if (decision.kind === "quiet_skip") {
+    return;
+  }
+  if (decision.kind === "refuse") {
+    refuseUnlinkedAccount({ json: options.json, apiUrl: getApiUrl() });
+    return;
+  }
+
   const days = Math.max(1, Math.min(365, Number.parseInt(options.days ?? "30", 10) || 30));
   const aggregator = new UsageAggregator();
   const claudeFiles = await collectClaudeTranscripts(aggregator, { days });
@@ -88,41 +104,31 @@ export async function scanCommand(options: ScanCommandOptions): Promise<void> {
     error: null,
   };
 
-  if (options.upload !== false && summary.events.length > 0) {
-    const credentials = loadCredentials();
-    if (!credentials?.api_key) {
-      upload.error = "not_connected";
+  if (decision.kind === "proceed" && summary.events.length > 0) {
+    upload.attempted = true;
+    const machine = loadMachineIdentity();
+    try {
+      for (let i = 0; i < summary.events.length; i += UPLOAD_BATCH_SIZE) {
+        const batch = summary.events.slice(i, i + UPLOAD_BATCH_SIZE);
+        const response = await sendUsageEvents({
+          source: "scan",
+          device_ulid: machine?.ulid ?? null,
+          events: batch,
+        });
+        upload.accepted += response.accepted ?? batch.length;
+      }
+      if (!options.json && !options.quiet) {
+        console.log(chalk.green(`  ✓ Synced ${upload.accepted} usage rows to helm-web\n`));
+      }
+    } catch (error) {
+      upload.error = error instanceof Error ? error.message : String(error);
       if (!options.json && !options.quiet) {
         console.log(
-          chalk.yellow("  Not connected — run `helm connect` to sync this report to your team.\n"),
+          chalk.yellow(`  Upload failed (report above is still complete): ${upload.error}\n`),
         );
       }
-    } else {
-      upload.attempted = true;
-      const machine = loadMachineIdentity();
-      try {
-        for (let i = 0; i < summary.events.length; i += UPLOAD_BATCH_SIZE) {
-          const batch = summary.events.slice(i, i + UPLOAD_BATCH_SIZE);
-          const response = await sendUsageEvents({
-            source: "scan",
-            device_ulid: machine?.ulid ?? null,
-            events: batch,
-          });
-          upload.accepted += response.accepted ?? batch.length;
-        }
-        if (!options.json && !options.quiet) {
-          console.log(chalk.green(`  ✓ Synced ${upload.accepted} usage rows to helm-web\n`));
-        }
-      } catch (error) {
-        upload.error = error instanceof Error ? error.message : String(error);
-        if (!options.json && !options.quiet) {
-          console.log(
-            chalk.yellow(`  Upload failed (report above is still complete): ${upload.error}\n`),
-          );
-        }
-        if (!options.quiet) {
-          process.exitCode = 1;
-        }
+      if (!options.quiet) {
+        process.exitCode = 1;
       }
     }
   }

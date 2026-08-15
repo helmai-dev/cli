@@ -28,8 +28,9 @@
 
 import { createInterface } from "node:readline";
 
+import { accountRequiredRelayError, hasLinkedAccount } from "../lib/account-link.js";
 import { isAuthError, sendSessionChunk, sendSessionResult, sendSessionUsage } from "../lib/api-web.js";
-import { loadCredentials } from "../lib/config.js";
+import { getApiUrl, loadCredentials } from "../lib/config.js";
 import type { SessionChunk, SessionResultBody, SessionUsageBody } from "../lib/web-chunks.js";
 
 type RelayEvent =
@@ -97,8 +98,8 @@ function emit(payload: Record<string, unknown>): void {
 }
 
 export async function relayCommand(): Promise<void> {
-  if (!loadCredentials()?.api_key) {
-    emit({ ok: false, error: "not connected; run `helm connect` first" });
+  if (!hasLinkedAccount(loadCredentials())) {
+    emit({ ok: false, error: accountRequiredRelayError(getApiUrl()) });
     process.exitCode = 1;
     return;
   }

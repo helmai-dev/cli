@@ -29,7 +29,7 @@ program
 
 program
   .command("connect")
-  .description("Connect this machine to a helm-web backend as an agent runner")
+  .description("Link this CLI to a Helm Web account (device-code auth)")
   .option("--url <url>", "helm-web base URL (defaults to https://tryhelm.ai)")
   .option(
     "--env <name>",
@@ -50,7 +50,7 @@ program
 
 program
   .command("scan")
-  .description("Report AI usage from local agent transcripts and sync it to your team")
+  .description("Report local AI usage and sync it to your Helm Web team dashboard")
   .option("--days <n>", "How many days back to scan (default 30)")
   .option("--no-upload", "Print the report without syncing to helm-web")
   .option("--json", "Emit the full summary as JSON")
@@ -99,7 +99,7 @@ program
 
 program
   .command("whoami")
-  .description("Show which account and machine this CLI is connected as")
+  .description("Show which Helm Web account and machine this CLI is linked as")
   .option("--json", "Emit machine-readable JSON (no token is ever printed)")
   .action(async (options: { json?: boolean }) => {
     const { whoamiCommand } = await import("./commands/whoami.js");

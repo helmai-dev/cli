@@ -46,9 +46,10 @@ async function request<T>(
 
   if (useAuth) {
     const credentials = loadCredentials();
-    if (credentials?.api_key) {
-      headers["Authorization"] = `Bearer ${credentials.api_key}`;
+    if (!credentials?.api_key) {
+      throw new WebApiError("Not connected. Run `helm connect` first.", 401);
     }
+    headers["Authorization"] = `Bearer ${credentials.api_key}`;
   }
 
   const response = await fetch(url, { ...options, headers });

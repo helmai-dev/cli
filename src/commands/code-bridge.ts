@@ -29,6 +29,7 @@ import {
   type HelmWebProjectTodoPatch,
   type WorkPackageEventRequest,
 } from "../lib/api-web.js";
+import { accountRequiredRelayError, hasLinkedAccount } from "../lib/account-link.js";
 import {
   getApiUrl,
   loadCredentials,
@@ -459,9 +460,9 @@ export async function handleCodeBridgeRequest(request: CodeBridgeRequest): Promi
 }
 
 export async function codeBridgeCommand(options: CodeBridgeParseOptions = {}): Promise<void> {
-  if (!loadCredentials()?.api_key) {
+  if (!hasLinkedAccount(loadCredentials())) {
     process.stdout.write(
-      `${JSON.stringify({ id: null, ok: false, error: "not connected; run `helm connect` first" })}\n`,
+      `${JSON.stringify({ id: null, ok: false, error: accountRequiredRelayError(getApiUrl()) })}\n`,
     );
     process.exitCode = 1;
     return;
