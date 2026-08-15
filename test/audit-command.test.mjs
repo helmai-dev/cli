@@ -2,7 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { auditSnapshotFromScan } from "../dist/lib/audit-snapshot.js";
-import { formatAuditHuman, formatAuditJson } from "../dist/commands/audit.js";
+import {
+  auditInputsFromOptions,
+  formatAuditHuman,
+  formatAuditJson,
+  parseCount,
+} from "../dist/commands/audit.js";
 
 function stripAnsi(text) {
   return text.replace(/\x1B\[[0-9;]*m/g, "");
@@ -72,6 +77,33 @@ test("human audit prints observed spend, realized cache savings, and a not-compu
   assert.match(text, /duplicate_prompt_count\s+not computed/);
   assert.match(text, /model_routing_opportunity_usd\s+not computed/);
   assert.match(text, /prompt_optimization_savings_usd\s+not computed/);
+  assert.match(text, /shared_context_savings_usd\s+not computed/);
+  assert.doesNotMatch(text, /14%/);
+  assert.doesNotMatch(text, /Unshared replay/);
+});
+
+test("human audit prints a two-person unshared-replay scenario without calling it identified savings", () => {
+  const summary = emptySummary();
+  summary.events = [usageEvent()];
+  summary.totalCostUsd = 12.34;
+  summary.totals = { input: 100, output: 50, cacheWrite: 100, cacheRead: 1e6, sessions: 2 };
+  summary.byProject = [{ project: "helm-cli", costUsd: 12.34, sessions: 2 }];
+
+  const snapshot = auditSnapshotFromScan(summary, 30, {
+    source: "flags",
+    team_count: 1,
+    team_users: 2,
+  });
+  const text = stripAnsi(formatAuditHuman(snapshot));
+
+  assert.match(text, /Team size \(self-reported\)/);
+  assert.match(text, /1 team, 2 users/);
+  assert.match(text, /Unshared replay/);
+  assert.match(text, /other teammate/);
+  assert.match(text, /another \$12\.34/);
+  assert.match(text, /sharing team context/);
+  assert.match(text, /How much they actually avoid is not computed/);
+  assert.match(text, /shared_context_savings_usd\s+not computed/);
   assert.doesNotMatch(text, /14%/);
 });
 
@@ -91,5 +123,26 @@ test("json audit is a non-illustrative snapshot with null identified savings", (
   assert.equal(parsed.not_computed.duplicate_prompt_count, null);
   assert.equal(parsed.not_computed.model_routing_opportunity_usd, null);
   assert.equal(parsed.not_computed.prompt_optimization_savings_usd, null);
+  assert.equal(parsed.not_computed.shared_context_savings_usd, null);
+  assert.equal(parsed.inputs.source, "absent");
+  assert.equal(parsed.scenario, null);
   assert.equal(Object.hasOwn(parsed, "upload"), false);
+});
+
+test("flag parsers accept positive counts and ignore junk", () => {
+  assert.equal(parseCount("8", 10000), 8);
+  assert.equal(parseCount("0", 10000), null);
+  assert.equal(parseCount("-2", 10000), null);
+  assert.equal(parseCount("nope", 10000), null);
+  assert.equal(parseCount(undefined, 10000), null);
+  assert.deepEqual(auditInputsFromOptions({}), {
+    source: "absent",
+    team_count: null,
+    team_users: null,
+  });
+  assert.deepEqual(auditInputsFromOptions({ users: "2", teams: "1" }), {
+    source: "flags",
+    team_count: 1,
+    team_users: 2,
+  });
 });

@@ -46,3 +46,4 @@ jobs:
         run: |
           node dist/index.js --version
           node dist/index.js audit --help
+          node dist/index.js audit --json --no-upload --users 2 --teams 1 --days 1

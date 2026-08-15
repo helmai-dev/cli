@@ -66,10 +66,20 @@ program
   .option("--days <n>", "How many days back to scan (default 30)")
   .option("--no-upload", "Print the report without syncing to helm-web")
   .option("--json", "Emit the audit snapshot as JSON")
-  .action(async (options: { days?: string; upload?: boolean; json?: boolean }) => {
-    const { auditCommand } = await import("./commands/audit.js");
-    await auditCommand(options);
-  });
+  .option("--users <n>", "Self-reported people on the team who use AI coding tools")
+  .option("--teams <n>", "Self-reported team count. Does not multiply the replay scenario")
+  .action(
+    async (options: {
+      days?: string;
+      upload?: boolean;
+      json?: boolean;
+      users?: string;
+      teams?: string;
+    }) => {
+      const { auditCommand } = await import("./commands/audit.js");
+      await auditCommand(options);
+    },
+  );
 
 const hooks = program
   .command("hooks")

@@ -60,7 +60,7 @@ and their output streams back into the Helm canvas.
 | `helm hooks status` | Show each integration, runtime detection, and derived coverage (`--json` for Desktop/automation) |
 | `helm hooks uninstall` | Remove only files and hook entries managed by Helm |
 | `helm scan` | Report local Claude Code and Codex usage and sync it to the team dashboard |
-| `helm audit` | Observed API-equivalent spend from local transcripts, plus realized provider-cache savings. Does not compute identified savings. |
+| `helm audit` | Observed API-equivalent spend from local transcripts, plus realized provider-cache savings. Optional `--users` / `--teams` add an unshared-replay scenario. Does not compute identified savings. |
 | `helm map <project-id> [path]` | Register a local checkout for a project |
 | `helm daemon start` | Start the background agent-runner daemon (`--foreground` runs it in-process for supervisors) |
 | `helm daemon stop` | Stop the daemon |
