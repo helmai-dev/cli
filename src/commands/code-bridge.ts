@@ -11,15 +11,22 @@ import { createInterface } from "node:readline";
 import {
   authorizeHelmWebBroadcast,
   claimWorkPackages,
+  createHelmWebProjectTodo,
+  createHelmWebProjectTodoComment,
   createHelmWebSessionComment,
   createHelmWebProjectMessage,
+  deleteHelmWebProjectTodo,
   fetchHelmWebProjects,
   fetchHelmWebProjectMessages,
   fetchHelmWebProjectSessions,
+  fetchHelmWebProjectTodoComments,
+  fetchHelmWebProjectTodos,
   fetchHelmWebSession,
   reportWorkPackageEvent,
+  updateHelmWebProjectTodo,
   updateHelmWebSessionSidebar,
   type ClaimWorkPackagesRequest,
+  type HelmWebProjectTodoPatch,
   type WorkPackageEventRequest,
 } from "../lib/api-web.js";
 import {
@@ -56,6 +63,25 @@ type CodeBridgeRequest =
       action: "archive" | "unarchive" | "pin" | "unpin" | "reorder_pin";
       pin_order_key?: string | null;
     }
+  | { id: string; op: "list_project_todos"; project_id: string }
+  | {
+      id: string;
+      op: "create_project_todo";
+      project_id: string;
+      title: string;
+      notes?: string | null;
+      doc_path?: string | null;
+    }
+  | {
+      id: string;
+      op: "update_project_todo";
+      project_id: string;
+      todo_id: string;
+      patch: HelmWebProjectTodoPatch;
+    }
+  | { id: string; op: "delete_project_todo"; project_id: string; todo_id: string }
+  | { id: string; op: "list_todo_comments"; project_id: string; todo_id: string }
+  | { id: string; op: "create_todo_comment"; project_id: string; todo_id: string; body: string }
   | { id: string; op: "broadcast_auth"; socket_id: string; channel_name: string }
   | { id: string; op: "claim"; sessions: CodeBridgeOwnedSession[] }
   | {
@@ -96,6 +122,61 @@ export function resolveCodeBridgeReverbConfig(
   throw new Error(
     "Realtime is not configured for this Helm environment. Set HELM_REVERB_HOST and HELM_REVERB_KEY.",
   );
+}
+
+function isId(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
+}
+
+/** Absent, explicitly cleared, or a string within the column's limit. */
+function isOptionalText(value: unknown, maxLength: number): boolean {
+  if (value === undefined || value === null) return true;
+  return typeof value === "string" && value.length <= maxLength;
+}
+
+/**
+ * Only the fields helm-web's todo update route accepts, and only when present.
+ * An absent key means "leave unchanged" there, so an unrecognized key is
+ * dropped rather than forwarded — the route would reject the whole request.
+ */
+export function parseTodoPatch(input: unknown): HelmWebProjectTodoPatch {
+  if (typeof input !== "object" || input === null) throw new Error("patch must be an object");
+  const row = input as Record<string, unknown>;
+  const patch: HelmWebProjectTodoPatch = {};
+  if (row.title !== undefined) {
+    if (typeof row.title !== "string" || row.title.trim() === "" || row.title.length > 255) {
+      throw new Error("patch title must be a non-empty string of at most 255 characters");
+    }
+    patch.title = row.title;
+  }
+  if (row.notes !== undefined) {
+    if (!isOptionalText(row.notes, 10_000)) throw new Error("patch notes must be a string or null");
+    patch.notes = row.notes as string | null;
+  }
+  if (row.doc_path !== undefined) {
+    if (!isOptionalText(row.doc_path, 2_048)) {
+      throw new Error("patch doc_path must be a string or null");
+    }
+    patch.doc_path = row.doc_path as string | null;
+  }
+  if (row.assignee_id !== undefined) {
+    if (row.assignee_id !== null && !isId(row.assignee_id)) {
+      throw new Error("patch assignee_id must be a non-empty string or null");
+    }
+    patch.assignee_id = row.assignee_id as string | null;
+  }
+  if (row.stage !== undefined) {
+    if (row.stage !== "backlog" && row.stage !== "todo") {
+      throw new Error("patch stage must be backlog or todo");
+    }
+    patch.stage = row.stage;
+  }
+  if (row.completed !== undefined) {
+    if (typeof row.completed !== "boolean") throw new Error("patch completed must be a boolean");
+    patch.completed = row.completed;
+  }
+  if (Object.keys(patch).length === 0) throw new Error("patch must change at least one field");
+  return patch;
 }
 
 export function parseCodeBridgeRequest(
@@ -157,6 +238,58 @@ export function parseCodeBridgeRequest(
       session_id: row.session_id,
       action: row.action,
       ...(row.pin_order_key !== undefined ? { pin_order_key: row.pin_order_key } : {}),
+    };
+  }
+  if (row.op === "list_project_todos" && isId(row.project_id)) {
+    return { id: row.id, op: row.op, project_id: row.project_id };
+  }
+  if (
+    row.op === "create_project_todo" &&
+    isId(row.project_id) &&
+    typeof row.title === "string" &&
+    row.title.trim() !== "" &&
+    row.title.length <= 255 &&
+    isOptionalText(row.notes, 10_000) &&
+    isOptionalText(row.doc_path, 2_048)
+  ) {
+    return {
+      id: row.id,
+      op: row.op,
+      project_id: row.project_id,
+      title: row.title,
+      ...(row.notes !== undefined ? { notes: row.notes as string | null } : {}),
+      ...(row.doc_path !== undefined ? { doc_path: row.doc_path as string | null } : {}),
+    };
+  }
+  if (row.op === "update_project_todo" && isId(row.project_id) && isId(row.todo_id)) {
+    return {
+      id: row.id,
+      op: row.op,
+      project_id: row.project_id,
+      todo_id: row.todo_id,
+      patch: parseTodoPatch(row.patch),
+    };
+  }
+  if (row.op === "delete_project_todo" && isId(row.project_id) && isId(row.todo_id)) {
+    return { id: row.id, op: row.op, project_id: row.project_id, todo_id: row.todo_id };
+  }
+  if (row.op === "list_todo_comments" && isId(row.project_id) && isId(row.todo_id)) {
+    return { id: row.id, op: row.op, project_id: row.project_id, todo_id: row.todo_id };
+  }
+  if (
+    row.op === "create_todo_comment" &&
+    isId(row.project_id) &&
+    isId(row.todo_id) &&
+    typeof row.body === "string" &&
+    row.body.trim() !== "" &&
+    row.body.length <= 10_000
+  ) {
+    return {
+      id: row.id,
+      op: row.op,
+      project_id: row.project_id,
+      todo_id: row.todo_id,
+      body: row.body,
     };
   }
   if (
@@ -284,6 +417,29 @@ export async function handleCodeBridgeRequest(request: CodeBridgeRequest): Promi
       action: request.action,
       ...(request.pin_order_key !== undefined ? { pin_order_key: request.pin_order_key } : {}),
     });
+  }
+  if (request.op === "list_project_todos") {
+    return { todos: await fetchHelmWebProjectTodos(request.project_id) };
+  }
+  if (request.op === "create_project_todo") {
+    return createHelmWebProjectTodo(request.project_id, {
+      title: request.title,
+      ...(request.notes !== undefined ? { notes: request.notes } : {}),
+      ...(request.doc_path !== undefined ? { doc_path: request.doc_path } : {}),
+    });
+  }
+  if (request.op === "update_project_todo") {
+    return updateHelmWebProjectTodo(request.project_id, request.todo_id, request.patch);
+  }
+  if (request.op === "delete_project_todo") {
+    await deleteHelmWebProjectTodo(request.project_id, request.todo_id);
+    return { deleted: true };
+  }
+  if (request.op === "list_todo_comments") {
+    return { comments: await fetchHelmWebProjectTodoComments(request.project_id, request.todo_id) };
+  }
+  if (request.op === "create_todo_comment") {
+    return createHelmWebProjectTodoComment(request.project_id, request.todo_id, request.body);
   }
   if (request.op === "session") return fetchHelmWebSession(request.session_id);
 

@@ -4,6 +4,7 @@ import {
   buildInboundClaimRequest,
   buildInboundWorkEventRequest,
   parseCodeBridgeRequest,
+  parseTodoPatch,
   resolveCodeBridgeReverbConfig,
 } from "../dist/commands/code-bridge.js";
 
@@ -191,4 +192,82 @@ test("custom environments require explicit public Reverb coordinates", () => {
     () => resolveCodeBridgeReverbConfig("http://127.0.0.1:8000", {}),
     /Realtime is not configured/,
   );
+});
+
+test("code bridge scopes every todo write to one project and one todo", () => {
+  assert.deepEqual(parseCodeBridgeRequest({ id: "t1", op: "list_project_todos", project_id: "p1" }), {
+    id: "t1",
+    op: "list_project_todos",
+    project_id: "p1",
+  });
+  assert.deepEqual(
+    parseCodeBridgeRequest({
+      id: "t2",
+      op: "create_project_todo",
+      project_id: "p1",
+      title: "Ship the tasks surface",
+      notes: null,
+    }),
+    { id: "t2", op: "create_project_todo", project_id: "p1", title: "Ship the tasks surface", notes: null },
+  );
+  // An absent optional stays absent rather than becoming an explicit null,
+  // which helm-web would read as "clear this column".
+  assert.deepEqual(
+    parseCodeBridgeRequest({ id: "t3", op: "create_project_todo", project_id: "p1", title: "Bare" }),
+    { id: "t3", op: "create_project_todo", project_id: "p1", title: "Bare" },
+  );
+  assert.throws(
+    () => parseCodeBridgeRequest({ id: "t4", op: "create_project_todo", project_id: "", title: "No project" }),
+    /unsupported/,
+  );
+  assert.throws(
+    () => parseCodeBridgeRequest({ id: "t5", op: "create_project_todo", project_id: "p1", title: "  " }),
+    /unsupported/,
+  );
+  assert.throws(
+    () => parseCodeBridgeRequest({ id: "t6", op: "delete_project_todo", project_id: "p1" }),
+    /unsupported/,
+  );
+});
+
+test("code bridge forwards only the todo fields helm-web accepts", () => {
+  assert.deepEqual(
+    parseCodeBridgeRequest({
+      id: "p1",
+      op: "update_project_todo",
+      project_id: "p1",
+      todo_id: "todo-1",
+      patch: { completed: true, stage: "todo" },
+    }),
+    {
+      id: "p1",
+      op: "update_project_todo",
+      project_id: "p1",
+      todo_id: "todo-1",
+      patch: { completed: true, stage: "todo" },
+    },
+  );
+  // Unknown keys are dropped, not forwarded: helm-web's validator rejects the
+  // whole request when it sees a field the route does not declare.
+  assert.deepEqual(parseTodoPatch({ completed: false, review_status: "approved" }), {
+    completed: false,
+  });
+  assert.throws(() => parseTodoPatch({}), /at least one field/);
+  assert.throws(() => parseTodoPatch({ stage: "in_progress" }), /backlog or todo/);
+  assert.throws(() => parseTodoPatch({ completed: "yes" }), /boolean/);
+  assert.throws(() => parseTodoPatch({ title: "" }), /non-empty/);
+});
+
+test("code bridge bounds todo comment bodies like session comments", () => {
+  const request = {
+    id: "c1",
+    op: "create_todo_comment",
+    project_id: "p1",
+    todo_id: "todo-1",
+    body: "Picked this up.",
+  };
+  assert.deepEqual(parseCodeBridgeRequest(request), request);
+  assert.throws(() => parseCodeBridgeRequest({ ...request, body: "  " }), /unsupported/);
+  assert.throws(() => parseCodeBridgeRequest({ ...request, body: "x".repeat(10_001) }), /unsupported/);
+  assert.throws(() => parseCodeBridgeRequest({ ...request, todo_id: "" }), /unsupported/);
 });

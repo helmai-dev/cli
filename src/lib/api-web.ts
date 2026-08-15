@@ -228,6 +228,124 @@ export async function createHelmWebProjectMessage(
   return response.data;
 }
 
+export interface HelmWebProjectTodoLabel {
+  id: string;
+  project_id: string;
+  name: string;
+  color: string | null;
+}
+
+export interface HelmWebProjectTodo {
+  id: string;
+  project_id: string;
+  user_id: string | null;
+  user_name: string;
+  title: string;
+  notes: string | null;
+  completed_at: string | null;
+  completed_by: string | null;
+  completed_by_name: string | null;
+  assignee_id: string | null;
+  assignee_name: string | null;
+  doc_path: string | null;
+  stage: string;
+  reviewer_id: string | null;
+  reviewer_name: string | null;
+  review_status: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  comment_count: number;
+  labels: HelmWebProjectTodoLabel[];
+  created_at: string | null;
+}
+
+export interface HelmWebProjectTodoComment {
+  id: string;
+  project_todo_id: string;
+  project_id: string;
+  user_id: string | null;
+  user_name: string;
+  body: string;
+  created_at: string | null;
+}
+
+export interface HelmWebProjectTodoInput {
+  title: string;
+  notes?: string | null;
+  assignee_id?: string | null;
+  doc_path?: string | null;
+}
+
+export interface HelmWebProjectTodoPatch {
+  title?: string;
+  notes?: string | null;
+  assignee_id?: string | null;
+  doc_path?: string | null;
+  stage?: "backlog" | "todo";
+  completed?: boolean;
+}
+
+export async function fetchHelmWebProjectTodos(projectId: string): Promise<HelmWebProjectTodo[]> {
+  const response = await request<{ data: HelmWebProjectTodo[] }>(
+    `/projects/${encodeURIComponent(projectId)}/todos`,
+    { method: "GET" },
+  );
+  return response.data;
+}
+
+export async function createHelmWebProjectTodo(
+  projectId: string,
+  input: HelmWebProjectTodoInput,
+): Promise<HelmWebProjectTodo> {
+  const response = await request<{ data: HelmWebProjectTodo }>(
+    `/projects/${encodeURIComponent(projectId)}/todos`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+  return response.data;
+}
+
+export async function updateHelmWebProjectTodo(
+  projectId: string,
+  todoId: string,
+  patch: HelmWebProjectTodoPatch,
+): Promise<HelmWebProjectTodo> {
+  const response = await request<{ data: HelmWebProjectTodo }>(
+    `/projects/${encodeURIComponent(projectId)}/todos/${encodeURIComponent(todoId)}`,
+    { method: "PATCH", body: JSON.stringify(patch) },
+  );
+  return response.data;
+}
+
+export async function deleteHelmWebProjectTodo(projectId: string, todoId: string): Promise<void> {
+  await request<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/todos/${encodeURIComponent(todoId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function fetchHelmWebProjectTodoComments(
+  projectId: string,
+  todoId: string,
+): Promise<HelmWebProjectTodoComment[]> {
+  const response = await request<{ data: HelmWebProjectTodoComment[] }>(
+    `/projects/${encodeURIComponent(projectId)}/todos/${encodeURIComponent(todoId)}/comments`,
+    { method: "GET" },
+  );
+  return response.data;
+}
+
+export async function createHelmWebProjectTodoComment(
+  projectId: string,
+  todoId: string,
+  body: string,
+): Promise<HelmWebProjectTodoComment> {
+  const response = await request<{ data: HelmWebProjectTodoComment }>(
+    `/projects/${encodeURIComponent(projectId)}/todos/${encodeURIComponent(todoId)}/comments`,
+    { method: "POST", body: JSON.stringify({ body }) },
+  );
+  return response.data;
+}
+
 export interface AmbientLearningCandidateRequest {
   client_event_id: string;
   session_id: string;
