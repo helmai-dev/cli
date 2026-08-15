@@ -15,6 +15,7 @@ Included.
 - Human and `--json` output that labels observed vs not computed.
 - README and `--help` copy that refuse the 14% marketing number.
 - An empty-transcript path that points at https://tryhelm.ai for a sales request.
+- Optional self-reported `--users` / `--teams` and an unshared-replay scenario. Shared-context savings stay null.
 
 Excluded.
 
@@ -53,8 +54,9 @@ Implementers should use poteto-mode Feature, the how skill on `scanCommand` befo
 2. [Register `helm audit` and print the snapshot](phase-2-audit-command.md)
 3. [Empty transcripts and README](phase-3-empty-state-and-readme.md)
 4. [Optional team rollup read](phase-4-team-rollup.md)
+5. [Self-reported team size and unshared replay](phase-5-team-inputs.md)
 
-Phase 4 is optional. Stop after phase 3 unless someone needs the team-wide view in the terminal. Web already exposes `GET /api/teams/{team}/usage`.
+Phase 4 is still optional. Phase 5 is the way to take team and user counts from the lead without inventing identified savings.
 
 ## Verification
 

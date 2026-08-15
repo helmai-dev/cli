@@ -2,7 +2,7 @@
 
 This is an explanation of a product gap. It is not a how-to and not a command reference.
 
-`helm audit` now exists. It reprints observed spend from the scan pipeline, adds realized provider-cache savings from `modelRates`, and leaves identified-savings fields null. The landing-page tiles are still not computed.
+`helm audit` now exists. It reprints observed spend from the scan pipeline, adds realized provider-cache savings from `modelRates`, and leaves identified-savings fields null. Optional `--users` / `--teams` record self-reported team size and print an unshared-replay ceiling. That ceiling is not identified savings. The landing-page tiles are still not computed.
 
 The tryhelm.ai homepage promises an AI spend audit. This note records what that page claims, what helmai-dev/cli can do after install, what Helm Web and the two desktop apps actually compute, and the smallest honest CLI follow-up. Every claim points at a file and a symbol, or at a GitHub PR. Numbers that are not computed in code are named as absent.
 
