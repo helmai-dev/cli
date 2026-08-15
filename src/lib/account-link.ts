@@ -76,6 +76,8 @@ export function accountRequiredRelayError(apiUrl: string): string {
  * `--no-upload` is an explicit local diagnostic and does not talk to helm-web.
  * `--quiet` is the session-end hook: fail open so a missing account never
  * breaks a coding-agent session.
+ *
+ * `helm audit` is a separate local report. It never uses this gate.
  */
 export function decideScanAuth(input: {
   linked: boolean;
