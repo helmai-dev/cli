@@ -44,6 +44,9 @@ and a Sanctum token is stored under `~/.helm` (chmod 600). The token is
 never printed.
 
 ```bash
+# Local spend report from transcripts on this machine. No account required.
+helm audit
+
 # Interactive setup: link the account, install coding-agent integrations, and scan usage.
 helm setup
 
@@ -63,11 +66,13 @@ helm daemon start
 helm daemon install
 ```
 
-Commands that talk to Helm Web, or that sync team usage, refuse until the
-CLI is linked. They print the register/login URLs and `helm connect` as
-the next step. `helm scan --no-upload` still prints a local report without
-an account. Session-end `helm scan --quiet` fails open so a missing
-account never breaks a coding-agent session.
+`helm audit` is local. It reads Claude Code and Codex transcripts on this
+machine and does not need a Helm Web account. Commands that talk to Helm
+Web, or that sync team usage (`helm scan`, `helm map`, `helm daemon start`),
+refuse until the CLI is linked. They print the register/login URLs and
+`helm connect` as the next step. `helm scan --no-upload` still prints a
+local report without an account. Session-end `helm scan --quiet` fails
+open so a missing account never breaks a coding-agent session.
 
 The machine now appears in Helm's "Run agents on" picker for you and your
 teammates. Queued agent starts are claimed within seconds, run locally,
@@ -84,6 +89,7 @@ and their output streams back into the Helm canvas.
 | `helm hooks status` | Show each integration, runtime detection, and derived coverage (`--json` for Desktop/automation) |
 | `helm hooks uninstall` | Remove only files and hook entries managed by Helm |
 | `helm scan` | Report local Claude Code and Codex usage and sync it to the team dashboard (requires a linked account) |
+| `helm audit` | Observed API-equivalent spend from local transcripts. No account required. Does not compute identified savings. |
 | `helm map <project-id> [path]` | Register a local checkout for a project |
 | `helm daemon start` | Start the background agent-runner daemon (`--foreground` runs it in-process for supervisors) |
 | `helm daemon stop` | Stop the daemon |
