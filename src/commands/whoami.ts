@@ -9,6 +9,7 @@
  * the secret.
  */
 
+import { accountRequiredMessage, hasLinkedAccount } from "../lib/account-link.js";
 import { getActiveEnvironment, getApiUrl, loadCredentials, loadMachineIdentity } from "../lib/config.js";
 
 export interface WhoamiReport {
@@ -23,13 +24,13 @@ export interface WhoamiReport {
 
 /** Pure assembly, exported for tests. */
 export function buildWhoamiReport(input: {
-  credentials: { user_id?: string } | null;
+  credentials: { user_id?: string; api_key?: string } | null;
   machine: { ulid?: string; name?: string; fingerprint?: string } | null;
   apiUrl: string;
   environment: string;
 }): WhoamiReport {
   return {
-    connected: input.credentials !== null,
+    connected: hasLinkedAccount(input.credentials),
     api_url: input.apiUrl,
     environment: input.environment,
     user_id: input.credentials?.user_id ?? null,
@@ -54,7 +55,7 @@ export async function whoamiCommand(options: { json?: boolean }): Promise<void> 
   }
 
   if (!report.connected) {
-    console.log("Not connected. Run `helm connect` to link this machine.");
+    console.log(accountRequiredMessage(report.api_url));
     process.exitCode = 1;
     return;
   }

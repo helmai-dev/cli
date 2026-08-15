@@ -1,13 +1,15 @@
 /**
- * `helm connect` — attach this machine to a helm-web backend as a headless
- * agent runner. Device-code auth (approve in any browser, poll for the
+ * `helm connect` — link this CLI to a Helm Web account. Device-code auth
+ * (create/sign in on tryhelm.ai, approve in any browser, poll for the
  * token), then a first heartbeat so the device shows up in run-target
- * pickers immediately.
+ * pickers immediately. Desktop deep-link (`/auth/desktop`) is for Helm
+ * Code/Desktop, not this command.
  */
 
 import * as os from "node:os";
 import chalk from "chalk";
 import open from "open";
+import { accountUrls } from "../lib/account-link.js";
 import {
   fetchAuthenticatedUser,
   heartbeatDevice,
@@ -115,8 +117,11 @@ export async function connectCommand(options: ConnectOptions): Promise<void> {
   setActiveEnvironment(envName);
 
   const deviceName = os.hostname();
+  const { registerUrl } = accountUrls(url);
   if (!options.json) {
     console.log(`Connecting ${chalk.bold(deviceName)} to ${chalk.cyan(url)} ...`);
+    console.log(chalk.gray("  Approve in the browser while signed in to Helm Web."));
+    console.log(chalk.gray(`  No account yet? ${registerUrl}`));
   }
 
   let start: Awaited<ReturnType<typeof startDeviceAuth>>;
@@ -138,7 +143,7 @@ export async function connectCommand(options: ConnectOptions): Promise<void> {
     emitJson(buildConnectVerificationEvent(start));
   } else {
     console.log("");
-    console.log(`  1. Open this link in your browser (sign in if asked):`);
+    console.log(`  1. Open this link in your browser (create an account or sign in if asked):`);
     console.log(`     ${chalk.cyan(start.verification_uri_complete)}`);
     console.log(`  2. Approve the device. Code: ${chalk.bold(start.user_code)}`);
     console.log("");

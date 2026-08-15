@@ -82,6 +82,13 @@ export function usageCostUsd(
   );
 }
 
+/** Dollars already avoided because cache-read tokens billed at 0.1x input
+ * instead of the full input rate. Sum per event. Totals lose model rates. */
+export function providerCacheSavingsUsd(model: string, cacheReadTokens: number): number {
+  const [inRate] = modelRates(model);
+  return (cacheReadTokens * inRate * 0.9) / 1e6;
+}
+
 /** Decode Claude Code's project dir name (the cwd with / replaced by -) into
  * a short human hint. Best-effort: strip the home prefix and Code segment. */
 export function projectHintFromDir(dirName: string): string {

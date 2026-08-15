@@ -29,7 +29,7 @@ program
 
 program
   .command("connect")
-  .description("Connect this machine to a helm-web backend as an agent runner")
+  .description("Link this CLI to a Helm Web account (device-code auth)")
   .option("--url <url>", "helm-web base URL (defaults to https://tryhelm.ai)")
   .option(
     "--env <name>",
@@ -50,7 +50,7 @@ program
 
 program
   .command("scan")
-  .description("Report AI usage from local agent transcripts and sync it to your team")
+  .description("Report local AI usage and sync it to your Helm Web team dashboard")
   .option("--days <n>", "How many days back to scan (default 30)")
   .option("--no-upload", "Print the report without syncing to helm-web")
   .option("--json", "Emit the full summary as JSON")
@@ -59,6 +59,27 @@ program
     const { scanCommand } = await import("./commands/scan.js");
     await scanCommand(options);
   });
+
+program
+  .command("audit")
+  .description("Print observed AI spend from local transcripts. Does not require a Helm Web account.")
+  .option("--days <n>", "How many days back to scan (default 30)")
+  .option("--no-upload", "Skip syncing even if this CLI is already linked")
+  .option("--json", "Emit the audit snapshot as JSON")
+  .option("--users <n>", "Self-reported people on the team who use AI coding tools")
+  .option("--teams <n>", "Self-reported team count. Does not multiply the replay scenario")
+  .action(
+    async (options: {
+      days?: string;
+      upload?: boolean;
+      json?: boolean;
+      users?: string;
+      teams?: string;
+    }) => {
+      const { auditCommand } = await import("./commands/audit.js");
+      await auditCommand(options);
+    },
+  );
 
 const hooks = program
   .command("hooks")
@@ -99,7 +120,7 @@ program
 
 program
   .command("whoami")
-  .description("Show which account and machine this CLI is connected as")
+  .description("Show which Helm Web account and machine this CLI is linked as")
   .option("--json", "Emit machine-readable JSON (no token is ever printed)")
   .action(async (options: { json?: boolean }) => {
     const { whoamiCommand } = await import("./commands/whoami.js");

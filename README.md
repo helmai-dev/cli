@@ -8,8 +8,9 @@ team: agent sessions started from the Helm desktop app (or the web) are
 queued to this machine's daemon, executed here with Claude Code or Codex,
 and streamed back live.
 
-The [Helm desktop app](https://tryhelm.ai) is the product. This CLI is the
-headless runner for machines that don't need the full app.
+Helm Web ([tryhelm.ai](https://tryhelm.ai)) owns the account, team, and
+persisted usage. This CLI is the local layer: it links to that account,
+reads transcripts on this machine, and runs queued agent work.
 
 ## Installation
 
@@ -32,9 +33,28 @@ Also works with `pnpm add -g @helmai/cli` and `bun add -g @helmai/cli`.
 
 ## Getting started
 
+Create a Helm Web account first (or sign in if you already have one):
+
+- Register: https://tryhelm.ai/auth/register
+- Sign in: https://tryhelm.ai/auth/login
+
+Then link this CLI to that account. `helm connect` starts the existing
+device-code flow: it opens `/auth/device`, you approve while signed in,
+and a Sanctum token is stored under `~/.helm` (chmod 600). The token is
+never printed.
+
 ```bash
-# Interactive setup: connect, install coding-agent integrations, and scan usage.
+# Local spend report from transcripts on this machine. No account required.
+helm audit
+
+# Interactive setup: link the account, install coding-agent integrations, and scan usage.
 helm setup
+
+# Or link this machine on its own
+helm connect
+
+# Confirm the link (never prints a token)
+helm whoami
 
 # Register local checkouts for projects this machine should run
 helm map <project-id> ~/code/my-project
@@ -46,6 +66,14 @@ helm daemon start
 helm daemon install
 ```
 
+`helm audit` is local. It reads Claude Code and Codex transcripts on this
+machine and does not need a Helm Web account. Commands that talk to Helm
+Web, or that sync team usage (`helm scan`, `helm map`, `helm daemon start`),
+refuse until the CLI is linked. They print the register/login URLs and
+`helm connect` as the next step. `helm scan --no-upload` still prints a
+local report without an account. Session-end `helm scan --quiet` fails
+open so a missing account never breaks a coding-agent session.
+
 The machine now appears in Helm's "Run agents on" picker for you and your
 teammates. Queued agent starts are claimed within seconds, run locally,
 and their output streams back into the Helm canvas.
@@ -54,12 +82,14 @@ and their output streams back into the Helm canvas.
 
 | Command | Description |
 |---|---|
-| `helm setup` | Connect, enable team context in supported coding agents, and run the first usage scan |
-| `helm connect` | Connect this machine to a helm-web backend (device-code auth) |
+| `helm setup` | Link the Helm Web account, enable team context in supported coding agents, and run the first usage scan |
+| `helm connect` | Link this CLI to a Helm Web account (device-code auth) |
+| `helm whoami` | Show which account and machine this CLI is linked as (never prints a token) |
 | `helm hooks install` | Install fail-open team-context integrations for supported local coding agents |
 | `helm hooks status` | Show each integration, runtime detection, and derived coverage (`--json` for Desktop/automation) |
 | `helm hooks uninstall` | Remove only files and hook entries managed by Helm |
-| `helm scan` | Report local Claude Code and Codex usage and sync it to the team dashboard |
+| `helm scan` | Report local Claude Code and Codex usage and sync it to the team dashboard (requires a linked account) |
+| `helm audit` | Observed API-equivalent spend from local transcripts. No account required. Does not compute identified savings. |
 | `helm map <project-id> [path]` | Register a local checkout for a project |
 | `helm daemon start` | Start the background agent-runner daemon (`--foreground` runs it in-process for supervisors) |
 | `helm daemon stop` | Stop the daemon |

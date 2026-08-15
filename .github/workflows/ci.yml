@@ -43,4 +43,7 @@ jobs:
       # The published entry point must actually run. `--version` is the
       # cheapest end-to-end check that the built bin is not broken.
       - name: Smoke-test the built CLI
-        run: node dist/index.js --version
+        run: |
+          node dist/index.js --version
+          node dist/index.js audit --help
+          node dist/index.js audit --json --no-upload --users 2 --teams 1 --days 1

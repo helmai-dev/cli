@@ -1,11 +1,14 @@
 import chalk from 'chalk';
 import { spawn } from 'child_process';
 import * as fs from 'fs';
+import { accountRequiredMessage, hasLinkedAccount } from '../lib/account-link.js';
 import {
     ensureHelmDir,
+    getApiUrl,
     getDaemonLockPath,
     getDaemonLogPath,
     getDaemonPidPath,
+    loadCredentials,
     loadDaemonStatus,
     loadMachineIdentity,
     rotateDaemonLogIfNeeded,
@@ -164,6 +167,10 @@ export async function startDaemon(): Promise<{ started: boolean; alreadyRunning:
     }
 
     try {
+        if (!hasLinkedAccount(loadCredentials())) {
+            return { started: false, alreadyRunning: false, reason: 'No linked Helm Web account — run `helm connect` first.' };
+        }
+
         const machine = loadMachineIdentity();
         if (!machine) {
             return { started: false, alreadyRunning: false, reason: 'No machine identity — run `helm connect` first.' };
@@ -214,6 +221,11 @@ export async function startDaemon(): Promise<{ started: boolean; alreadyRunning:
 }
 
 export async function daemonStartCommand(options: { foreground?: boolean } = {}): Promise<void> {
+    if (!hasLinkedAccount(loadCredentials())) {
+        console.error(accountRequiredMessage(getApiUrl()));
+        process.exit(1);
+    }
+
     const machine = loadMachineIdentity();
 
     if (!machine) {
