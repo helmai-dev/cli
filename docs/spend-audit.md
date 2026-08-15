@@ -109,11 +109,15 @@ No CLI symbol computes identified savings, waste rate, duplicate prompt count, o
 
 ### What Helm Desktop and Helm Code compute
 
-Helm Desktop is the Electron app at the desktop repo root. `electron-builder.yml` sets `appId` to `ai.tryhelm.desktop`. `package.json` describes it as multiplayer AI orchestration. It talks to the same helm-web API the CLI uses.
+Helm Desktop is the Electron app at the desktop repo root. `electron-builder.yml` sets `appId` to `ai.tryhelm.desktop`. First-run onboarding shells out to `helm scan --json --days 30` from `src/main/helmCli.ts`. Desktop does not scan transcripts itself. Live session meters come from Claude and Codex runtimes (`AgentUsageEvent` in `src/contracts/events.ts`). `cachedInputPercent` is provider cache-read share. `GET /api/projects/{id}/usage` fills the project usage node.
 
-Helm Code lives under `t3/`. `t3/apps/desktop/package.json` sets `productName` to "Helm Code". The CLI hidden command `code-bridge` serves token-blind reads for a local Helm Code process. `src/index.ts` documents that.
+Helm Code lives under `t3/`. `t3/scripts/build-desktop-artifact.ts` sets `DESKTOP_APP_ID` to `ai.tryhelm.code`. `t3/apps/desktop/package.json` sets `productName` to "Helm Code". The CLI hidden command `code-bridge` serves token-blind reads for a local Helm Code process.
 
-Desktop and Code can show or relay usage that web already stores. This investigation did not find a desktop or `t3/` module that computes identified savings, semantic prompt dedup, or a waste rate. Tool-call "audit" routes on web are agent-tool audit logs. They are not a spend audit.
+Code has its own local scanner. `t3/apps/server/src/usage/UsageService.ts` walks the same Claude and Codex JSONL trees. It prices buckets with LiteLLM rates in `usagePricing.ts`. `cacheSavingsUsd` is `cachedInputTokens * (inputRate - cacheReadRate)`. That is a rate-table counterfactual against full input prices. The `/usage` page labels it as raw token cost if billed at full API rate. Transcripts stay on the machine. Code does not upload to helm-web.
+
+`docs/spend-wedge-pivot.md` (2026-08-05) says the spend path belongs in helm-cli and helm-web. Desktop stays out of the MVP except later onboarding. That matches what shipped. Desktop invokes the CLI. Code keeps a richer local UI that the CLI does not call.
+
+Neither app computes landing-page identified savings, semantic prompt dedup, prompt rewrite, or a waste rate. Code `promptStashStore.ts` is a 20-entry local composer queue. Desktop `contextBudget.ts` has an `audit` mode that estimates compression ratios and does not compress. Tool-call "audit" routes on web are agent-tool logs. They are not a spend audit.
 
 ### The gap that makes the CTA a lie for a CLI install
 
@@ -131,17 +135,17 @@ If they expect intercept, reuse, or a 14% waste number from the CLI, the product
 
 2. **What the CLI can do.** Daemon, hooks, inject, observe, learn, and `helm scan` observed spend. No audit command. No `helm run`. No savings math. Cited from `src/index.ts` and `src/commands/scan.ts`.
 
-3. **What Code, Desktop, and Web can do for spend.** Ingest and roll up observed tokens and API-equivalent cost. Show cache-read share. Relay session usage. No computed savings. Cited from `TeamUsageRollup`, `UsageEventsController`, `/usage`, and `ProjectUsageController`.
+3. **What Code, Desktop, and Web can do for spend.** Web stores and rolls up CLI-priced rows. Desktop invokes `helm scan` and shows live session tokens plus project usage. Code scans the same local logs and computes `cacheSavingsUsd` as a provider-cache counterfactual. None of them compute duplicate-prompt or model-routing savings. Cited from `TeamUsageRollup`, `helmCli.ts` `runFirstScan`, and `t3/.../usagePricing.ts` `cacheSavingsUsd`.
 
 4. **The CLI lie.** The CTA words do not match a command. The demo command does not exist. Savings tiles have no implementation. Scan is the real number. The command name does not say audit.
 
 5. **Smallest honest CLI add.** Name `AuditSnapshot` first. Add `helm audit` as a thin wrapper around the existing scan pipeline. Print observed spend and `cache_read_share`. Print savings fields as `null` with the label "not computed". Keep 14% out of the product. Web and desktop do not need new endpoints for this. See `docs/spend-audit-plan/overview.md`.
 
-6. **What desktop and web should add only if the CLI path depends on it.** Phase 1 depends on nothing new. A later team-wide print can call the existing `GET /api/teams/{team}/usage`. Do not add a savings API until something actually computes savings. Leave the lead form as the sales path for people with no local logs.
+6. **What desktop and web should add only if the CLI path depends on it.** Phase 1 depends on nothing new. Desktop already calls `helm scan`. Code already has a local `/usage` page. A later team-wide print can call the existing `GET /api/teams/{team}/usage`. Do not add a savings API. Do not port Code's LiteLLM scanner into the CLI. Leave the lead form as the sales path for people with no local logs.
 
 ## Recommendation
 
-Josh's hypothesis is half right. The CLI should make the audit easy. The snapshot that exists is observed spend, not cost-savings. Web already stores and rolls up that spend. The CLI should wrap local traces first. It should not pretend to request a computed audit from a server that cannot compute one.
+Josh's hypothesis is half right. The CLI should make the audit easy. The snapshot that exists is observed spend, not landing-page cost-savings. Web already stores and rolls up that spend. Helm Code already prices the same logs locally and should stay a UI, not the CLI implementation. The CLI should wrap `helm scan` first. It should not port `UsageService` and it should not ask a server for savings that server cannot compute.
 
 Do not build `helm run`. Do not build semantic dedup. Do not default waste to 14%. Do not print identified savings until a real detector exists.
 
@@ -152,6 +156,8 @@ Direct evidence only.
 PR #8 (helmai-dev/web, Josh Cirre, merged 2026-08-15) says the homepage follows Ben's marketing hierarchy. Illustrative numbers stay labeled illustrative. Audit CTAs open a Livewire modal. Submissions go to `leads` and email. Authenticated visitors redirect to Usage.
 
 Commit `0a97ae1` on this repo added `helm scan` as a local transcript spend report that uploads aggregates to `POST /api/usage/events`.
+
+helmai-dev/desktop `docs/spend-wedge-pivot.md` (2026-08-05) says spend lives in helm-cli and helm-web. Desktop is untouched by that MVP except later onboarding. Helm Code is scoped as UI in `docs/t3code-fork-scoping.md`.
 
 Linear in this environment is a Laravel workspace. Slack public search returned Cross Church channels. Neither is a Helm decision record. No Helm ticket was found that specifies a CLI audit command.
 
@@ -167,6 +173,10 @@ Scan prices are estimates. The `/usage` page says "if billed at full API rates".
 
 Empty scan copy mentions only Claude Code even though Codex is also scanned. `printSummary` in `src/commands/scan.ts` says "No Claude Code activity found in this window."
 
+Helm Code `cacheSavingsUsd` is real math on provider cache rates. It is not identified savings. Do not copy it into `not_computed` as a filled field and do not rename it.
+
+SessionEnd hooks on Cursor, Gemini, and others still run `helm scan --days 2 --quiet`. That scan only reads Claude and Codex trees.
+
 ## Where things live
 
 | Path | Role |
@@ -180,7 +190,11 @@ Empty scan copy mentions only Claude Code even though Codex is also scanned. `pr
 | helmai-dev/web `CreateLead::handle` | Sales form |
 | helmai-dev/web `TeamUsageRollup::build` | Team spend rollup |
 | helmai-dev/web `⚡usage.blade.php` | Team dashboard |
-| helmai-dev/desktop `electron-builder.yml` | Helm Desktop appId |
-| helmai-dev/desktop `t3/apps/desktop/package.json` | Helm Code product name |
+| helmai-dev/desktop `electron-builder.yml` | Helm Desktop appId `ai.tryhelm.desktop` |
+| helmai-dev/desktop `src/main/helmCli.ts` `runFirstScan` | Desktop invokes `helm scan --json` |
+| helmai-dev/desktop `t3/scripts/build-desktop-artifact.ts` | Helm Code appId `ai.tryhelm.code` |
+| helmai-dev/desktop `t3/apps/server/src/usage/UsageService.ts` | Code local scanner |
+| helmai-dev/desktop `t3/apps/server/src/usage/usagePricing.ts` `cacheSavingsUsd` | Provider-cache counterfactual |
+| helmai-dev/desktop `docs/spend-wedge-pivot.md` | Spend belongs in cli + web |
 
 Follow-up work is in `docs/spend-audit-plan/overview.md`.

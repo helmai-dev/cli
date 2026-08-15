@@ -39,6 +39,8 @@ Phase 1 must work offline from local transcripts. Upload stays optional, same as
 
 **C. `helm audit` only opens the lead form.** Honest for people with no logs. A lie for people who already have Claude Code history on disk.
 
+**D. Port Helm Code `UsageService` into the CLI.** Code already prices the same logs with LiteLLM and `cacheSavingsUsd`. That is a second scanner. The pivot doc puts spend on cli + web. Desktop already calls `helm scan`. Do not port it.
+
 A is the choice. Empty-state copy from C can sit inside A without becoming the happy path.
 
 ## Applicable skills
@@ -86,4 +88,6 @@ Do not compute or display identified savings.
 Do not default waste to 14% or any other marketing rate.
 Do not add a web `/audit` endpoint that returns illustrative tiles.
 Do not ask desktop or Helm Code to grow a savings engine for this CLI path.
+Do not port `t3/apps/server/src/usage/UsageService.ts` or LiteLLM into this repo.
+Do not rename Code `cacheSavingsUsd` to identified savings.
 Do not change the landing-page lead form from this repo.

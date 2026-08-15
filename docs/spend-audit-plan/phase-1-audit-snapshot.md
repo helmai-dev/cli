@@ -42,6 +42,8 @@ AuditSnapshot {
 
 `cache_read_share` is the only derived number. It is provider prompt-cache share, not Helm smart-cache savings. The printer in phase 2 must say that.
 
+Do not add `cache_savings_usd` in this phase. Helm Code already computes that counterfactual in `usagePricing.ts`. Filling a dollar "savings" field here would read as identified savings. Keep dollars in `observed.totalCostUsd` only.
+
 ## Verification
 
 Static. `npm test` includes the new file.
