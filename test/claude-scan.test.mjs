@@ -5,6 +5,7 @@ import {
   UsageAggregator,
   modelRates,
   projectHintFromDir,
+  providerCacheSavingsUsd,
   usageCostUsd,
 } from "../dist/lib/claude-scan.js";
 
@@ -94,6 +95,8 @@ test("pricing: rates and cost math", () => {
     input: 1e6, output: 1e6, cacheW: 1e6, cacheR: 1e6,
   });
   assert.equal(cost, 73.5);
+  // Cache reads already bill at 0.1x input, so the avoided amount is 0.9x.
+  assert.equal(providerCacheSavingsUsd("claude-fable-5", 1e6), 9);
 });
 
 test("project hint decoding strips home + Code prefix", () => {
