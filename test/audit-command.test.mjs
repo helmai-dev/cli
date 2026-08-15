@@ -7,6 +7,7 @@ import {
   formatAuditHuman,
   formatAuditJson,
   parseCount,
+  shouldUploadAudit,
 } from "../dist/commands/audit.js";
 
 function stripAnsi(text) {
@@ -145,4 +146,11 @@ test("flag parsers accept positive counts and ignore junk", () => {
     team_count: 1,
     team_users: 2,
   });
+});
+
+test("audit never uploads without a linked account", () => {
+  assert.equal(shouldUploadAudit({ linked: false, upload: true }), false);
+  assert.equal(shouldUploadAudit({ linked: false, upload: false }), false);
+  assert.equal(shouldUploadAudit({ linked: true, upload: false }), false);
+  assert.equal(shouldUploadAudit({ linked: true, upload: true }), true);
 });

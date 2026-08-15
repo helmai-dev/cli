@@ -13,6 +13,7 @@ import * as fs from "node:fs";
 import * as readline from "node:readline/promises";
 import * as tty from "node:tty";
 import chalk from "chalk";
+import { accountUrls, hasLinkedAccount } from "../lib/account-link.js";
 import { fetchAuthenticatedUser } from "../lib/api-web.js";
 import { getApiUrl, loadCredentials } from "../lib/config.js";
 import { allAgentHooksInstalled } from "./hooks.js";
@@ -78,7 +79,7 @@ function openPromptInput(): { input: NodeJS.ReadableStream; close: () => void } 
 }
 
 async function isConnected(): Promise<boolean> {
-  if (!loadCredentials()?.api_key) {
+  if (!hasLinkedAccount(loadCredentials())) {
     return false;
   }
   try {
@@ -92,9 +93,11 @@ async function isConnected(): Promise<boolean> {
 export async function setupCommand(): Promise<void> {
   const promptInput = openPromptInput();
   if (!promptInput) {
+    const { registerUrl } = accountUrls(getApiUrl());
     console.log(chalk.yellow("\nhelm setup is interactive — run it in a terminal.\n"));
-    console.log("Or run the steps individually:");
-    console.log("  helm connect        link this machine to your team");
+    console.log("Create a Helm Web account first, then link this CLI:");
+    console.log(`  ${registerUrl}`);
+    console.log("  helm connect        link this machine to that account");
     console.log("  helm hooks install  enable team context in supported coding agents");
     console.log("  helm scan           report + sync your AI usage\n");
     return;
@@ -126,7 +129,12 @@ export async function setupCommand(): Promise<void> {
         return;
       }
     } else {
-      console.log(chalk.gray("\n  Skipped. Re-run `helm setup` when you're ready to connect.\n"));
+      const { registerUrl } = accountUrls(getApiUrl());
+      console.log(
+        chalk.gray(
+          `\n  Skipped. Create an account at ${registerUrl}, then run \`helm connect\`.\n`,
+        ),
+      );
       return;
     }
 

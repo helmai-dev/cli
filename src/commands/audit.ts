@@ -1,12 +1,14 @@
 /**
  * `helm audit` — observed spend from the same local transcripts `helm scan`
- * already reads. Prints realized provider-cache savings from existing rates.
- * Optional self-reported team size becomes an unshared-replay scenario.
- * Does not compute landing-page identified savings.
+ * already reads. Local-only: no Helm Web account required. Prints realized
+ * provider-cache savings from existing rates. Optional self-reported team
+ * size becomes an unshared-replay scenario. Does not compute landing-page
+ * identified savings. Upload happens only when this CLI is already linked.
  */
 
 import * as readline from "node:readline/promises";
 import chalk from "chalk";
+import { hasLinkedAccount } from "../lib/account-link.js";
 import {
   auditSnapshotFromScan,
   type AuditSnapshot,
@@ -37,6 +39,11 @@ export function parseCount(raw: string | undefined, max: number): number | null 
     return null;
   }
   return n;
+}
+
+/** Audit always prints locally. Sync only if already linked and upload is on. */
+export function shouldUploadAudit(input: { linked: boolean; upload: boolean }): boolean {
+  return input.linked && input.upload;
 }
 
 export function auditInputsFromOptions(options: {
@@ -179,30 +186,31 @@ export async function auditCommand(options: AuditCommandOptions): Promise<void> 
     console.log(formatAuditHuman(snapshot));
   }
 
-  if (options.upload !== false && summary.events.length > 0) {
+  if (
+    shouldUploadAudit({
+      linked: hasLinkedAccount(loadCredentials()),
+      upload: options.upload !== false,
+    }) &&
+    summary.events.length > 0
+  ) {
     const say = options.json ? (msg: string) => console.error(msg) : (msg: string) => console.log(msg);
-    const credentials = loadCredentials();
-    if (!credentials?.api_key) {
-      say(chalk.yellow("  Not connected. Run `helm connect` to sync this report to your team.\n"));
-    } else {
-      const machine = loadMachineIdentity();
-      try {
-        let accepted = 0;
-        for (let i = 0; i < summary.events.length; i += UPLOAD_BATCH_SIZE) {
-          const batch = summary.events.slice(i, i + UPLOAD_BATCH_SIZE);
-          const response = await sendUsageEvents({
-            source: "scan",
-            device_ulid: machine?.ulid ?? null,
-            events: batch,
-          });
-          accepted += response.accepted ?? batch.length;
-        }
-        say(chalk.green(`  Synced ${accepted} usage rows to helm-web\n`));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        say(chalk.yellow(`  Upload failed. The report above is still complete. ${message}\n`));
-        process.exitCode = 1;
+    const machine = loadMachineIdentity();
+    try {
+      let accepted = 0;
+      for (let i = 0; i < summary.events.length; i += UPLOAD_BATCH_SIZE) {
+        const batch = summary.events.slice(i, i + UPLOAD_BATCH_SIZE);
+        const response = await sendUsageEvents({
+          source: "scan",
+          device_ulid: machine?.ulid ?? null,
+          events: batch,
+        });
+        accepted += response.accepted ?? batch.length;
       }
+      say(chalk.green(`  Synced ${accepted} usage rows to helm-web\n`));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      say(chalk.yellow(`  Upload failed. The report above is still complete. ${message}\n`));
+      process.exitCode = 1;
     }
   }
 

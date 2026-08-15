@@ -7,19 +7,21 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import chalk from "chalk";
+import { accountRequiredMessage, hasLinkedAccount } from "../lib/account-link.js";
 import { publishProjectDeviceState } from "../lib/api-web.js";
-import { loadCredentials, loadEnvironmentConfig, loadMachineIdentity } from "../lib/config.js";
+import { getApiUrl, loadCredentials, loadEnvironmentConfig, loadMachineIdentity } from "../lib/config.js";
 import { registerWebProject } from "../lib/web-projects.js";
 
 export async function mapProjectCommand(projectId: string, localPath?: string): Promise<void> {
-  const envConfig = loadEnvironmentConfig();
-  if (envConfig.backend !== "web") {
-    console.error(chalk.red("helm map is for helm-web backends. Run helm connect first."));
+  if (!hasLinkedAccount(loadCredentials())) {
+    console.error(accountRequiredMessage(getApiUrl()));
     process.exitCode = 1;
     return;
   }
-  if (!loadCredentials()?.api_key) {
-    console.error(chalk.red("Not authenticated. Run helm connect first."));
+
+  const envConfig = loadEnvironmentConfig();
+  if (envConfig.backend !== "web") {
+    console.error(chalk.red("helm map is for helm-web backends. Run helm connect first."));
     process.exitCode = 1;
     return;
   }

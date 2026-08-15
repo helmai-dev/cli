@@ -97,7 +97,7 @@ export async function runWebDaemonLoop(): Promise<void> {
 
   const credentials = loadCredentials();
   if (!credentials?.api_key) {
-    log("[web] no credentials for this environment — run `helm connect` first");
+    log("[web] no linked Helm Web account for this environment — run `helm connect` first");
     cleanupFiles();
     return;
   }
