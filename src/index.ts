@@ -60,6 +60,17 @@ program
     await scanCommand(options);
   });
 
+program
+  .command("audit")
+  .description("Print observed AI spend from local transcripts. Does not compute identified savings.")
+  .option("--days <n>", "How many days back to scan (default 30)")
+  .option("--no-upload", "Print the report without syncing to helm-web")
+  .option("--json", "Emit the audit snapshot as JSON")
+  .action(async (options: { days?: string; upload?: boolean; json?: boolean }) => {
+    const { auditCommand } = await import("./commands/audit.js");
+    await auditCommand(options);
+  });
+
 const hooks = program
   .command("hooks")
   .description("Manage Helm's zero-touch coding-agent integrations");

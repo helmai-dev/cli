@@ -7,12 +7,8 @@
  */
 
 import chalk from "chalk";
-import {
-  UsageAggregator,
-  collectClaudeTranscripts,
-  type ScanSummary,
-} from "../lib/claude-scan.js";
-import { collectCodexTranscripts } from "../lib/codex-scan.js";
+import { type ScanSummary } from "../lib/claude-scan.js";
+import { runLocalScan } from "../lib/local-scan.js";
 import { sendUsageEvents } from "../lib/api-web.js";
 import { loadCredentials, loadMachineIdentity } from "../lib/config.js";
 
@@ -70,11 +66,7 @@ function printSummary(summary: ScanSummary, days: number): void {
 
 export async function scanCommand(options: ScanCommandOptions): Promise<void> {
   const days = Math.max(1, Math.min(365, Number.parseInt(options.days ?? "30", 10) || 30));
-  const aggregator = new UsageAggregator();
-  const claudeFiles = await collectClaudeTranscripts(aggregator, { days });
-  const codexFiles = await collectCodexTranscripts(aggregator, { days });
-  const summary = aggregator.finish();
-  summary.files = claudeFiles + codexFiles;
+  const summary = await runLocalScan(days);
 
   if (options.json || options.quiet) {
     // JSON mode prints exactly one JSON document (after upload), below.
