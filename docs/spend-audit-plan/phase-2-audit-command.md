@@ -4,7 +4,7 @@ Back to [overview](overview.md).
 
 ## Goal
 
-A user who types `helm audit` gets the same local scan `helm scan` already runs, printed as an audit snapshot. Savings fields stay null.
+A user who types `helm audit` gets the same local scan `helm scan` already runs, printed as an audit snapshot. Identified-savings fields stay null. Realized provider-cache savings print as a derived dollar.
 
 ## Changes
 
@@ -34,7 +34,7 @@ Human layout, in this order.
 1. Title `Helm Audit, last N days`. Match scan's existing title punctuation if you want the two commands to look alike. Do not introduce a new dash character.
 2. Observed spend line from `observed.totalCostUsd`, sessions, projects.
 3. Token line including cache-read share, copied from scan wording.
-4. One sentence. `cache-read share is provider prompt cache, not Helm identified savings.`
+4. One sentence. Provider prompt cache already avoided $X versus full input rates. This is not identified savings.
 5. Section `Not computed`. List the five `not_computed` keys as `not computed`.
 6. Upload status, same tone as scan.
 

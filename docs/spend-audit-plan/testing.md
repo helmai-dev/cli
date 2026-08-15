@@ -14,7 +14,7 @@ That script runs `tsc` then `node --test test/*.test.mjs`. CI also runs `node di
 
 Drive the built binary. `bin/helm.js` loads `dist/index.js`.
 
-Happy path. A HOME with Claude Code JSONL under `~/.claude/projects` or Codex rollouts. `helm audit --no-upload` prints a dollar total and a Not computed section. `--json` has `"illustrative": false` and five null savings keys.
+Happy path. A HOME with Claude Code JSONL under `~/.claude/projects` or Codex rollouts. `helm audit --no-upload` prints a dollar total, realized provider-cache savings, and a Not computed section. `--json` has `"illustrative": false`, a `provider_cache_savings_usd` number, and five null identified-savings keys.
 
 Empty path. A HOME with no transcripts. Exit 0. Copy mentions tryhelm.ai and does not print 14%.
 

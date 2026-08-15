@@ -4,7 +4,7 @@
 
 tryhelm.ai now promises an AI spend audit. The button is a sales form. The CLI already prints observed spend through `helm scan`. It does not print identified savings. An engineering lead who installs `@helmai/cli` after that CTA needs a command whose words match the page and whose numbers stay honest.
 
-Read `docs/spend-audit.md` before implementing. This plan does not implement the command in the investigation PR.
+Read `docs/spend-audit.md` before implementing. Phases 1 through 3 are implemented on this branch. `helm audit` wraps the scan pipeline. It prints observed spend and realized provider-cache savings. Identified-savings fields stay null.
 
 ## Scope
 
@@ -33,7 +33,7 @@ Phase 1 must work offline from local transcripts. Upload stays optional, same as
 
 ## Alternatives
 
-**A. `helm audit` wraps scan and names the holes.** Recommended. One new command. Reuses `UsageAggregator`. Adds no savings math. Matches the CTA words. The lead sees a real dollar total and a clear "not computed" list.
+**A. `helm audit` wraps scan and names the holes.** Recommended. One new command. Reuses `UsageAggregator`. Adds realized provider-cache savings from existing `modelRates`. Identified savings stay null. Matches the CTA words. The lead sees a real dollar total, a cache discount they already got, and a clear "not computed" list.
 
 **B. README only.** Smallest diff. The CTA still has no matching command. Easy to miss.
 
@@ -76,7 +76,7 @@ No control-cli skill is in this workspace. Flag that gap. Drive the binary yours
 - Name the data shape first. Do not add a command that prints an ad-hoc object.
 - Keep `ScanSummary` as the observed payload. Do not rename it.
 - `/deslop` each diff before commit. Unslop every user-facing string.
-- Interrogate only if someone proposes computing savings in the same PR.
+- Interrogate only if someone proposes filling identified-savings fields. Realized provider-cache savings from `modelRates` are in scope.
 - Cursor babysit after the implementation PR opens.
 - Keep a decision trail if the implementation spreads past three files.
 

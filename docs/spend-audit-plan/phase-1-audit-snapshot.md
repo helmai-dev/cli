@@ -27,6 +27,9 @@ AuditSnapshot {
     cache_read_share: number
     // cache_read / max(1, input + cacheWrite + cacheRead)
     // Same formula as printSummary in src/commands/scan.ts
+    provider_cache_savings_usd: number
+    // sum over events of cache_read_tokens * inputRate * 0.9 / 1e6
+    // Realized provider-cache discount. Not identified savings.
   }
   not_computed: {
     identified_savings_usd: null
@@ -40,9 +43,9 @@ AuditSnapshot {
 
 `kind` is a literal so `--json` readers can reject unknown documents. `illustrative` is always `false` on this object. Marketing tiles must not be copied into `observed` or `derived`.
 
-`cache_read_share` is the only derived number. It is provider prompt-cache share, not Helm smart-cache savings. The printer in phase 2 must say that.
+`cache_read_share` is provider prompt-cache share, not Helm smart-cache savings.
 
-Do not add `cache_savings_usd` in this phase. Helm Code already computes that counterfactual in `usagePricing.ts`. Filling a dollar "savings" field here would read as identified savings. Keep dollars in `observed.totalCostUsd` only.
+`provider_cache_savings_usd` is the dollar amount already avoided because cache-read tokens billed at 0.1× input instead of the full input rate. Sum it per event. Totals lose per-model rates. Round to 4 decimals like `cost_usd`. Name it `provider_cache_savings_usd`, not `cache_savings_usd` and not `identified_savings_usd`. Helm Code's `cacheSavingsUsd` is the same idea on LiteLLM rates. Do not port that scanner. Do not put this number in `not_computed`.
 
 ## Verification
 

@@ -2,6 +2,8 @@
 
 This is an explanation of a product gap. It is not a how-to and not a command reference.
 
+`helm audit` now exists. It reprints observed spend from the scan pipeline, adds realized provider-cache savings from `modelRates`, and leaves identified-savings fields null. The landing-page tiles are still not computed.
+
 The tryhelm.ai homepage promises an AI spend audit. This note records what that page claims, what helmai-dev/cli can do after install, what Helm Web and the two desktop apps actually compute, and the smallest honest CLI follow-up. Every claim points at a file and a symbol, or at a GitHub PR. Numbers that are not computed in code are named as absent.
 
 Fetched on 2026-08-15 from helmai-dev/cli `main`, helmai-dev/web `main` (PR #8 merged), and helmai-dev/desktop `main`. Web and desktop were read through the GitHub API. Those repos were not cloned.
@@ -54,7 +56,7 @@ The capability grid names prompt library, semantic deduplication, prompt optimiz
 
 ### What the CLI can do today
 
-`src/index.ts` registers the public commands. `connect`, `setup`, `scan`, `hooks install|uninstall|status`, `whoami`, `map`, `daemon start|stop|install|uninstall|status|info`, `logout`, `update`. Hidden commands are `auth-import`, `relay`, `code-bridge`, `inject`, `observe`, `learn`, and `env`.
+`src/index.ts` registers the public commands. `connect`, `setup`, `scan`, `audit`, `hooks install|uninstall|status`, `whoami`, `map`, `daemon start|stop|install|uninstall|status|info`, `logout`, `update`. Hidden commands are `auth-import`, `relay`, `code-bridge`, `inject`, `observe`, `learn`, and `env`.
 
 There is no `run` command. A search of this repo for `helm run` and `command("run")` returns no matches. The landing terminal demo is not a CLI feature.
 
@@ -93,7 +95,7 @@ UsageEventRow {
 
 `src/commands/learn.ts` submits a reviewable learning candidate after a turn. README calls that candidate deduplicated. That is team-context learning, not prompt-library dedup.
 
-No CLI symbol computes identified savings, waste rate, duplicate prompt count, or model-routing opportunity.
+`providerCacheSavingsUsd` in `src/lib/claude-scan.ts` is the realized provider-cache discount. No CLI symbol computes identified savings, waste rate, duplicate prompt count, or model-routing opportunity.
 
 ### What Helm Web computes
 
@@ -133,13 +135,13 @@ If they expect intercept, reuse, or a 14% waste number from the CLI, the product
 
 1. **What the live landing claims.** Cost optimization, stop paying twice, a sales-form audit CTA, four waste types, illustrative 14% waste, Observe / Find savings / Optimize, six capabilities, a fake `helm run` intercept demo, a fake live feed, and a fake savings dashboard. Cited above from `⚡home.blade.php` and PR #8.
 
-2. **What the CLI can do.** Daemon, hooks, inject, observe, learn, and `helm scan` observed spend. No audit command. No `helm run`. No savings math. Cited from `src/index.ts` and `src/commands/scan.ts`.
+2. **What the CLI can do.** Daemon, hooks, inject, observe, learn, `helm scan` observed spend, and `helm audit` as a named wrapper that also prints realized provider-cache savings. No `helm run`. No identified-savings math. Cited from `src/index.ts`, `src/commands/scan.ts`, and `src/commands/audit.ts`.
 
 3. **What Code, Desktop, and Web can do for spend.** Web stores and rolls up CLI-priced rows. Desktop invokes `helm scan` and shows live session tokens plus project usage. Code scans the same local logs and computes `cacheSavingsUsd` as a provider-cache counterfactual. None of them compute duplicate-prompt or model-routing savings. Cited from `TeamUsageRollup`, `helmCli.ts` `runFirstScan`, and `t3/.../usagePricing.ts` `cacheSavingsUsd`.
 
 4. **The CLI lie.** The CTA words do not match a command. The demo command does not exist. Savings tiles have no implementation. Scan is the real number. The command name does not say audit.
 
-5. **Smallest honest CLI add.** Name `AuditSnapshot` first. Add `helm audit` as a thin wrapper around the existing scan pipeline. Print observed spend and `cache_read_share`. Print savings fields as `null` with the label "not computed". Keep 14% out of the product. Web and desktop do not need new endpoints for this. See `docs/spend-audit-plan/overview.md`.
+5. **Smallest honest CLI add.** Shipped. `AuditSnapshot` wraps `ScanSummary`. `helm audit` reprints observed spend, `cache_read_share`, and `provider_cache_savings_usd`. Identified-savings fields stay `null` with the label "not computed". 14% stays out of the product. See `docs/spend-audit-plan/overview.md`.
 
 6. **What desktop and web should add only if the CLI path depends on it.** Phase 1 depends on nothing new. Desktop already calls `helm scan`. Code already has a local `/usage` page. A later team-wide print can call the existing `GET /api/teams/{team}/usage`. Do not add a savings API. Do not port Code's LiteLLM scanner into the CLI. Leave the lead form as the sales path for people with no local logs.
 
@@ -183,7 +185,10 @@ SessionEnd hooks on Cursor, Gemini, and others still run `helm scan --days 2 --q
 |---|---|
 | `src/index.ts` | Command registration |
 | `src/commands/scan.ts` `scanCommand` `printSummary` | Local spend report |
-| `src/lib/claude-scan.ts` `ScanSummary` `UsageAggregator` `usageCostUsd` | Pricing and aggregation |
+| `src/commands/audit.ts` `auditCommand` | Named audit over the same scan |
+| `src/lib/audit-snapshot.ts` `AuditSnapshot` | Observed plus derived cache fields |
+| `src/lib/local-scan.ts` `runLocalScan` | Shared Claude + Codex walk |
+| `src/lib/claude-scan.ts` `ScanSummary` `UsageAggregator` `usageCostUsd` `providerCacheSavingsUsd` | Pricing and aggregation |
 | `src/lib/codex-scan.ts` | Codex transcript feed |
 | `src/lib/api-web.ts` `sendUsageEvents` | Upload only |
 | helmai-dev/web `⚡home.blade.php` | Landing claims |

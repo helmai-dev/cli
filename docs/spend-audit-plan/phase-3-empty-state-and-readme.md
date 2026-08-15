@@ -23,7 +23,7 @@ Fix the scan empty-state string only if you touch that function for the shared h
 `README.md` command table. Add one row.
 
 ```
-helm audit | Observed API-equivalent spend from local transcripts. Does not compute identified savings.
+helm audit | Observed API-equivalent spend from local transcripts, plus realized provider-cache savings. Does not compute identified savings.
 ```
 
 Keep the scan row. Do not replace it.
