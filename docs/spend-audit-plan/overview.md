@@ -93,3 +93,12 @@ Do not ask desktop or Helm Code to grow a savings engine for this CLI path.
 Do not port `t3/apps/server/src/usage/UsageService.ts` or LiteLLM into this repo.
 Do not rename Code `cacheSavingsUsd` to identified savings.
 Do not change the landing-page lead form from this repo.
+
+## Market research
+
+August 2026 Pulse interviews on token spend live in
+[docs/research/pragmatic-engineer-pulse-token-spend-2026-08.md](../research/pragmatic-engineer-pulse-token-spend-2026-08.md).
+That note maps each finding to shipped, gap, or do-not-build, and proposes
+the next honest bets (print the model mix `helm audit` already has, then
+the phase 4 team rollup). It does not change these phases or relax the
+rules above.
