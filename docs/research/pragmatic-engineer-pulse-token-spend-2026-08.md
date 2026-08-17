@@ -273,6 +273,14 @@ Do not claim productivity ROI from tokens alone. The healthcare 10x-traffic stor
 
 Do not update helmai-dev/web `/stack` from this repo. That page still lists `helm scan` and not `helm audit` (`⚡stack.blade.php`). Fix it in web. The command list there is stale relative to cli `main` after #1.
 
+## Related research
+
+Pulse is org budgets, model defaults, and let-it-rip versus curb. A later note covers a different leak.
+
+[Rahul Powar, The Hidden Cost of Hello, October 2025](rahul-powar-hidden-cost-of-hello-2025-10.md)
+
+That piece is payload and schema waste inside tool-calling. It does not change Phases A through C. It names JSON-optimizer work as a gap Helm does not measure, and as a non-goal to clone. Do not take 84% or $154k/year from that essay and put them on a Helm tile.
+
 ## Honesty rules this note does not relax
 
 `helm audit` stays local and account-free. Default `helm scan` stays account-gated. `--users` / `--teams` stay an unshared-replay ceiling. Identified-savings keys stay null. 14% stays out of `test/` and out of the binary. Those rules are in `docs/spend-audit.md`, `docs/spend-audit-plan/overview.md`, `src/lib/account-link.ts`, and `src/lib/audit-snapshot.ts`. The Pulse interviews make them more important, not less. Every company in that piece is one fake savings tile away from a finance meeting Helm would lose.
@@ -280,6 +288,8 @@ Do not update helmai-dev/web `/stack` from this repo. That page still lists `hel
 ## Citations
 
 Article. https://blog.pragmaticengineer.com/the-pulse-token-spend-breaks-budgets-what-next/ (accessed 2026-08-16, confirmed 2026-08-17).
+
+Related. [docs/research/rahul-powar-hidden-cost-of-hello-2025-10.md](rahul-powar-hidden-cost-of-hello-2025-10.md).
 
 Helm CLI, this repo.
 
