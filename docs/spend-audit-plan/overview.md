@@ -98,7 +98,7 @@ Do not change the landing-page lead form from this repo.
 
 August 2026 Pulse interviews on token spend live in
 [docs/research/pragmatic-engineer-pulse-token-spend-2026-08.md](../research/pragmatic-engineer-pulse-token-spend-2026-08.md).
-That note maps each finding to shipped, gap, or do-not-build, and proposes
-the next honest bets (print the model mix `helm audit` already has, then
-the phase 4 team rollup). It does not change these phases or relax the
-rules above.
+October 2025 payload and schema waste lives in
+[docs/research/rahul-powar-hidden-cost-of-hello-2025-10.md](../research/rahul-powar-hidden-cost-of-hello-2025-10.md).
+Pulse is team spend and model mix. Powar is tokens inside each tool or API
+payload. Those notes do not change these phases or relax the rules above.
