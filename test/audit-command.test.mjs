@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { auditSnapshotFromScan } from "../dist/lib/audit-snapshot.js";
+import { auditSnapshotFromScan, auditSnapshotFromTeamRollup } from "../dist/lib/audit-snapshot.js";
 import {
   auditInputsFromOptions,
+  decideAuditMode,
   formatAuditHuman,
   formatAuditJson,
   parseCount,
@@ -153,4 +154,115 @@ test("audit never uploads without a linked account", () => {
   assert.equal(shouldUploadAudit({ linked: false, upload: false }), false);
   assert.equal(shouldUploadAudit({ linked: true, upload: false }), false);
   assert.equal(shouldUploadAudit({ linked: true, upload: true }), true);
+  assert.equal(shouldUploadAudit({ linked: true, upload: true, team: true }), false);
+});
+
+function teamRollup(overrides = {}) {
+  return {
+    days: 30,
+    since: "2026-07-18",
+    totals: {
+      cost_usd: 42.5,
+      sessions: 12,
+      calls: 40,
+      input_tokens: 1000,
+      output_tokens: 200,
+      cache_write_tokens: 100,
+      cache_read_tokens: 800,
+      total_tokens: 2100,
+      cache_read_share: 0.4211,
+    },
+    by_day: [],
+    by_user: [
+      { user_id: "u1", name: "Ada", cost_usd: 30, total_tokens: 1500, sessions: 8 },
+      { user_id: "u2", name: "Grace", cost_usd: 12.5, total_tokens: 600, sessions: 4 },
+    ],
+    by_project: [{ project: "helm-cli", cost_usd: 42.5, total_tokens: 2100, sessions: 12 }],
+    by_provider: [],
+    by_model: [
+      { provider: "claude", model: "claude-opus-4", cost_usd: 40, total_tokens: 1800, calls: 30 },
+      { provider: "codex", model: "gpt-5", cost_usd: 2.5, total_tokens: 300, calls: 10 },
+    ],
+    ...overrides,
+  };
+}
+
+test("unlinked --team refuses; local audit stays available", () => {
+  assert.deepEqual(decideAuditMode({ linked: false }), { kind: "local" });
+  assert.deepEqual(decideAuditMode({ linked: true }), { kind: "local" });
+  assert.deepEqual(decideAuditMode({ linked: false, team: "team-9" }), { kind: "refuse" });
+  assert.deepEqual(decideAuditMode({ linked: true, team: "team-9" }), {
+    kind: "team",
+    teamId: "team-9",
+  });
+  assert.deepEqual(decideAuditMode({ linked: true, team: "  team-9  " }), {
+    kind: "team",
+    teamId: "team-9",
+  });
+});
+
+test("human team audit prints observed rollup, models, and people without savings", () => {
+  const snapshot = auditSnapshotFromTeamRollup(teamRollup(), 30);
+  const text = stripAnsi(formatAuditHuman(snapshot));
+
+  assert.match(text, /Helm Audit, last 30 days \(Helm Web team\)/);
+  assert.match(text, /\$42\.50 API-equivalent across 2 people, 1 projects/);
+  assert.match(text, /cache-read share 42\.1%/);
+  assert.match(text, /By model/);
+  assert.match(text, /claude-opus-4/);
+  assert.match(text, /gpt-5/);
+  assert.match(text, /Observed spend by person/);
+  assert.match(text, /Ada/);
+  assert.match(text, /Grace/);
+  assert.doesNotMatch(text, /leaderboard/i);
+  assert.doesNotMatch(text, /Provider prompt cache already avoided/);
+  assert.match(text, /Not computed/);
+  assert.match(text, /identified_savings_usd\s+not computed/);
+  assert.doesNotMatch(text, /14%/);
+  assert.doesNotMatch(text, /Unshared replay/);
+});
+
+test("empty team audit points at helm scan and does not open a sales form", () => {
+  const snapshot = auditSnapshotFromTeamRollup(
+    teamRollup({
+      totals: {
+        cost_usd: 0,
+        sessions: 0,
+        calls: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_write_tokens: 0,
+        cache_read_tokens: 0,
+        total_tokens: 0,
+        cache_read_share: 0,
+      },
+      by_user: [],
+      by_project: [],
+      by_model: [],
+    }),
+    30,
+  );
+  const text = stripAnsi(formatAuditHuman(snapshot));
+
+  assert.match(text, /no uploaded Claude Code or Codex rows/i);
+  assert.match(text, /Observed spend is \$0\.00/);
+  assert.match(text, /Identified savings are not computed/);
+  assert.match(text, /helm scan/);
+  assert.doesNotMatch(text, /https:\/\/tryhelm\.ai/);
+  assert.doesNotMatch(text, /14%/);
+});
+
+test("json team audit keeps PHP field names and null identified savings", () => {
+  const snapshot = auditSnapshotFromTeamRollup(teamRollup(), 14);
+  const parsed = JSON.parse(formatAuditJson(snapshot));
+
+  assert.equal(parsed.kind, "helm.audit.v1");
+  assert.equal(parsed.source, "team_rollup");
+  assert.equal(parsed.illustrative, false);
+  assert.equal(parsed.window_days, 14);
+  assert.equal(parsed.observed.totals.cost_usd, 42.5);
+  assert.equal(parsed.not_computed.identified_savings_usd, null);
+  assert.equal(parsed.not_computed.waste_rate, null);
+  assert.equal(parsed.scenario, null);
+  assert.equal(Object.hasOwn(parsed, "upload"), false);
 });

@@ -77,7 +77,8 @@ export function accountRequiredRelayError(apiUrl: string): string {
  * `--quiet` is the session-end hook: fail open so a missing account never
  * breaks a coding-agent session.
  *
- * `helm audit` is a separate local report. It never uses this gate.
+ * `helm audit` without `--team` is a local report. It never uses this gate.
+ * `helm audit --team` talks to helm-web and refuses until the link exists.
  */
 export function decideScanAuth(input: {
   linked: boolean;
