@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { auditSnapshotFromScan } from "../dist/lib/audit-snapshot.js";
+import { auditSnapshotFromScan, auditSnapshotFromTeamRollup } from "../dist/lib/audit-snapshot.js";
 
 function emptySummary() {
   return {
@@ -146,4 +146,77 @@ test("provider cache savings sums per event so mixed models keep their own rates
   const snapshot = auditSnapshotFromScan(summary, 30);
   // fable $9 + sonnet $2.70 (sonnet input $3/MTok * 0.9)
   assert.equal(snapshot.derived.provider_cache_savings_usd, 11.7);
+});
+
+function teamRollup(overrides = {}) {
+  return {
+    days: 30,
+    since: "2026-07-18",
+    totals: {
+      cost_usd: 42.5,
+      sessions: 12,
+      calls: 40,
+      input_tokens: 1000,
+      output_tokens: 200,
+      cache_write_tokens: 100,
+      cache_read_tokens: 800,
+      total_tokens: 2100,
+      cache_read_share: 0.4211,
+    },
+    by_day: [],
+    by_user: [{ user_id: "u1", name: "Ada", cost_usd: 30, total_tokens: 1500, sessions: 8 }],
+    by_project: [{ project: "helm-cli", cost_usd: 42.5, total_tokens: 2100, sessions: 12 }],
+    by_provider: [],
+    by_model: [
+      { provider: "claude", model: "claude-opus-4", cost_usd: 42.5, total_tokens: 2100, calls: 40 },
+    ],
+    ...overrides,
+  };
+}
+
+test("team rollup snapshot is a sibling source with null identified savings", () => {
+  const snapshot = auditSnapshotFromTeamRollup(teamRollup(), 30);
+
+  assert.equal(snapshot.kind, "helm.audit.v1");
+  assert.equal(snapshot.source, "team_rollup");
+  assert.equal(snapshot.illustrative, false);
+  assert.equal(snapshot.window_days, 30);
+  assert.equal(snapshot.observed.totals.cost_usd, 42.5);
+  assert.equal(snapshot.observed.by_user[0].name, "Ada");
+  assert.equal(snapshot.derived.cache_read_share, 0.4211);
+  assert.equal(snapshot.derived.provider_cache_savings_usd, 0);
+  assert.equal(snapshot.inputs.source, "absent");
+  assert.equal(snapshot.scenario, null);
+  for (const key of NOT_COMPUTED_KEYS) {
+    assert.equal(snapshot.not_computed[key], null);
+  }
+  assert.equal(Object.hasOwn(snapshot.observed, "totalCostUsd"), false);
+  assert.equal(Object.hasOwn(snapshot.observed, "events"), false);
+});
+
+test("empty team rollup stays non-illustrative with null savings", () => {
+  const snapshot = auditSnapshotFromTeamRollup(
+    teamRollup({
+      totals: {
+        cost_usd: 0,
+        sessions: 0,
+        calls: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_write_tokens: 0,
+        cache_read_tokens: 0,
+        total_tokens: 0,
+        cache_read_share: 0,
+      },
+      by_user: [],
+      by_project: [],
+      by_model: [],
+    }),
+    7,
+  );
+
+  assert.equal(snapshot.source, "team_rollup");
+  assert.equal(snapshot.window_days, 7);
+  assert.equal(snapshot.observed.totals.cost_usd, 0);
+  assert.equal(snapshot.not_computed.identified_savings_usd, null);
 });

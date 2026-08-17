@@ -62,12 +62,18 @@ program
 
 program
   .command("audit")
-  .description("Print observed AI spend from local transcripts. Does not require a Helm Web account.")
-  .option("--days <n>", "How many days back to scan (default 30)")
-  .option("--no-upload", "Skip syncing even if this CLI is already linked")
+  .description(
+    "Print observed AI spend from local transcripts, or from a Helm Web team rollup with --team. Local path does not require an account. Does not compute identified savings.",
+  )
+  .option("--days <n>", "How many days back to scan or roll up (default 30)")
+  .option("--no-upload", "Skip syncing even if this CLI is already linked. No-op with --team")
   .option("--json", "Emit the audit snapshot as JSON")
   .option("--users <n>", "Self-reported people on the team who use AI coding tools")
   .option("--teams <n>", "Self-reported team count. Does not multiply the replay scenario")
+  .option(
+    "--team <id>",
+    "Helm Web team id. Prints that team's uploaded usage rollup. Requires helm connect",
+  )
   .action(
     async (options: {
       days?: string;
@@ -75,6 +81,7 @@ program
       json?: boolean;
       users?: string;
       teams?: string;
+      team?: string;
     }) => {
       const { auditCommand } = await import("./commands/audit.js");
       await auditCommand(options);

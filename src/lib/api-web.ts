@@ -5,6 +5,7 @@
  * obtained through the device-code flow (helm connect).
  */
 
+import type { TeamRollupObserved } from "./audit-snapshot.js";
 import type { SessionChunk, SessionResultBody, SessionUsageBody } from "./web-chunks.js";
 import { getApiUrl, loadCredentials } from "./config.js";
 
@@ -629,6 +630,41 @@ export async function sendUsageEvents(body: UsageEventsBody): Promise<{ accepted
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+export type WebRequester = <T>(
+  endpoint: string,
+  options?: RequestInit,
+  useAuth?: boolean,
+) => Promise<T>;
+
+export function teamUsageEndpoint(teamId: string, days: number): string {
+  return `/teams/${encodeURIComponent(teamId)}/usage?days=${days}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+export function teamUsageFromEnvelope(payload: unknown): TeamRollupObserved {
+  if (!isRecord(payload) || !isRecord(payload.data)) {
+    throw new WebApiError("Team usage response was not a { data } envelope.", 502);
+  }
+  const data = payload.data;
+  if (!isRecord(data.totals) || typeof data.totals.cost_usd !== "number") {
+    throw new WebApiError("Team usage rollup is missing totals.cost_usd.", 502);
+  }
+  return data as unknown as TeamRollupObserved;
+}
+
+/** GET the same TeamUsageRollup Helm Web /usage already shows. */
+export async function getTeamUsage(
+  teamId: string,
+  days: number,
+  requester: WebRequester = request,
+): Promise<TeamRollupObserved> {
+  const payload = await requester<unknown>(teamUsageEndpoint(teamId, days), { method: "GET" });
+  return teamUsageFromEnvelope(payload);
 }
 
 // --- Session relay ---

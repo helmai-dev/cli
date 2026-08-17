@@ -1,9 +1,10 @@
 /**
- * Honest spend-audit document built from a local ScanSummary.
- * Observed dollars stay on ScanSummary. Derived fields are provider
- * prompt-cache share and the realized cache-read discount. Optional
- * self-reported team size becomes an unshared-replay scenario, not
- * identified savings. Landing-page savings fields stay null.
+ * Honest spend-audit document. Local path wraps ScanSummary. Team path
+ * wraps the Helm Web TeamUsageRollup. Derived cache-read share is
+ * observed. Realized provider-cache dollars are priced only from local
+ * events. Optional self-reported team size becomes an unshared-replay
+ * scenario on the local path, not identified savings. Landing-page
+ * savings fields stay null.
  */
 
 import { providerCacheSavingsUsd, type ScanSummary } from "./claude-scan.js";
@@ -36,17 +37,89 @@ export interface UnsharedReplayScenario {
   peer_count: number;
 }
 
-export interface AuditSnapshot {
+export interface TeamRollupTotals {
+  cost_usd: number;
+  sessions: number;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_write_tokens: number;
+  cache_read_tokens: number;
+  total_tokens: number;
+  cache_read_share: number;
+}
+
+export interface TeamRollupDayRow {
+  day: string;
+  cost_usd: number;
+  total_tokens: number;
+  output_tokens: number;
+  sessions: number;
+}
+
+export interface TeamRollupUserRow {
+  user_id: string;
+  name: string;
+  cost_usd: number;
+  total_tokens: number;
+  sessions: number;
+}
+
+export interface TeamRollupProjectRow {
+  project: string;
+  cost_usd: number;
+  total_tokens: number;
+  sessions: number;
+}
+
+export interface TeamRollupProviderRow {
+  provider: string;
+  cost_usd: number;
+  total_tokens: number;
+  sessions: number;
+}
+
+export interface TeamRollupModelRow {
+  provider: string;
+  model: string;
+  cost_usd: number;
+  total_tokens: number;
+  calls: number;
+}
+
+/** Field names copy App\Support\TeamUsageRollup::build. */
+export interface TeamRollupObserved {
+  days: number;
+  since: string;
+  totals: TeamRollupTotals;
+  by_day: TeamRollupDayRow[];
+  by_user: TeamRollupUserRow[];
+  by_project: TeamRollupProjectRow[];
+  by_model: TeamRollupModelRow[];
+  by_provider: TeamRollupProviderRow[];
+}
+
+interface AuditSnapshotBase {
   kind: "helm.audit.v1";
   window_days: number;
-  source: "local_transcripts";
   illustrative: false;
-  observed: ScanSummary;
   derived: AuditSnapshotDerived;
   inputs: AuditTeamInputs;
   scenario: UnsharedReplayScenario | null;
   not_computed: AuditSnapshotNotComputed;
 }
+
+export interface LocalAuditSnapshot extends AuditSnapshotBase {
+  source: "local_transcripts";
+  observed: ScanSummary;
+}
+
+export interface TeamAuditSnapshot extends AuditSnapshotBase {
+  source: "team_rollup";
+  observed: TeamRollupObserved;
+}
+
+export type AuditSnapshot = LocalAuditSnapshot | TeamAuditSnapshot;
 
 const ABSENT_INPUTS: AuditTeamInputs = {
   source: "absent",
@@ -79,7 +152,7 @@ export function auditSnapshotFromScan(
   summary: ScanSummary,
   windowDays: number,
   inputs: AuditTeamInputs = ABSENT_INPUTS,
-): AuditSnapshot {
+): LocalAuditSnapshot {
   const promptTokens =
     summary.totals.input + summary.totals.cacheWrite + summary.totals.cacheRead;
   const cacheReadShare = promptTokens > 0 ? summary.totals.cacheRead / promptTokens : 0;
@@ -111,6 +184,29 @@ export function auditSnapshotFromScan(
     },
     inputs,
     scenario,
+    not_computed: { ...NOT_COMPUTED },
+  };
+}
+
+/** Team rollup cannot price the avoided 0.9x cache-read discount.
+ * by_model has no per-model cache_read_tokens. Leave that dollar at 0. */
+export function auditSnapshotFromTeamRollup(
+  rollup: TeamRollupObserved,
+  windowDays: number,
+  inputs: AuditTeamInputs = ABSENT_INPUTS,
+): TeamAuditSnapshot {
+  return {
+    kind: "helm.audit.v1",
+    window_days: windowDays,
+    source: "team_rollup",
+    illustrative: false,
+    observed: rollup,
+    derived: {
+      cache_read_share: rollup.totals.cache_read_share,
+      provider_cache_savings_usd: 0,
+    },
+    inputs,
+    scenario: null,
     not_computed: { ...NOT_COMPUTED },
   };
 }

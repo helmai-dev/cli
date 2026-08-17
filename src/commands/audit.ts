@@ -1,22 +1,26 @@
 /**
- * `helm audit` — observed spend from the same local transcripts `helm scan`
- * already reads. Local-only: no Helm Web account required. Prints realized
- * provider-cache savings from existing rates. Optional self-reported team
- * size becomes an unshared-replay scenario. Does not compute landing-page
- * identified savings. Upload happens only when this CLI is already linked.
+ * `helm audit` — observed spend. Default path reads local transcripts and
+ * does not need a Helm Web account. `--team` GETs the TeamUsageRollup
+ * Helm Web /usage already shows and requires `helm connect`. Prints
+ * realized provider-cache savings only on the local path. Optional
+ * self-reported team size becomes an unshared-replay scenario on the
+ * local path. Does not compute landing-page identified savings.
  */
 
 import * as readline from "node:readline/promises";
 import chalk from "chalk";
-import { hasLinkedAccount } from "../lib/account-link.js";
+import { hasLinkedAccount, refuseUnlinkedAccount } from "../lib/account-link.js";
 import {
   auditSnapshotFromScan,
+  auditSnapshotFromTeamRollup,
   type AuditSnapshot,
   type AuditTeamInputs,
+  type LocalAuditSnapshot,
+  type TeamAuditSnapshot,
 } from "../lib/audit-snapshot.js";
 import { runLocalScan } from "../lib/local-scan.js";
-import { sendUsageEvents } from "../lib/api-web.js";
-import { loadCredentials, loadMachineIdentity } from "../lib/config.js";
+import { getTeamUsage, sendUsageEvents } from "../lib/api-web.js";
+import { getApiUrl, loadCredentials, loadMachineIdentity } from "../lib/config.js";
 
 const UPLOAD_BATCH_SIZE = 500;
 const MAX_TEAM_USERS = 10000;
@@ -28,6 +32,26 @@ export interface AuditCommandOptions {
   json?: boolean;
   users?: string;
   teams?: string;
+  team?: string;
+}
+
+export type AuditMode =
+  | { kind: "local" }
+  | { kind: "team"; teamId: string }
+  | { kind: "refuse" };
+
+export function decideAuditMode(input: { linked: boolean; team?: string }): AuditMode {
+  if (input.team == null) {
+    return { kind: "local" };
+  }
+  const teamId = input.team.trim();
+  if (teamId === "") {
+    return { kind: "refuse" };
+  }
+  if (!input.linked) {
+    return { kind: "refuse" };
+  }
+  return { kind: "team", teamId };
 }
 
 export function parseCount(raw: string | undefined, max: number): number | null {
@@ -41,8 +65,15 @@ export function parseCount(raw: string | undefined, max: number): number | null 
   return n;
 }
 
-/** Audit always prints locally. Sync only if already linked and upload is on. */
-export function shouldUploadAudit(input: { linked: boolean; upload: boolean }): boolean {
+/** Local audit syncs only if already linked and upload is on. `--team` is GET only. */
+export function shouldUploadAudit(input: {
+  linked: boolean;
+  upload: boolean;
+  team?: boolean;
+}): boolean {
+  if (input.team) {
+    return false;
+  }
   return input.linked && input.upload;
 }
 
@@ -71,6 +102,13 @@ export function formatAuditJson(snapshot: AuditSnapshot): string {
 }
 
 export function formatAuditHuman(snapshot: AuditSnapshot): string {
+  if (snapshot.source === "team_rollup") {
+    return formatTeamAuditHuman(snapshot);
+  }
+  return formatLocalAuditHuman(snapshot);
+}
+
+function formatLocalAuditHuman(snapshot: LocalAuditSnapshot): string {
   const lines: string[] = [
     "",
     chalk.cyan.bold(`  ⎈ Helm Audit, last ${snapshot.window_days} days`),
@@ -104,15 +142,64 @@ export function formatAuditHuman(snapshot: AuditSnapshot): string {
   );
   lines.push("");
   appendTeamSections(lines, snapshot);
+  appendNotComputed(lines, snapshot);
+  return lines.join("\n");
+}
+
+function formatTeamAuditHuman(snapshot: TeamAuditSnapshot): string {
+  const lines: string[] = [
+    "",
+    chalk.cyan.bold(`  ⎈ Helm Audit, last ${snapshot.window_days} days (Helm Web team)`),
+    "",
+  ];
+
+  const rollup = snapshot.observed;
+  if (rollup.totals.cost_usd === 0 && rollup.by_user.length === 0 && rollup.by_model.length === 0) {
+    lines.push("  This Helm Web team has no uploaded Claude Code or Codex rows in this window.");
+    lines.push("  Observed spend is $0.00. Identified savings are not computed.");
+    lines.push("  Run helm scan on each machine that should appear here.");
+    lines.push("");
+    appendNotComputed(lines, snapshot);
+    return lines.join("\n");
+  }
+
+  const t = rollup.totals;
+  const cacheSharePct = 100 * t.cache_read_share;
+
+  lines.push(
+    `  ${chalk.bold(usd(t.cost_usd))} API-equivalent across ${rollup.by_user.length} people, ${rollup.by_project.length} projects`,
+  );
+  lines.push(
+    chalk.gray(
+      `  input ${fmt(t.input_tokens)} · output ${fmt(t.output_tokens)} · cache-read ${fmt(t.cache_read_tokens)} (cache-read share ${cacheSharePct.toFixed(1)}%)`,
+    ),
+  );
+  lines.push("");
+  lines.push(chalk.bold("  By model"));
+  for (const row of rollup.by_model) {
+    lines.push(
+      `  ${usd(row.cost_usd).padStart(10)}  ${row.model} ${chalk.gray(`(${row.calls} calls)`)}`,
+    );
+  }
+  lines.push("");
+  lines.push(chalk.bold("  Observed spend by person"));
+  for (const row of rollup.by_user) {
+    lines.push(`  ${usd(row.cost_usd).padStart(10)}  ${row.name}`);
+  }
+  lines.push("");
+  appendNotComputed(lines, snapshot);
+  return lines.join("\n");
+}
+
+function appendNotComputed(lines: string[], snapshot: AuditSnapshot): void {
   lines.push(chalk.bold("  Not computed"));
   for (const key of Object.keys(snapshot.not_computed)) {
     lines.push(`    ${key.padEnd(34)}not computed`);
   }
   lines.push("");
-  return lines.join("\n");
 }
 
-function appendTeamSections(lines: string[], snapshot: AuditSnapshot): void {
+function appendTeamSections(lines: string[], snapshot: LocalAuditSnapshot): void {
   const { inputs, scenario } = snapshot;
   if (inputs.team_users == null && inputs.team_count == null) {
     return;
@@ -175,6 +262,19 @@ async function promptAuditInputs(): Promise<AuditTeamInputs> {
 
 export async function auditCommand(options: AuditCommandOptions): Promise<void> {
   const days = Math.max(1, Math.min(365, Number.parseInt(options.days ?? "30", 10) || 30));
+  const linked = hasLinkedAccount(loadCredentials());
+  const mode = decideAuditMode({ linked, team: options.team });
+
+  if (mode.kind === "refuse") {
+    refuseUnlinkedAccount({ json: options.json, apiUrl: getApiUrl() });
+    return;
+  }
+
+  if (mode.kind === "team") {
+    await printTeamAudit({ teamId: mode.teamId, days, json: Boolean(options.json) });
+    return;
+  }
+
   const summary = await runLocalScan(days);
   let inputs = auditInputsFromOptions(options);
   if (inputs.source === "absent" && !options.json) {
@@ -188,7 +288,7 @@ export async function auditCommand(options: AuditCommandOptions): Promise<void> 
 
   if (
     shouldUploadAudit({
-      linked: hasLinkedAccount(loadCredentials()),
+      linked,
       upload: options.upload !== false,
     }) &&
     summary.events.length > 0
@@ -216,5 +316,29 @@ export async function auditCommand(options: AuditCommandOptions): Promise<void> 
 
   if (options.json) {
     console.log(formatAuditJson(snapshot));
+  }
+}
+
+async function printTeamAudit(input: {
+  teamId: string;
+  days: number;
+  json: boolean;
+}): Promise<void> {
+  try {
+    const rollup = await getTeamUsage(input.teamId, input.days);
+    const snapshot = auditSnapshotFromTeamRollup(rollup, input.days);
+    if (input.json) {
+      console.log(formatAuditJson(snapshot));
+      return;
+    }
+    console.log(formatAuditHuman(snapshot));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (input.json) {
+      process.stdout.write(`${JSON.stringify({ type: "error", message })}\n`);
+    } else {
+      console.error(message);
+    }
+    process.exitCode = 1;
   }
 }

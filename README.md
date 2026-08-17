@@ -47,6 +47,9 @@ never printed.
 # Local spend report from transcripts on this machine. No account required.
 helm audit
 
+# Team rollup from Helm Web after helm connect. People who have scanned.
+helm audit --team <team-id>
+
 # Interactive setup: link the account, install coding-agent integrations, and scan usage.
 helm setup
 
@@ -66,10 +69,12 @@ helm daemon start
 helm daemon install
 ```
 
-`helm audit` is local. It reads Claude Code and Codex transcripts on this
-machine and does not need a Helm Web account. Commands that talk to Helm
-Web, or that sync team usage (`helm scan`, `helm map`, `helm daemon start`),
-refuse until the CLI is linked. They print the register/login URLs and
+`helm audit` without `--team` is local. It reads Claude Code and Codex
+transcripts on this machine and does not need a Helm Web account.
+`helm audit --team <id>` prints the same team usage rollup the `/usage`
+page shows and refuses until the CLI is linked. Commands that talk to Helm Web, or that
+sync team usage (`helm scan`, `helm map`, `helm daemon start`), refuse
+until the CLI is linked. They print the register/login URLs and
 `helm connect` as the next step. `helm scan --no-upload` still prints a
 local report without an account. Session-end `helm scan --quiet` fails
 open so a missing account never breaks a coding-agent session.
@@ -89,7 +94,7 @@ and their output streams back into the Helm canvas.
 | `helm hooks status` | Show each integration, runtime detection, and derived coverage (`--json` for Desktop/automation) |
 | `helm hooks uninstall` | Remove only files and hook entries managed by Helm |
 | `helm scan` | Report local Claude Code and Codex usage and sync it to the team dashboard (requires a linked account) |
-| `helm audit` | Observed API-equivalent spend from local transcripts, plus realized provider-cache savings. Optional `--users` / `--teams` add an unshared-replay scenario. No account required. Does not compute identified savings. |
+| `helm audit` | Observed API-equivalent spend from local transcripts, plus realized provider-cache savings. `--team <id>` prints the Helm Web team rollup after `helm connect`. Optional `--users` / `--teams` add an unshared-replay ceiling on the local path. Does not compute identified savings. |
 | `helm map <project-id> [path]` | Register a local checkout for a project |
 | `helm daemon start` | Start the background agent-runner daemon (`--foreground` runs it in-process for supervisors) |
 | `helm daemon stop` | Stop the daemon |
