@@ -120,7 +120,7 @@ The daemon claims work packages from Helm Web and runs Claude or Codex SDKs on t
 
 ### Which orgs
 
-`helm connect` stores a Sanctum device token, `organization_id`, `user_id`, and `api_url` (`src/types.ts` `Credentials`). Product commands that talk to helm-web refuse until that link exists (`src/lib/account-link.ts`, cli#2).
+`helm connect` stores a Sanctum device token, `user_id`, and `api_url` (`src/types.ts` `Credentials`). `organization_id` is on the type and is written as `""` (`src/commands/connect.ts`). The account gate checks only a non-empty `api_key` (`hasLinkedAccount`). Product commands that talk to helm-web refuse until that link exists (`src/lib/account-link.ts`, cli#2). Scan rows leave `project_id` null (`UsageAggregator.finish`). Helm Web infers team from the token and from `project_hint`.
 
 `helm audit` is the exception. It always prints from local transcripts. No account required (cli#1, `src/commands/audit.ts`). Upload happens only when the CLI is already linked and `--no-upload` is off.
 
