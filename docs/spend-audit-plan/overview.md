@@ -96,6 +96,9 @@ Do not change the landing-page lead form from this repo.
 
 ## Market research
 
+2026-08-17 product-bar audit and recommended next slice (team rollup read, not local byModel print) live in
+[docs/research/north-star-next-slice-2026-08.md](../research/north-star-next-slice-2026-08.md).
+
 August 2026 Pulse interviews on token spend live in
 [docs/research/pragmatic-engineer-pulse-token-spend-2026-08.md](../research/pragmatic-engineer-pulse-token-spend-2026-08.md).
 October 2025 payload and schema waste lives in
