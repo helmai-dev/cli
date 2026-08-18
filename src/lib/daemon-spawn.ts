@@ -52,3 +52,20 @@ export function resolveDaemonSpawn(
 
   return { command: execPath, args: [entryScript] };
 }
+
+/**
+ * How coding-agent hosts should spawn `helm mcp`. Reuses the daemon spawn
+ * plan so a compiled binary is invoked directly and a node/bun checkout
+ * keeps its entry script. Never looks up `helm` on PATH — that would hit
+ * Kubernetes Helm when it is installed first.
+ */
+export function resolveHelmMcpSpawn(
+  execPath: string,
+  entryScript: string | undefined | null,
+): DaemonSpawnPlan | null {
+  const plan = resolveDaemonSpawn(execPath, entryScript);
+  if (!plan) {
+    return null;
+  }
+  return { command: plan.command, args: [...plan.args, "mcp"] };
+}

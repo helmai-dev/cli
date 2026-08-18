@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { resolveDaemonSpawn } from "../dist/lib/daemon-spawn.js";
+import { resolveDaemonSpawn, resolveHelmMcpSpawn } from "../dist/lib/daemon-spawn.js";
 
 test("compiled standalone binary re-invokes itself with no args", () => {
   assert.deepEqual(resolveDaemonSpawn("/usr/local/bin/helm", undefined), {
@@ -64,6 +64,17 @@ test("runtime basename match is case-insensitive", () => {
 test("JS runtime with no entry script fails loudly (null), not a bare-node spawn", () => {
   assert.equal(resolveDaemonSpawn("/usr/local/bin/node", undefined), null);
   assert.equal(resolveDaemonSpawn("C:\\Program Files\\nodejs\\node.exe", null), null);
+});
+
+test("MCP spawn appends mcp to the same binary the daemon would re-invoke", () => {
+  assert.deepEqual(resolveHelmMcpSpawn("/usr/local/bin/helm", undefined), {
+    command: "/usr/local/bin/helm",
+    args: ["mcp"],
+  });
+  assert.deepEqual(
+    resolveHelmMcpSpawn("/usr/local/bin/node", "/repo/dist/index.js"),
+    { command: "/usr/local/bin/node", args: ["/repo/dist/index.js", "mcp"] },
+  );
 });
 
 test("a binary merely containing 'node' in its path is NOT treated as a runtime", () => {
