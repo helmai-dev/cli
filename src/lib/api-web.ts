@@ -12,6 +12,7 @@ import type {
   SharedProjectPerson,
   TeamRollupObserved,
 } from "./audit-snapshot.js";
+import type { WorkFingerprintsBody } from "./fingerprints.js";
 import type { SessionChunk, SessionResultBody, SessionUsageBody } from "./web-chunks.js";
 import { getApiUrl, loadCredentials } from "./config.js";
 
@@ -750,6 +751,29 @@ export async function getTeamUsage(
 ): Promise<TeamRollupObserved> {
   const payload = await requester<unknown>(teamUsageEndpoint(teamId, days), { method: "GET" });
   return teamUsageFromEnvelope(payload);
+}
+
+// --- Work fingerprints ---
+
+export const WORK_FINGERPRINTS_ENDPOINT = "/usage/fingerprints";
+
+export const WORK_FINGERPRINT_TIMEOUT_MS = 1200;
+
+export async function sendWorkFingerprints(
+  body: WorkFingerprintsBody,
+  requester: WebRequester = request,
+): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), WORK_FINGERPRINT_TIMEOUT_MS);
+  try {
+    await requester<unknown>(WORK_FINGERPRINTS_ENDPOINT, {
+      method: "POST",
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // --- Session relay ---

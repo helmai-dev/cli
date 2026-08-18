@@ -13,6 +13,7 @@ test("normalizes and sanitizes Claude PostToolUse evidence", () => {
   }, "2026-08-13T20:00:00.000Z");
 
   assert.equal(normalized.sessionId, "session-1");
+  assert.deepEqual(normalized.toolInput, { file_path: "/Users/team/project/src/auth.ts" });
   assert.equal(normalized.observation.toolName, "Read");
   assert.match(normalized.observation.inputExcerpt, /\$PROJECT\/src\/auth\.ts/);
   assert.equal(normalized.observation.outputExcerpt, "authorization: [REDACTED]");
