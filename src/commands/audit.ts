@@ -2,9 +2,11 @@
  * `helm audit` — observed spend. Default path reads local transcripts and
  * does not need a Helm Web account. `--team` GETs the TeamUsageRollup
  * Helm Web /usage already shows and requires `helm connect`. Prints
- * realized provider-cache savings only on the local path. Optional
- * self-reported team size becomes an unshared-replay scenario on the
- * local path. Does not compute landing-page identified savings.
+ * shared_projects and shared_paths as observed overlap when those keys
+ * are present. Prints realized provider-cache savings only on the local
+ * path. Optional self-reported team size becomes an unshared-replay
+ * scenario on the local path. Does not compute landing-page identified
+ * savings.
  */
 
 import * as readline from "node:readline/promises";
@@ -16,7 +18,10 @@ import {
   type AuditSnapshot,
   type AuditTeamInputs,
   type LocalAuditSnapshot,
+  type SharedPathOverlap,
+  type SharedProjectOverlap,
   type TeamAuditSnapshot,
+  type TeamRollupObserved,
 } from "../lib/audit-snapshot.js";
 import { runLocalScan } from "../lib/local-scan.js";
 import { getTeamUsage, sendUsageEvents } from "../lib/api-web.js";
@@ -159,6 +164,7 @@ function formatTeamAuditHuman(snapshot: TeamAuditSnapshot): string {
     lines.push("  Observed spend is $0.00. Identified savings are not computed.");
     lines.push("  Run helm scan on each machine that should appear here.");
     lines.push("");
+    appendObservedOverlap(lines, rollup);
     appendNotComputed(lines, snapshot);
     return lines.join("\n");
   }
@@ -187,8 +193,41 @@ function formatTeamAuditHuman(snapshot: TeamAuditSnapshot): string {
     lines.push(`  ${usd(row.cost_usd).padStart(10)}  ${row.name}`);
   }
   lines.push("");
+  appendObservedOverlap(lines, rollup);
   appendNotComputed(lines, snapshot);
   return lines.join("\n");
+}
+
+function peopleNames(people: Array<{ name: string }>): string {
+  return people.map((person) => person.name).join(", ");
+}
+
+function appendSharedProjects(lines: string[], rows: SharedProjectOverlap[]): void {
+  lines.push(chalk.bold("  Shared projects (observed overlap)"));
+  for (const row of rows) {
+    lines.push(`  ${usd(row.cost_usd).padStart(10)}  ${row.label}  ${peopleNames(row.people)}`);
+  }
+  lines.push("");
+}
+
+function appendSharedPaths(lines: string[], rows: SharedPathOverlap[]): void {
+  lines.push(chalk.bold("  Shared paths (observed overlap)"));
+  for (const row of rows) {
+    const project = row.project_hint === "" ? "" : `  ${row.project_hint}`;
+    lines.push(`    ${row.path_hint}${project}  ${peopleNames(row.people)}  ${row.count}`);
+  }
+  lines.push("");
+}
+
+function appendObservedOverlap(lines: string[], rollup: TeamRollupObserved): void {
+  const projects = rollup.shared_projects;
+  if (projects != null && projects.length > 0) {
+    appendSharedProjects(lines, projects);
+  }
+  const paths = rollup.shared_paths;
+  if (paths != null && paths.length > 0) {
+    appendSharedPaths(lines, paths);
+  }
 }
 
 function appendNotComputed(lines: string[], snapshot: AuditSnapshot): void {

@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { auditSnapshotFromScan, auditSnapshotFromTeamRollup } from "../dist/lib/audit-snapshot.js";
 import {
@@ -201,6 +204,33 @@ test("unlinked --team refuses; local audit stays available", () => {
   });
 });
 
+function sharedProjectsFixture() {
+  return [
+    {
+      label: "helm-cli",
+      people: [
+        { id: "u1", name: "Ada", cost_usd: 30 },
+        { id: "u2", name: "Grace", cost_usd: 12.5 },
+      ],
+      cost_usd: 42.5,
+    },
+  ];
+}
+
+function sharedPathsFixture() {
+  return [
+    {
+      path_hint: "src/lib/api-web.ts",
+      project_hint: "helm-cli",
+      people: [
+        { id: "u1", name: "Ada" },
+        { id: "u2", name: "Grace" },
+      ],
+      count: 3,
+    },
+  ];
+}
+
 test("human team audit prints observed rollup, models, and people without savings", () => {
   const snapshot = auditSnapshotFromTeamRollup(teamRollup(), 30);
   const text = stripAnsi(formatAuditHuman(snapshot));
@@ -220,6 +250,8 @@ test("human team audit prints observed rollup, models, and people without saving
   assert.match(text, /identified_savings_usd\s+not computed/);
   assert.doesNotMatch(text, /14%/);
   assert.doesNotMatch(text, /Unshared replay/);
+  assert.doesNotMatch(text, /Shared projects/);
+  assert.doesNotMatch(text, /Shared paths/);
 });
 
 test("empty team audit points at helm scan and does not open a sales form", () => {
@@ -265,4 +297,94 @@ test("json team audit keeps PHP field names and null identified savings", () => 
   assert.equal(parsed.not_computed.waste_rate, null);
   assert.equal(parsed.scenario, null);
   assert.equal(Object.hasOwn(parsed, "upload"), false);
+  assert.equal(Object.hasOwn(parsed.observed, "shared_projects"), false);
+  assert.equal(Object.hasOwn(parsed.observed, "shared_paths"), false);
+});
+
+test("human team audit prints present overlap keys as observed overlap", () => {
+  const snapshot = auditSnapshotFromTeamRollup(
+    teamRollup({
+      shared_projects: sharedProjectsFixture(),
+      shared_paths: sharedPathsFixture(),
+    }),
+    30,
+  );
+  const text = stripAnsi(formatAuditHuman(snapshot));
+
+  assert.match(text, /Shared projects \(observed overlap\)/);
+  assert.match(text, /helm-cli/);
+  assert.match(text, /Ada, Grace/);
+  assert.match(text, /\$42\.50/);
+  assert.match(text, /Shared paths \(observed overlap\)/);
+  assert.match(text, /src\/lib\/api-web\.ts/);
+  assert.match(text, /\b3\b/);
+  assert.match(text, /identified_savings_usd\s+not computed/);
+  assert.doesNotMatch(text, /14%/);
+  assert.doesNotMatch(text, /saved tokens/i);
+  assert.doesNotMatch(text, /we saved/i);
+});
+
+test("human team audit skips a missing overlap key and prints the one that is present", () => {
+  const snapshot = auditSnapshotFromTeamRollup(
+    teamRollup({
+      shared_projects: sharedProjectsFixture(),
+    }),
+    30,
+  );
+  const text = stripAnsi(formatAuditHuman(snapshot));
+
+  assert.match(text, /Shared projects \(observed overlap\)/);
+  assert.match(text, /helm-cli/);
+  assert.match(text, /Ada, Grace/);
+  assert.doesNotMatch(text, /Shared paths/);
+  assert.doesNotMatch(text, /src\/lib\/api-web\.ts/);
+  assert.doesNotMatch(text, /14%/);
+});
+
+test("json team audit includes present overlap keys and omits a missing one", () => {
+  const present = JSON.parse(
+    formatAuditJson(
+      auditSnapshotFromTeamRollup(
+        teamRollup({
+          shared_projects: sharedProjectsFixture(),
+          shared_paths: sharedPathsFixture(),
+        }),
+        14,
+      ),
+    ),
+  );
+  assert.equal(present.observed.shared_projects[0].label, "helm-cli");
+  assert.equal(present.observed.shared_projects[0].cost_usd, 42.5);
+  assert.deepEqual(
+    present.observed.shared_projects[0].people.map((person) => person.name),
+    ["Ada", "Grace"],
+  );
+  assert.equal(present.observed.shared_paths[0].path_hint, "src/lib/api-web.ts");
+  assert.equal(present.observed.shared_paths[0].count, 3);
+  assert.equal(present.not_computed.identified_savings_usd, null);
+  assert.equal(present.not_computed.shared_context_savings_usd, null);
+
+  const partial = JSON.parse(
+    formatAuditJson(
+      auditSnapshotFromTeamRollup(
+        teamRollup({
+          shared_paths: sharedPathsFixture(),
+        }),
+        14,
+      ),
+    ),
+  );
+  assert.equal(Object.hasOwn(partial.observed, "shared_projects"), false);
+  assert.equal(partial.observed.shared_paths[0].project_hint, "helm-cli");
+});
+
+test("audit --help names overlap sections as observed overlap", () => {
+  const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist/index.js");
+  const help = execFileSync(process.execPath, [cli, "audit", "--help"], { encoding: "utf8" });
+
+  assert.match(help, /shared_projects/);
+  assert.match(help, /shared_paths/);
+  assert.match(help, /observed overlap/);
+  assert.doesNotMatch(help, /14%/);
+  assert.doesNotMatch(help, /saved tokens/i);
 });
