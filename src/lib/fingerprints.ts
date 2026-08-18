@@ -106,6 +106,10 @@ export function pathCandidateFromToolInput(toolInput: unknown): WorkPathCandidat
   return null;
 }
 
+export function projectHintFromCwd(cwd: string, homeDir: string = os.homedir()): ProjectHint | null {
+  return projectHint(cwd, homeDir);
+}
+
 function projectHint(cwd: string, homeDir: string): ProjectHint | null {
   if (cwd === "" || cwd === ".") {
     return null;
@@ -168,6 +172,53 @@ function relativePathHint(candidate: WorkPathCandidate | null, cwd: string): Rel
   return mintRelativePathHint(hint);
 }
 
+export function pathHintFromRaw(value: string, cwd: string): RelativePathHint | null {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.includes("://") || trimmed.includes("\n")) {
+    return null;
+  }
+  return relativePathHint(mintWorkPathCandidate(trimmed), cwd);
+}
+
+const PROMPT_PATH_CAP = 5;
+const WRAPPING_QUOTES = /^[\s`'"“”‘’]+|[\s`'"“”‘’]+$/g;
+const TRAILING_PUNCT = /[),.;:!?]+$/;
+const FILENAME_WITH_EXT = /^(?:\.[A-Za-z0-9]{1,10}|[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,10})$/;
+
+function stripPromptToken(token: string): string {
+  let next = token.replace(WRAPPING_QUOTES, "");
+  next = next.replace(TRAILING_PUNCT, "");
+  return next.replace(WRAPPING_QUOTES, "");
+}
+
+function looksPathLike(token: string): boolean {
+  return token.includes("/") || token.includes("\\") || FILENAME_WITH_EXT.test(token);
+}
+
+/** Best-effort path hints from local prompt text. Same privacy filters as tool fingerprints. */
+export function pathHintsFromPrompt(prompt: string, cwd: string): RelativePathHint[] {
+  const seen = new Set<string>();
+  const hints: RelativePathHint[] = [];
+  const fromTicks = [...prompt.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+  const remainder = prompt.replace(/`[^`]+`/g, " ");
+  for (const raw of [...fromTicks, ...remainder.split(/\s+/)]) {
+    const token = stripPromptToken(raw);
+    if (!token || !looksPathLike(token)) {
+      continue;
+    }
+    const hint = pathHintFromRaw(token, cwd);
+    if (hint === null || seen.has(hint)) {
+      continue;
+    }
+    seen.add(hint);
+    hints.push(hint);
+    if (hints.length >= PROMPT_PATH_CAP) {
+      break;
+    }
+  }
+  return hints;
+}
+
 export function buildWorkFingerprint(
   context: AmbientProjectContext,
   facts: ToolEventFacts,
@@ -177,7 +228,7 @@ export function buildWorkFingerprint(
   if (!provider) {
     return null;
   }
-  const project_hint = projectHint(context.cwd, homeDir);
+  const project_hint = projectHintFromCwd(context.cwd, homeDir);
   if (!project_hint) {
     return null;
   }
