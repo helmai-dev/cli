@@ -2,11 +2,9 @@
  * `helm audit` — observed spend. Default path reads local transcripts and
  * does not need a Helm Web account. `--team` GETs the TeamUsageRollup
  * Helm Web /usage already shows and requires `helm connect`. Prints
- * shared_projects and shared_paths as observed overlap when those keys
- * are present. Prints realized provider-cache savings only on the local
- * path. Optional self-reported team size becomes an unshared-replay
- * scenario on the local path. Does not compute landing-page identified
- * savings.
+ * realized provider-cache savings only on the local path. Optional
+ * self-reported team size becomes an unshared-replay scenario on the
+ * local path. Does not compute landing-page identified savings.
  */
 
 import * as readline from "node:readline/promises";

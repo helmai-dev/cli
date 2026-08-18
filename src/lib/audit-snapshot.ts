@@ -111,7 +111,7 @@ export interface SharedPathOverlap {
   count: number;
 }
 
-/** Field names copy App\Support\TeamUsageRollup::build plus optional overlap keys. */
+/** Field names copy App\Support\TeamUsageRollup::build. */
 export interface TeamRollupObserved {
   days: number;
   since: string;
