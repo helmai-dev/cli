@@ -60,10 +60,17 @@ const PROVIDER_FOR_AMBIENT: Readonly<Record<string, FingerprintProvider>> = {
   codex: "codex",
 };
 
-const PATH_KEYS = ["file_path", "notebook_path", "path", "filePath", "notebookPath"] as const;
+/** Only file-semantic keys. The generic `path` key is excluded: no fixture
+ *  proves it always holds a local path, and a non-path string on an
+ *  allowlisted key would transit to the wire looking like a relative path. */
+const PATH_KEYS = ["file_path", "notebook_path", "filePath", "notebookPath"] as const;
 
 const MAX_PATH_HINT_CHARS = 512;
 const MAX_TOOL_NAME_CHARS = 128;
+/** Tool names in every attested runtime are single tokens (Read, Bash,
+ *  mcp__server__tool). Free text has spaces; a space means it is not a name. */
+const TOOL_NAME_PATTERN = /^[A-Za-z0-9_.:\/-]{1,128}$/;
+const WINDOWS_DRIVE_PATTERN = /^[A-Za-z]:\//;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -122,7 +129,7 @@ function projectHint(cwd: string, homeDir: string): ProjectHint | null {
 
 function toolNameHint(toolName: string): string | null {
   const trimmed = toolName.trim();
-  if (!trimmed || trimmed.length > MAX_TOOL_NAME_CHARS || trimmed.includes("\n")) {
+  if (trimmed.length > MAX_TOOL_NAME_CHARS || !TOOL_NAME_PATTERN.test(trimmed)) {
     return null;
   }
   return trimmed;
@@ -134,6 +141,16 @@ function relativePathHint(candidate: WorkPathCandidate | null, cwd: string): Rel
   }
   const posixCandidate = candidate.replace(/\\/g, "/");
   const posixCwd = cwd.replace(/\\/g, "/");
+  // A Windows drive path is absolute even when this process runs on POSIX,
+  // where path.isAbsolute would call it relative and pass it through.
+  if (WINDOWS_DRIVE_PATTERN.test(posixCandidate)) {
+    return null;
+  }
+  // Free text on a file key is multi-word without separators; a real path
+  // with spaces still has a slash. Best-effort, not a proof.
+  if (posixCandidate.includes(" ") && !posixCandidate.includes("/")) {
+    return null;
+  }
   const relative = path.isAbsolute(posixCandidate)
     ? path.relative(posixCwd, posixCandidate)
     : path.normalize(posixCandidate);

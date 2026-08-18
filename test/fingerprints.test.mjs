@@ -193,7 +193,6 @@ test("path hints relativize inside cwd and null out escapes, URLs, and junk", ()
   assert.equal(buildClaude({ file_path: AUTH_FILE }).path_hint, "src/auth.ts");
   assert.equal(buildClaude({ file_path: "/Users/other/secret.ts" }).path_hint, null);
   assert.equal(buildClaude({ file_path: "../escape" }).path_hint, null);
-  assert.equal(buildClaude({ path: "/Users/team/project/src" }).path_hint, "src");
   assert.equal(buildClaude({ file_path: "src/auth.ts" }).path_hint, "src/auth.ts");
   assert.equal(buildClaude({ file_path: "src/../../outside" }).path_hint, null);
   assert.equal(pathCandidateFromToolInput({ file_path: 12 }), null);
@@ -205,6 +204,15 @@ test("path hints relativize inside cwd and null out escapes, URLs, and junk", ()
   assert.equal(buildClaude({ filePath: AUTH_FILE }).path_hint, "src/auth.ts");
   assert.equal(buildClaude({ notebook_path: "/Users/team/project/notes.ipynb" }).path_hint, "notes.ipynb");
   assert.equal(buildClaude({ file_path: "src\\lib\\auth.ts" }).path_hint, "src/lib/auth.ts");
+});
+
+test("the generic path key and free text on file keys never become a hint", () => {
+  assert.equal(pathCandidateFromToolInput({ path: "/Users/team/project/src" }), null);
+  assert.equal(pathCandidateFromToolInput({ path: "SECRET FILE BODY" }), null);
+  assert.equal(buildClaude({ file_path: "SECRET FILE BODY" }).path_hint, null);
+  assert.equal(buildClaude({ file_path: "git status && cat SECRETS" }).path_hint, null);
+  assert.equal(buildClaude({ file_path: "C:\\Users\\alice\\secret.ts" }).path_hint, null);
+  assert.equal(buildClaude({ file_path: "/Users/team/project/My Docs/file.txt" }).path_hint, "My Docs/file.txt");
 });
 
 test("project hint is the cwd basename and skips home and filesystem root", () => {
@@ -219,18 +227,19 @@ test("project hint is the cwd basename and skips home and filesystem root", () =
   );
 });
 
-test("oversized or newline tool names become null without dropping the fingerprint", () => {
+test("tool names outside the single-token shape become null without dropping the fingerprint", () => {
   const longName = buildClaude({ file_path: AUTH_FILE }, "T".repeat(200));
   assert.equal(longName.tool_name, null);
   assert.equal(longName.provider, "claude");
   assert.equal(longName.path_hint, "src/auth.ts");
 
-  const newlineName = buildClaude({ file_path: AUTH_FILE }, "Read\nWrite");
-  assert.equal(newlineName.tool_name, null);
-  assert.equal(newlineName.provider, "claude");
-
-  const normal = buildClaude({ file_path: AUTH_FILE }, "Edit");
-  assert.equal(normal.tool_name, "Edit");
+  assert.equal(buildClaude({ file_path: AUTH_FILE }, "Read\nWrite").tool_name, null);
+  assert.equal(buildClaude({ file_path: AUTH_FILE }, "SECRET USER PROMPT").tool_name, null);
+  assert.equal(buildClaude({ file_path: AUTH_FILE }, "Edit").tool_name, "Edit");
+  assert.equal(
+    buildClaude({ file_path: AUTH_FILE }, "mcp__helm__search").tool_name,
+    "mcp__helm__search",
+  );
 });
 
 test("occurred_at is the capturedAt value passed in, with no clock read", () => {
