@@ -180,7 +180,8 @@ test("provider usage is copied, not invented, and shared_context_savings stays n
   assert.equal(record.shared_context_savings_usd, null);
   const upload = liveUsageToUpload(record);
   assert.equal("shared_context_savings_usd" in upload, false);
-  assert.equal(JSON.stringify(upload).includes("14"), false);
+  assert.equal(JSON.stringify(upload).includes("shared_context_savings"), false);
+  assert.equal(JSON.stringify(upload).includes("0.14"), false);
 });
 
 test("SSE usage is read from the stream without inventing tokens", () => {
@@ -319,6 +320,7 @@ test("pass-through happy path forwards auth and body, records usage, never uploa
       cwd: PROJECT_CWD,
       homeDir: HOME_DIR,
       now: () => NOW,
+      log: () => {},
       linked: true,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
@@ -399,6 +401,7 @@ test("unlinked proxy still completes the provider call", async () => {
       openaiUpstream: provider.url,
       cwd: PROJECT_CWD,
       homeDir: HOME_DIR,
+      log: () => {},
       linked: false,
       sendUsage: async (body) => {
         helmPosts.push(body);
@@ -448,6 +451,7 @@ test("live others can ride along as an on-device system note", async () => {
       cwd: PROJECT_CWD,
       homeDir: HOME_DIR,
       now: () => NOW,
+      log: () => {},
       linked: true,
       fetchLiveOthers: async () => [
         { name: "Alex", path_hint: "src/Foo.php", occurred_at: "2026-08-18T16:27:00.000Z" },
@@ -469,6 +473,51 @@ test("live others can ride along as an on-device system note", async () => {
     assert.equal(response.status, 200);
     assert.equal(providerHits[0].system.at(-1).text, "Alex was on Foo.php 3 minutes ago");
     assert.equal(JSON.stringify(providerHits[0]).includes(SECRET), true);
+  } finally {
+    await proxy.close();
+    await provider.close();
+  }
+});
+
+test("SSE responses are flushed to the client as chunks arrive", async () => {
+  const provider = await listenMock((_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write('data: {"type":"message_start","message":{"usage":{"input_tokens":2,"output_tokens":0}}}\n\n');
+    setTimeout(() => {
+      res.end('data: {"type":"message_delta","usage":{"output_tokens":4}}\n\n');
+    }, 20);
+  });
+  const usagePosts = [];
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0 },
+    {
+      anthropicUpstream: provider.url,
+      openaiUpstream: provider.url,
+      cwd: PROJECT_CWD,
+      homeDir: HOME_DIR,
+      log: () => {},
+      linked: true,
+      sendUsage: async (body) => {
+        usagePosts.push(body);
+        return { accepted: 1 };
+      },
+      sendFingerprints: async () => {},
+    },
+  );
+
+  try {
+    const response = await fetch(`${proxy.url}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "sk-ant-user" },
+      body: JSON.stringify({ model: "claude-sonnet-4-20250514", messages: [{ role: "user", content: "hi" }] }),
+    });
+    assert.equal(response.headers.get("content-type")?.includes("text/event-stream"), true);
+    const text = await response.text();
+    assert.match(text, /message_start/);
+    assert.match(text, /message_delta/);
+    await proxy.reported;
+    assert.equal(usagePosts[0].events[0].input_tokens, 2);
+    assert.equal(usagePosts[0].events[0].output_tokens, 4);
   } finally {
     await proxy.close();
     await provider.close();

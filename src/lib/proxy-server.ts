@@ -184,6 +184,38 @@ async function defaultLiveOthers(query: {
   }
 }
 
+async function writeUpstreamBody(input: {
+  res: ServerResponse;
+  status: number;
+  headers: Record<string, string | string[]>;
+  body: ReadableStream<Uint8Array> | null;
+  fallback: () => Promise<ArrayBuffer>;
+  stream: boolean;
+}): Promise<Buffer> {
+  if (!input.stream || input.body === null) {
+    const responseBytes = Buffer.from(await input.fallback());
+    input.res.writeHead(input.status, input.headers);
+    input.res.end(responseBytes);
+    return responseBytes;
+  }
+  input.res.writeHead(input.status, input.headers);
+  const reader = input.body.getReader();
+  const chunks: Buffer[] = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (value) {
+      const buf = Buffer.from(value);
+      chunks.push(buf);
+      input.res.write(buf);
+    }
+  }
+  input.res.end();
+  return Buffer.concat(chunks);
+}
+
 function writeHealth(res: ServerResponse): void {
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ ok: true, service: "helm-proxy" }));
@@ -257,7 +289,14 @@ async function handleProxyRequest(
   const responseHeaders = forwardResponseHeaders(upstream.headers);
   const contentType = upstream.headers.get("content-type") ?? "";
   const isEventStream = contentType.includes("text/event-stream");
-  const responseBytes = Buffer.from(await upstream.arrayBuffer());
+  const responseBytes = await writeUpstreamBody({
+    res,
+    status: upstream.status,
+    headers: responseHeaders,
+    body: upstream.body,
+    fallback: () => upstream.arrayBuffer(),
+    stream: isEventStream,
+  });
   const usage = isEventStream
     ? usageFromSseStream(provider, responseBytes.toString("utf8"))
     : usageFromProviderPayload(provider, parseJsonBody(responseBytes));
@@ -275,8 +314,6 @@ async function handleProxyRequest(
     now,
     usage,
   });
-  res.writeHead(upstream.status, responseHeaders);
-  res.end(responseBytes);
 }
 
 async function resolveOthers(
