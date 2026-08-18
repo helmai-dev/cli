@@ -5,7 +5,13 @@
  * obtained through the device-code flow (helm connect).
  */
 
-import type { TeamRollupObserved } from "./audit-snapshot.js";
+import type {
+  SharedPathOverlap,
+  SharedPathPerson,
+  SharedProjectOverlap,
+  SharedProjectPerson,
+  TeamRollupObserved,
+} from "./audit-snapshot.js";
 import type { WorkFingerprintsBody } from "./fingerprints.js";
 import type { SessionChunk, SessionResultBody, SessionUsageBody } from "./web-chunks.js";
 import { getApiUrl, loadCredentials } from "./config.js";
@@ -647,6 +653,72 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function parseRows<T>(value: unknown, parseRow: (item: unknown) => T | null): T[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const rows: T[] = [];
+  for (const item of value) {
+    const row = parseRow(item);
+    if (row !== null) {
+      rows.push(row);
+    }
+  }
+  return rows;
+}
+
+function parseNamedPerson(value: unknown): SharedPathPerson | null {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.name !== "string") {
+    return null;
+  }
+  return { id: value.id, name: value.name };
+}
+
+function parseSharedProjectRow(value: unknown): SharedProjectOverlap | null {
+  if (!isRecord(value) || typeof value.label !== "string" || !isFiniteNumber(value.cost_usd)) {
+    return null;
+  }
+  const people = parseRows(value.people, (person): SharedProjectPerson | null => {
+    const named = parseNamedPerson(person);
+    if (named === null || !isRecord(person) || !isFiniteNumber(person.cost_usd)) {
+      return null;
+    }
+    return { ...named, cost_usd: person.cost_usd };
+  });
+  if (people === undefined || people.length === 0) {
+    return null;
+  }
+  return { label: value.label, people, cost_usd: value.cost_usd };
+}
+
+function parseSharedPathRow(value: unknown): SharedPathOverlap | null {
+  if (
+    !isRecord(value) ||
+    typeof value.path_hint !== "string" ||
+    typeof value.project_hint !== "string" ||
+    !isFiniteNumber(value.count)
+  ) {
+    return null;
+  }
+  const people = parseRows(value.people, parseNamedPerson);
+  if (people === undefined || people.length === 0) {
+    return null;
+  }
+  return {
+    path_hint: value.path_hint,
+    project_hint: value.project_hint,
+    people,
+    count: value.count,
+  };
+}
+
 export function teamUsageFromEnvelope(payload: unknown): TeamRollupObserved {
   if (!isRecord(payload) || !isRecord(payload.data)) {
     throw new WebApiError("Team usage response was not a { data } envelope.", 502);
@@ -655,7 +727,20 @@ export function teamUsageFromEnvelope(payload: unknown): TeamRollupObserved {
   if (!isRecord(data.totals) || typeof data.totals.cost_usd !== "number") {
     throw new WebApiError("Team usage rollup is missing totals.cost_usd.", 502);
   }
-  return data as unknown as TeamRollupObserved;
+  const shared_projects = parseRows(data.shared_projects, parseSharedProjectRow);
+  const shared_paths = parseRows(data.shared_paths, parseSharedPathRow);
+  const rollup = data as unknown as TeamRollupObserved;
+  if (shared_projects === undefined) {
+    delete rollup.shared_projects;
+  } else {
+    rollup.shared_projects = shared_projects;
+  }
+  if (shared_paths === undefined) {
+    delete rollup.shared_paths;
+  } else {
+    rollup.shared_paths = shared_paths;
+  }
+  return rollup;
 }
 
 /** GET the same TeamUsageRollup Helm Web /usage already shows. */

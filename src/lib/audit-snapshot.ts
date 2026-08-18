@@ -87,6 +87,30 @@ export interface TeamRollupModelRow {
   calls: number;
 }
 
+export interface SharedProjectPerson {
+  id: string;
+  name: string;
+  cost_usd: number;
+}
+
+export interface SharedProjectOverlap {
+  label: string;
+  people: SharedProjectPerson[];
+  cost_usd: number;
+}
+
+export interface SharedPathPerson {
+  id: string;
+  name: string;
+}
+
+export interface SharedPathOverlap {
+  path_hint: string;
+  project_hint: string;
+  people: SharedPathPerson[];
+  count: number;
+}
+
 /** Field names copy App\Support\TeamUsageRollup::build. */
 export interface TeamRollupObserved {
   days: number;
@@ -97,6 +121,8 @@ export interface TeamRollupObserved {
   by_project: TeamRollupProjectRow[];
   by_model: TeamRollupModelRow[];
   by_provider: TeamRollupProviderRow[];
+  shared_projects?: SharedProjectOverlap[];
+  shared_paths?: SharedPathOverlap[];
 }
 
 interface AuditSnapshotBase {
