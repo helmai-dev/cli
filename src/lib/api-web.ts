@@ -762,11 +762,11 @@ export const WORK_FINGERPRINT_TIMEOUT_MS = 1200;
 export async function sendWorkFingerprints(
   body: WorkFingerprintsBody,
   requester: WebRequester = request,
-): Promise<void> {
+): Promise<unknown> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), WORK_FINGERPRINT_TIMEOUT_MS);
   try {
-    await requester<unknown>(WORK_FINGERPRINTS_ENDPOINT, {
+    return await requester<unknown>(WORK_FINGERPRINTS_ENDPOINT, {
       method: "POST",
       body: JSON.stringify(body),
       signal: controller.signal,

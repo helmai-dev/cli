@@ -154,7 +154,10 @@ payload. Prompts, file contents, command lines, tool output, and diffs never
 leave this machine. Fingerprints let the team see that work happened in the
 same project or file. They are labels, not savings, and they measure nothing
 about cost. If Helm Web is slow or unreachable, the send is dropped after 1.2
-seconds and the session continues; unlinked machines send nothing.
+seconds and the session continues; unlinked machines send nothing. A 2xx
+`others` list becomes one short hook notice naming the person, the path
+or project, and how recently they were there. Missing or empty `others`
+stays silent.
 
 On UserPromptSubmit, a linked session also GETs live overlap for this
 project folder and any project-relative path extracted locally from the
