@@ -253,7 +253,6 @@ test("sendWorkFingerprints POSTs the envelope to WORK_FINGERPRINTS_ENDPOINT with
 });
 
 test("fingerprint POST budget fits inside Codex observe kill", () => {
-  // Codex kills observe at 2000 ms total, including node startup and ambient append.
   assert.ok(WORK_FINGERPRINT_TIMEOUT_MS <= 1500);
   assert.ok(WORK_FINGERPRINT_TIMEOUT_MS >= 500);
 });

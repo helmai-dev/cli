@@ -672,16 +672,8 @@ export async function getTeamUsage(
 
 export const WORK_FINGERPRINTS_ENDPOINT = "/usage/fingerprints";
 
-/** Sub-budget for the observe hook. Codex kills observe at 2000 ms total
- *  (src/lib/codex-hooks.ts:37), and that budget also covers node startup,
- *  stdin drain, and the ambient append before this POST begins. The 1500 ms
- *  precedent (sendAmbientLearningCandidate, line 380) runs at Stop, where
- *  Codex allows 3000 ms, so it is a different budget. Exported so a test can
- *  pin it inside the hook budget. */
 export const WORK_FINGERPRINT_TIMEOUT_MS = 1200;
 
-/** POST work fingerprints. Throws on failure like its siblings; the caller
- *  (reportWorkFingerprint) owns fail-open. */
 export async function sendWorkFingerprints(
   body: WorkFingerprintsBody,
   requester: WebRequester = request,
