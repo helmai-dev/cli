@@ -41,7 +41,14 @@ export interface AmbientProjectContext {
 export interface FingerprintEnvironment {
   readonly readTurn: (sessionId: string) => AmbientProjectContext | null;
   readonly isLinked: () => boolean;
-  readonly send: (body: WorkFingerprintsBody) => Promise<void>;
+  readonly send: (body: WorkFingerprintsBody) => Promise<unknown>;
+}
+
+export interface FingerprintOther {
+  readonly name: string;
+  readonly project_hint: string;
+  readonly path_hint: string | null;
+  readonly occurred_at: string;
 }
 
 export const liveFingerprintEnvironment: FingerprintEnvironment = {
@@ -50,9 +57,7 @@ export const liveFingerprintEnvironment: FingerprintEnvironment = {
     return turn ? { provider: turn.provider, cwd: turn.cwd } : null;
   },
   isLinked: () => hasLinkedAccount(loadCredentials()),
-  send: async (body) => {
-    await sendWorkFingerprints(body);
-  },
+  send: (body) => sendWorkFingerprints(body),
 };
 
 /** Grok Code shares Claude's settings file (src/commands/hooks.ts) and is
@@ -109,6 +114,10 @@ export function pathCandidateFromToolInput(toolInput: unknown): WorkPathCandidat
 }
 
 export function projectHintFromCwd(cwd: string, homeDir: string = os.homedir()): ProjectHint | null {
+  return projectHint(cwd, homeDir);
+}
+
+function projectHint(cwd: string, homeDir: string): ProjectHint | null {
   if (cwd === "" || cwd === ".") {
     return null;
   }
@@ -170,6 +179,53 @@ function relativePathHint(candidate: WorkPathCandidate | null, cwd: string): Rel
   return mintRelativePathHint(hint);
 }
 
+export function pathHintFromRaw(value: string, cwd: string): RelativePathHint | null {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.includes("://") || trimmed.includes("\n")) {
+    return null;
+  }
+  return relativePathHint(mintWorkPathCandidate(trimmed), cwd);
+}
+
+const PROMPT_PATH_CAP = 5;
+const WRAPPING_QUOTES = /^[\s`'"“”‘’]+|[\s`'"“”‘’]+$/g;
+const TRAILING_PUNCT = /[),.;:!?]+$/;
+const FILENAME_WITH_EXT = /^(?:\.[A-Za-z0-9]{1,10}|[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,10})$/;
+
+function stripPromptToken(token: string): string {
+  let next = token.replace(WRAPPING_QUOTES, "");
+  next = next.replace(TRAILING_PUNCT, "");
+  return next.replace(WRAPPING_QUOTES, "");
+}
+
+function looksPathLike(token: string): boolean {
+  return token.includes("/") || token.includes("\\") || FILENAME_WITH_EXT.test(token);
+}
+
+/** Best-effort path hints from local prompt text. Same privacy filters as tool fingerprints. */
+export function pathHintsFromPrompt(prompt: string, cwd: string): RelativePathHint[] {
+  const seen = new Set<string>();
+  const hints: RelativePathHint[] = [];
+  const fromTicks = [...prompt.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+  const remainder = prompt.replace(/`[^`]+`/g, " ");
+  for (const raw of [...fromTicks, ...remainder.split(/\s+/)]) {
+    const token = stripPromptToken(raw);
+    if (!token || !looksPathLike(token)) {
+      continue;
+    }
+    const hint = pathHintFromRaw(token, cwd);
+    if (hint === null || seen.has(hint)) {
+      continue;
+    }
+    seen.add(hint);
+    hints.push(hint);
+    if (hints.length >= PROMPT_PATH_CAP) {
+      break;
+    }
+  }
+  return hints;
+}
+
 export function buildWorkFingerprint(
   context: AmbientProjectContext,
   facts: ToolEventFacts,
@@ -196,21 +252,105 @@ export async function reportWorkFingerprint(
   sessionId: string,
   facts: ToolEventFacts,
   env: FingerprintEnvironment = liveFingerprintEnvironment,
-): Promise<void> {
+  now: Date = new Date(),
+): Promise<string | null> {
   try {
     const context = env.readTurn(sessionId);
     if (!context) {
-      return;
+      return null;
     }
     const fingerprint = buildWorkFingerprint(context, facts);
     if (!fingerprint) {
-      return;
+      return null;
     }
     if (!env.isLinked()) {
-      return;
+      return null;
     }
     const fingerprints: [WorkFingerprint, ...WorkFingerprint[]] = [fingerprint];
-    await env.send({ fingerprints });
+    const response = await env.send({ fingerprints });
+    return teammateNoticeFromResponse(response, now);
   } catch {
+    return null;
   }
+}
+
+export const MAX_OTHER_NAME_CHARS = 80;
+export const MAX_OTHER_PROJECT_CHARS = 128;
+export const MAX_OTHER_PATH_CHARS = MAX_PATH_HINT_CHARS;
+/** Newlines and other controls would turn a one-line hook notice into
+ *  extra system text. Skip the entry instead of collapsing them. */
+const NOTICE_UNSAFE_CHARS = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/;
+
+export function sanitizeNoticeField(value: unknown, maxChars: number): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > maxChars || NOTICE_UNSAFE_CHARS.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+
+function parseFingerprintOther(value: unknown): FingerprintOther | null {
+  if (!isPlainRecord(value)) {
+    return null;
+  }
+  const name = sanitizeNoticeField(value.name, MAX_OTHER_NAME_CHARS);
+  const project_hint = sanitizeNoticeField(value.project_hint, MAX_OTHER_PROJECT_CHARS);
+  if (name === null || project_hint === null) {
+    return null;
+  }
+  let path_hint: string | null = null;
+  if (typeof value.path_hint === "string") {
+    if (value.path_hint.trim() !== "") {
+      path_hint = sanitizeNoticeField(value.path_hint, MAX_OTHER_PATH_CHARS);
+      if (path_hint === null) {
+        return null;
+      }
+    }
+  } else if (value.path_hint !== null) {
+    return null;
+  }
+  if (typeof value.occurred_at !== "string" || !Number.isFinite(Date.parse(value.occurred_at))) {
+    return null;
+  }
+  return { name, project_hint, path_hint, occurred_at: value.occurred_at };
+}
+
+function relativeOccurredAt(occurredAt: string, now: Date): string | null {
+  const then = Date.parse(occurredAt);
+  if (!Number.isFinite(then)) {
+    return null;
+  }
+  const diffSec = Math.max(0, Math.floor((now.getTime() - then) / 1000));
+  if (diffSec < 60) {
+    return "just now";
+  }
+  if (diffSec < 3600) {
+    return `${Math.floor(diffSec / 60)}m ago`;
+  }
+  if (diffSec < 86400) {
+    return `${Math.floor(diffSec / 3600)}h ago`;
+  }
+  return `${Math.floor(diffSec / 86400)}d ago`;
+}
+
+export function teammateNoticeFromResponse(payload: unknown, now: Date): string | null {
+  if (!isPlainRecord(payload) || !Array.isArray(payload.others) || payload.others.length === 0) {
+    return null;
+  }
+  for (const entry of payload.others) {
+    const other = parseFingerprintOther(entry);
+    if (!other) {
+      continue;
+    }
+    const ago = relativeOccurredAt(other.occurred_at, now);
+    if (!ago) {
+      continue;
+    }
+    const where = other.path_hint ?? other.project_hint;
+    return `${other.name} was in ${where} ${ago}`;
+  }
+  return null;
 }

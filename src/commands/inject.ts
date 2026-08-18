@@ -13,6 +13,11 @@
  * UserPromptSubmit emits only when the pack changed since the last emit for
  * that session, so unchanged context costs zero extra tokens and never
  * perturbs the prompt-cache prefix.
+ *
+ * On UserPromptSubmit, a linked machine also GETs live teammate overlap
+ * (project_hint + optional path_hint only; the prompt stays local). A
+ * non-empty `others` list adds one short notice on the same output channel
+ * as the pack. Pack-hash dedupe never swallows that notice. Fail-open.
  */
 
 import * as fs from "node:fs";
@@ -21,6 +26,7 @@ import * as crypto from "node:crypto";
 import { fetchHelmWebProjects } from "../lib/api-web.js";
 import { rememberPrompt } from "../lib/ambient-state.js";
 import { getApiUrl, getEnvironmentDir, loadCredentials } from "../lib/config.js";
+import { decideInjectedOutput, maybeLiveOverlapNotice } from "../lib/live-overlap.js";
 import {
   inspectLocalRepository,
   matchProjectForRepository,
@@ -352,49 +358,48 @@ export async function injectCommand(options: InjectOptions = {}): Promise<void> 
     const payload = (raw ? JSON.parse(raw) : {}) as HookPayload;
     const normalized = normalizeHookPayload(payload, options.format);
     output = normalized.output;
-    const projectId = await resolveProjectId(normalized.cwd);
-    if (!projectId) {
-      emitContext(null, output);
-      return;
-    }
-
-    let pack: unknown | null = null;
-    rememberPrompt({
-      sessionId: normalized.sessionId,
-      projectId,
+    const liveNotice = maybeLiveOverlapNotice({
+      eventName: normalized.eventName,
+      prompt: normalized.prompt,
       cwd: normalized.cwd,
-      prompt: normalized.prompt ?? "",
-      provider: normalized.provider,
     });
+    const projectId = await resolveProjectId(normalized.cwd);
 
-    const cached = readCache(projectId, normalized.query);
-    if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-      pack = cached.payload;
-    } else {
-      pack = await fetchContextPack(projectId, normalized.query);
-      if (pack != null) {
-        writeCache(projectId, normalized.query, pack);
-      } else if (cached) {
-        pack = cached.payload; // stale beats nothing, never blocks
+    let rendered: string | null = null;
+    if (projectId) {
+      rememberPrompt({
+        sessionId: normalized.sessionId,
+        projectId,
+        cwd: normalized.cwd,
+        prompt: normalized.prompt ?? "",
+        provider: normalized.provider,
+      });
+
+      let pack: unknown | null = null;
+      const cached = readCache(projectId, normalized.query);
+      if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+        pack = cached.payload;
+      } else {
+        pack = await fetchContextPack(projectId, normalized.query);
+        if (pack != null) {
+          writeCache(projectId, normalized.query, pack);
+        } else if (cached) {
+          pack = cached.payload; // stale beats nothing, never blocks
+        }
       }
+      rendered = renderContextPack(pack);
     }
 
-    const rendered = renderContextPack(pack);
-    if (!rendered) {
-      emitContext(null, output);
-      return;
+    const decided = decideInjectedOutput({
+      renderedPack: rendered,
+      notice: await liveNotice,
+      eventName: normalized.eventName,
+      lastHash: lastInjectedHash(normalized.sessionId),
+    });
+    if (decided.nextHash && decided.nextHash !== lastInjectedHash(normalized.sessionId)) {
+      rememberInjectedHash(normalized.sessionId, decided.nextHash);
     }
-
-    const hash = crypto.createHash("sha1").update(rendered).digest("hex");
-    if (
-      normalized.eventName === "UserPromptSubmit" &&
-      lastInjectedHash(normalized.sessionId) === hash
-    ) {
-      emitContext(null, output);
-      return; // unchanged context — emit nothing, keep the turn clean
-    }
-    rememberInjectedHash(normalized.sessionId, hash);
-    emitContext(rendered, output);
+    emitContext(decided.context, output);
   } catch {
     // Fail-open: a broken Helm must never break the user's harness.
     emitContext(null, output);

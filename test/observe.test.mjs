@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { normalizeToolObservation } from "../dist/commands/observe.js";
+import { formatObserveHookOutput, normalizeToolObservation } from "../dist/commands/observe.js";
 
 test("normalizes and sanitizes Claude PostToolUse evidence", () => {
   const normalized = normalizeToolObservation({
@@ -25,4 +25,28 @@ test("normalizes and sanitizes Claude PostToolUse evidence", () => {
 test("ignores malformed tool hook payloads", () => {
   assert.equal(normalizeToolObservation({ tool_name: "Read" }), null);
   assert.equal(normalizeToolObservation({ session_id: "session-1" }), null);
+});
+
+test("a teammate notice is one systemMessage hook JSON object", () => {
+  const raw = formatObserveHookOutput("Maya was in src/auth.ts 3m ago");
+  const parsed = JSON.parse(raw);
+  assert.deepEqual(parsed, { systemMessage: "Maya was in src/auth.ts 3m ago" });
+  assert.equal(Object.hasOwn(parsed, "decision"), false);
+  assert.equal(Object.hasOwn(parsed, "continue"), false);
+  assert.equal(Object.hasOwn(parsed, "hookSpecificOutput"), false);
+  assert.equal(/\$|saving/i.test(raw), false);
+});
+
+test("missing notice stays silent on Claude and Codex PostToolUse", () => {
+  assert.equal(formatObserveHookOutput(null), "");
+  assert.equal(formatObserveHookOutput(""), "");
+});
+
+test("gemini AfterTool still emits only suppressOutput", () => {
+  assert.deepEqual(JSON.parse(formatObserveHookOutput("Maya was in src/auth.ts 3m ago", "gemini")), {
+    suppressOutput: true,
+  });
+  assert.deepEqual(JSON.parse(formatObserveHookOutput(null, "gemini")), {
+    suppressOutput: true,
+  });
 });

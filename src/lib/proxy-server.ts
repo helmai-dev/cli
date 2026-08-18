@@ -2,10 +2,10 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import * as os from "node:os";
 import { hasLinkedAccount } from "./account-link.js";
 import {
-  getLiveFingerprints,
+  fetchLiveFingerprintOthers,
   sendUsageEvents,
   sendWorkFingerprints,
-  type LiveFingerprintOther,
+  type LiveOverlapPerson,
 } from "./api-web.js";
 import { usageCostUsd } from "./claude-scan.js";
 import { loadCredentials, loadMachineIdentity } from "./config.js";
@@ -21,6 +21,7 @@ import {
   DEFAULT_PROXY_PORT,
   extractJsonModel,
   formatTeammateNote,
+  isLoopbackBind,
   pathFactsFromRequestBody,
   routeProxiedProvider,
   usageFromProviderPayload,
@@ -63,7 +64,7 @@ export interface ProxyHooks {
   fetchLiveOthers?: (query: {
     project_hint: string;
     path_hint: string | null;
-  }) => Promise<LiveFingerprintOther[]>;
+  }) => Promise<LiveOverlapPerson[]>;
   sendUsage?: typeof sendUsageEvents;
   sendFingerprints?: typeof sendWorkFingerprints;
   log?: (line: string) => void;
@@ -176,12 +177,11 @@ function defaultLinked(): boolean {
 async function defaultLiveOthers(query: {
   project_hint: string;
   path_hint: string | null;
-}): Promise<LiveFingerprintOther[]> {
-  try {
-    return await getLiveFingerprints(query);
-  } catch {
-    return [];
-  }
+}): Promise<LiveOverlapPerson[]> {
+  return fetchLiveFingerprintOthers({
+    project_hint: query.project_hint,
+    path_hints: query.path_hint ? [query.path_hint] : [],
+  });
 }
 
 async function writeUpstreamBody(input: {
@@ -313,13 +313,14 @@ async function handleProxyRequest(
     homeDir,
     now,
     usage,
+    upstreamStatus: upstream.status,
   });
 }
 
 async function resolveOthers(
   hooks: ProxyHooks,
   query: { project_hint: string; path_hint: string | null },
-): Promise<LiveFingerprintOther[]> {
+): Promise<LiveOverlapPerson[]> {
   if (query.project_hint === "") {
     return [];
   }
@@ -364,7 +365,11 @@ async function reportAfterResponse(input: {
   homeDir: string;
   now: Date;
   usage: ReturnType<typeof usageFromProviderPayload>;
+  upstreamStatus: number;
 }): Promise<void> {
+  if (input.upstreamStatus < 200 || input.upstreamStatus >= 300) {
+    return;
+  }
   const linked = input.hooks.linked ?? defaultLinked();
   let usageRecord: LiveUsageRecord | null = null;
   if (input.usage && input.projectHint !== "") {
@@ -454,6 +459,9 @@ export async function listenProxy(
   hooks: ProxyHooks = {},
 ): Promise<RunningProxy> {
   const host = options.host ?? DEFAULT_PROXY_HOST;
+  if (!isLoopbackBind(host)) {
+    throw new Error("helm proxy only binds loopback (127.0.0.1, ::1, localhost).");
+  }
   const preferred = options.port ?? DEFAULT_PROXY_PORT;
   const track = { report: Promise.resolve() };
   const server = createProxyServer(hooks, track);

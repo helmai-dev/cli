@@ -208,6 +208,32 @@ else
 fi
 
 echo "Installed $HELM_BIN_NAME v$resolved_version to $install_dir/$HELM_BIN_NAME"
+
+# A copy to $install_dir can still lose to an older helm earlier on PATH
+# (Homebrew on macOS, an npm global, a leftover dev build). That is not a
+# Kubernetes Helm collision: the file we wanted is in place. Tell the user
+# which binary they will actually run instead of exiting 0 in silence.
+installed_bin="$install_dir/$HELM_BIN_NAME"
+hash -r 2>/dev/null || true
+path_bin="$(command -v "$HELM_BIN_NAME" 2>/dev/null || true)"
+if [[ -n "$path_bin" ]] && ! [[ "$path_bin" -ef "$installed_bin" ]]; then
+  echo ""
+  echo "Warning: a different $HELM_BIN_NAME is earlier on PATH."
+  echo "  installed:     $installed_bin"
+  echo "  PATH will run: $path_bin"
+  echo ""
+  echo "  $HELM_BIN_NAME --version will not show this install."
+  echo ""
+  echo "  Next steps:"
+  echo "    # install onto a PATH directory that wins"
+  echo "    curl -fsSL https://tryhelm.ai/install | bash -s -- --dir \"\$HOME/.local/bin\""
+  echo ""
+  echo "    # or remove/rename the shadowing binary"
+  echo "    #   $path_bin"
+  echo ""
+  echo "    # or put $install_dir earlier in PATH"
+fi
+
 if [[ "$platform" == "windows" ]] && [[ ":$PATH:" != *":$install_dir:"* ]]; then
   echo "Tip: add $install_dir to PATH to run helm from anywhere."
 fi

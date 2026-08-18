@@ -759,91 +759,114 @@ export const WORK_FINGERPRINTS_ENDPOINT = "/usage/fingerprints";
 
 export const WORK_FINGERPRINT_TIMEOUT_MS = 1200;
 
-export const LIVE_FINGERPRINTS_ENDPOINT = "/usage/fingerprints/live";
-
-export const LIVE_FINGERPRINT_TIMEOUT_MS = 400;
-
-export interface LiveFingerprintOther {
-  name: string;
-  path_hint: string | null;
-  occurred_at: string | null;
-}
-
-export interface FingerprintStoreResult {
-  accepted?: number;
-  others: LiveFingerprintOther[];
-}
-
-export function parseLiveFingerprintOthers(value: unknown): LiveFingerprintOther[] {
-  if (!isRecord(value)) {
-    return [];
-  }
-  const raw = Array.isArray(value.others)
-    ? value.others
-    : isRecord(value.data) && Array.isArray(value.data.others)
-      ? value.data.others
-      : Array.isArray(value.data)
-        ? value.data
-        : [];
-  const others: LiveFingerprintOther[] = [];
-  for (const item of raw) {
-    if (!isRecord(item) || typeof item.name !== "string") {
-      continue;
-    }
-    const name = item.name.trim();
-    if (name === "") {
-      continue;
-    }
-    others.push({
-      name,
-      path_hint: typeof item.path_hint === "string" && item.path_hint !== "" ? item.path_hint : null,
-      occurred_at: typeof item.occurred_at === "string" && item.occurred_at !== "" ? item.occurred_at : null,
-    });
-  }
-  return others;
-}
-
-export function liveFingerprintsEndpoint(projectHint: string, pathHint: string | null): string {
-  const params = new URLSearchParams({ project_hint: projectHint });
-  if (pathHint) {
-    params.set("path_hint", pathHint);
-  }
-  return `${LIVE_FINGERPRINTS_ENDPOINT}?${params.toString()}`;
-}
-
-export async function getLiveFingerprints(
-  query: { project_hint: string; path_hint?: string | null },
+export async function sendWorkFingerprints(
+  body: WorkFingerprintsBody,
   requester: WebRequester = request,
-): Promise<LiveFingerprintOther[]> {
+): Promise<unknown> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LIVE_FINGERPRINT_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), WORK_FINGERPRINT_TIMEOUT_MS);
   try {
-    const payload = await requester<unknown>(
-      liveFingerprintsEndpoint(query.project_hint, query.path_hint ?? null),
-      { method: "GET", signal: controller.signal },
-    );
-    return parseLiveFingerprintOthers(payload);
+    return await requester<unknown>(WORK_FINGERPRINTS_ENDPOINT, {
+      method: "POST",
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
   } finally {
     clearTimeout(timer);
   }
 }
 
-export async function sendWorkFingerprints(
-  body: WorkFingerprintsBody,
+export const LIVE_FINGERPRINTS_ENDPOINT = "/usage/fingerprints/live";
+
+export const LIVE_FINGERPRINT_TIMEOUT_MS = 1200;
+
+export interface LiveOverlapPerson {
+  readonly name: string;
+  readonly project_hint: string;
+  readonly path_hint: string | null;
+  readonly occurred_at: string;
+}
+
+export function liveFingerprintsQuery(
+  projectHint: string,
+  pathHints: readonly string[] = [],
+): string {
+  const params = new URLSearchParams();
+  params.set("project_hint", projectHint);
+  for (const hint of pathHints) {
+    params.append("path_hint", hint);
+  }
+  return `${LIVE_FINGERPRINTS_ENDPOINT}?${params.toString()}`;
+}
+
+function parseLiveOverlapPerson(value: unknown): LiveOverlapPerson | null {
+  if (
+    !isRecord(value) ||
+    typeof value.name !== "string" ||
+    typeof value.project_hint !== "string" ||
+    typeof value.occurred_at !== "string"
+  ) {
+    return null;
+  }
+  if (value.name === "" || value.project_hint === "" || value.occurred_at === "") {
+    return null;
+  }
+  if (value.path_hint === undefined || value.path_hint === null || value.path_hint === "") {
+    return {
+      name: value.name,
+      project_hint: value.project_hint,
+      path_hint: null,
+      occurred_at: value.occurred_at,
+    };
+  }
+  if (typeof value.path_hint !== "string") {
+    return null;
+  }
+  return {
+    name: value.name,
+    project_hint: value.project_hint,
+    path_hint: value.path_hint,
+    occurred_at: value.occurred_at,
+  };
+}
+
+/** Same `others` list as POST /usage/fingerprints ingest. Missing or malformed → []. */
+export function liveOverlapFromEnvelope(payload: unknown): LiveOverlapPerson[] {
+  if (!isRecord(payload)) {
+    return [];
+  }
+  const raw = Array.isArray(payload.others)
+    ? payload.others
+    : isRecord(payload.data) && Array.isArray(payload.data.others)
+      ? payload.data.others
+      : null;
+  if (raw === null) {
+    return [];
+  }
+  const others: LiveOverlapPerson[] = [];
+  for (const item of raw) {
+    const person = parseLiveOverlapPerson(item);
+    if (person) {
+      others.push(person);
+    }
+  }
+  return others;
+}
+
+export async function fetchLiveFingerprintOthers(
+  query: { project_hint: string; path_hints?: readonly string[] },
   requester: WebRequester = request,
-): Promise<FingerprintStoreResult> {
+): Promise<LiveOverlapPerson[]> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), WORK_FINGERPRINT_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), LIVE_FINGERPRINT_TIMEOUT_MS);
   try {
-    const payload = await requester<unknown>(WORK_FINGERPRINTS_ENDPOINT, {
-      method: "POST",
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    const others = parseLiveFingerprintOthers(payload);
-    const accepted =
-      isRecord(payload) && typeof payload.accepted === "number" ? payload.accepted : undefined;
-    return { accepted, others };
+    const payload = await requester<unknown>(
+      liveFingerprintsQuery(query.project_hint, query.path_hints ?? []),
+      { method: "GET", signal: controller.signal },
+    );
+    return liveOverlapFromEnvelope(payload);
+  } catch {
+    return [];
   } finally {
     clearTimeout(timer);
   }

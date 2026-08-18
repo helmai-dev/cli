@@ -20,6 +20,21 @@ export interface ObserveOptions {
   format?: string;
 }
 
+/** Claude and Codex PostToolUse parse stdout as optional hook JSON.
+ *  `systemMessage` is shown to the session and does not set decision or
+ *  continue. stderr never reaches the session. Bare text on stdout is
+ *  not valid hook JSON and can break the hook. Gemini AfterTool keeps
+ *  the existing suppressOutput object so that protocol stays intact. */
+export function formatObserveHookOutput(notice: string | null, format?: string): string {
+  if (format === "gemini") {
+    return JSON.stringify({ suppressOutput: true });
+  }
+  if (!notice) {
+    return "";
+  }
+  return JSON.stringify({ systemMessage: notice });
+}
+
 export function normalizeToolObservation(
   payload: ToolHookPayload,
   capturedAt = new Date().toISOString(),
@@ -55,6 +70,7 @@ async function readStdin(): Promise<string> {
 }
 
 export async function observeCommand(options: ObserveOptions = {}): Promise<void> {
+  let notice: string | null = null;
   try {
     const raw = await readStdin();
     const payload = (raw ? JSON.parse(raw) : {}) as ToolHookPayload;
@@ -63,16 +79,18 @@ export async function observeCommand(options: ObserveOptions = {}): Promise<void
       return;
     }
     appendToolObservation(normalized.sessionId, normalized.observation);
-    await reportWorkFingerprint(normalized.sessionId, {
+    notice = await reportWorkFingerprint(normalized.sessionId, {
       toolName: normalized.observation.toolName,
       pathCandidate: pathCandidateFromToolInput(normalized.toolInput),
       occurredAt: normalized.observation.capturedAt,
     });
   } catch {
-    // Observability is fail-open and never writes to stdout.
+    // Observability is fail-open. A bad payload or a dead POST must not
+    // break the agent session.
   } finally {
-    if (options.format === "gemini") {
-      process.stdout.write(JSON.stringify({ suppressOutput: true }));
+    const output = formatObserveHookOutput(notice, options.format);
+    if (output) {
+      process.stdout.write(output);
     }
   }
 }

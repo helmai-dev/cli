@@ -6,6 +6,7 @@ import { ensureHelmDir } from "../lib/config.js";
 import {
   DEFAULT_PROXY_HOST,
   DEFAULT_PROXY_PORT,
+  isLoopbackBind,
 } from "../lib/proxy-inspect.js";
 import { isProxyHealthy, runProxyProcess } from "../lib/proxy-server.js";
 import {
@@ -98,6 +99,9 @@ export async function startProxyDaemon(options: {
   const logPath = getProxyLogPath();
   const logFd = fs.openSync(logPath, "a");
   const host = options.host ?? DEFAULT_PROXY_HOST;
+  if (!isLoopbackBind(host)) {
+    throw new Error("helm proxy only binds loopback (127.0.0.1, ::1, localhost).");
+  }
   const port = options.port ?? DEFAULT_PROXY_PORT;
   const child = spawn(plan.command, plan.args, {
     detached: true,
@@ -147,6 +151,11 @@ export async function proxyCommand(options: {
 }): Promise<void> {
   const host = options.host ?? DEFAULT_PROXY_HOST;
   const port = options.port ? Number.parseInt(options.port, 10) : DEFAULT_PROXY_PORT;
+  if (!isLoopbackBind(host)) {
+    console.error("helm proxy only binds loopback (127.0.0.1, ::1, localhost).");
+    process.exitCode = 1;
+    return;
+  }
   if (!Number.isFinite(port) || port < 0) {
     console.error("Invalid --port");
     process.exitCode = 1;

@@ -1,10 +1,14 @@
 import * as path from "node:path";
 import {
+  MAX_OTHER_NAME_CHARS,
+  MAX_OTHER_PATH_CHARS,
   pathCandidateFromToolInput,
+  sanitizeNoticeField,
   type WorkPathCandidate,
 } from "./fingerprints.js";
-import type { LiveFingerprintOther } from "./api-web.js";
+import type { LiveOverlapPerson } from "./api-web.js";
 import type { UsageEventUpload } from "./api-web.js";
+import { formatLiveOverlapNotice } from "./live-overlap.js";
 
 export type ProxiedProvider = "anthropic" | "openai";
 
@@ -239,44 +243,37 @@ export function usageFromSseStream(provider: ProxiedProvider, text: string): Pro
   return latest;
 }
 
-function relativeTime(iso: string, now: Date): string {
-  const then = Date.parse(iso);
-  if (!Number.isFinite(then)) {
-    return "recently";
-  }
-  const seconds = Math.max(0, Math.floor((now.getTime() - then) / 1000));
-  if (seconds < 45) {
-    return "just now";
-  }
-  const minutes = Math.floor(seconds / 60);
-  if (minutes === 1) {
-    return "1 minute ago";
-  }
-  if (minutes < 60) {
-    return `${minutes} minutes ago`;
-  }
-  const hours = Math.floor(minutes / 60);
-  if (hours === 1) {
-    return "1 hour ago";
-  }
-  if (hours < 48) {
-    return `${hours} hours ago`;
-  }
-  return "recently";
-}
-
 export function formatTeammateNote(
-  others: readonly LiveFingerprintOther[],
+  others: readonly Pick<LiveOverlapPerson, "name" | "path_hint" | "occurred_at">[],
   now: Date,
 ): string | null {
-  const first = others[0];
-  if (!first || first.name.trim() === "") {
-    return null;
+  const safe: LiveOverlapPerson[] = [];
+  for (const other of others) {
+    const name = sanitizeNoticeField(other.name, MAX_OTHER_NAME_CHARS);
+    if (name === null) {
+      continue;
+    }
+    const rawPath = other.path_hint && other.path_hint !== "" ? path.basename(other.path_hint) : null;
+    const pathHint = rawPath === null ? null : sanitizeNoticeField(rawPath, MAX_OTHER_PATH_CHARS);
+    if (rawPath !== null && pathHint === null) {
+      continue;
+    }
+    if (typeof other.occurred_at !== "string" || !Number.isFinite(Date.parse(other.occurred_at))) {
+      continue;
+    }
+    safe.push({
+      name,
+      project_hint: "project",
+      path_hint: pathHint,
+      occurred_at: other.occurred_at,
+    });
   }
-  const rawPath = first.path_hint && first.path_hint !== "" ? first.path_hint : "this project";
-  const file = rawPath.includes("/") || rawPath.includes("\\") ? path.basename(rawPath) : rawPath;
-  const when = first.occurred_at ? relativeTime(first.occurred_at, now) : "recently";
-  return `${first.name.trim()} was on ${file} ${when}`;
+  return formatLiveOverlapNotice(safe, now);
+}
+
+export function isLoopbackBind(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  return normalized === "127.0.0.1" || normalized === "localhost" || normalized === "::1" || normalized === "[::1]";
 }
 
 function appendSystemText(system: unknown, note: string): unknown[] {
