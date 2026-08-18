@@ -1,5 +1,6 @@
 import { appendToolObservation, hashValue } from "../lib/ambient-state.js";
 import { sanitizeCaptureText } from "../lib/capture-sanitization.js";
+import { pathCandidateFromToolInput, reportWorkFingerprint } from "../lib/fingerprints.js";
 
 export interface ToolHookPayload {
   session_id?: string;
@@ -22,7 +23,7 @@ export interface ObserveOptions {
 export function normalizeToolObservation(
   payload: ToolHookPayload,
   capturedAt = new Date().toISOString(),
-): { sessionId: string; observation: Parameters<typeof appendToolObservation>[1] } | null {
+): { sessionId: string; toolInput: unknown; observation: Parameters<typeof appendToolObservation>[1] } | null {
   const sessionId = payload.session_id ?? payload.sessionId;
   const toolName = payload.tool_name ?? payload.toolName;
   if (!sessionId || !toolName) {
@@ -33,6 +34,7 @@ export function normalizeToolObservation(
   const output = payload.tool_response ?? payload.toolResponse ?? payload.result ?? payload.output ?? null;
   return {
     sessionId,
+    toolInput: input,
     observation: {
       toolName,
       inputHash: hashValue(input),
@@ -61,6 +63,11 @@ export async function observeCommand(options: ObserveOptions = {}): Promise<void
       return;
     }
     appendToolObservation(normalized.sessionId, normalized.observation);
+    await reportWorkFingerprint(normalized.sessionId, {
+      toolName: normalized.observation.toolName,
+      pathCandidate: pathCandidateFromToolInput(normalized.toolInput),
+      occurredAt: normalized.observation.capturedAt,
+    });
   } catch {
     // Observability is fail-open and never writes to stdout.
   } finally {
