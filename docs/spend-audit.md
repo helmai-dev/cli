@@ -56,7 +56,7 @@ The capability grid names prompt library, semantic deduplication, prompt optimiz
 
 ### What the CLI can do today
 
-`src/index.ts` registers the public commands. `connect`, `setup`, `scan`, `audit`, `hooks install|uninstall|status`, `whoami`, `map`, `daemon start|stop|install|uninstall|status|info`, `logout`, `update`. Hidden commands are `auth-import`, `relay`, `code-bridge`, `inject`, `observe`, `learn`, and `env`.
+`src/index.ts` registers the public commands. `connect`, `setup`, `scan`, `audit`, `hooks install|uninstall|status`, `mcp`, `whoami`, `map`, `daemon start|stop|install|uninstall|status|info`, `logout`, `update`. Hidden commands are `auth-import`, `relay`, `code-bridge`, `inject`, `observe`, `learn`, and `env`.
 
 There is no `run` command. A search of this repo for `helm run` and `command("run")` returns no matches. The landing terminal demo is not a CLI feature.
 

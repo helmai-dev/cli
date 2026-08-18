@@ -776,6 +776,102 @@ export async function sendWorkFingerprints(
   }
 }
 
+export const LIVE_FINGERPRINTS_ENDPOINT = "/usage/fingerprints/live";
+
+export const LIVE_FINGERPRINT_TIMEOUT_MS = 1200;
+
+export interface LiveOverlapPerson {
+  readonly name: string;
+  readonly project_hint: string;
+  readonly path_hint: string | null;
+  readonly occurred_at: string;
+}
+
+export function liveFingerprintsQuery(
+  projectHint: string,
+  pathHints: readonly string[] = [],
+): string {
+  const params = new URLSearchParams();
+  params.set("project_hint", projectHint);
+  for (const hint of pathHints) {
+    params.append("path_hint", hint);
+  }
+  return `${LIVE_FINGERPRINTS_ENDPOINT}?${params.toString()}`;
+}
+
+function parseLiveOverlapPerson(value: unknown): LiveOverlapPerson | null {
+  if (
+    !isRecord(value) ||
+    typeof value.name !== "string" ||
+    typeof value.project_hint !== "string" ||
+    typeof value.occurred_at !== "string"
+  ) {
+    return null;
+  }
+  if (value.name === "" || value.project_hint === "" || value.occurred_at === "") {
+    return null;
+  }
+  if (value.path_hint === undefined || value.path_hint === null || value.path_hint === "") {
+    return {
+      name: value.name,
+      project_hint: value.project_hint,
+      path_hint: null,
+      occurred_at: value.occurred_at,
+    };
+  }
+  if (typeof value.path_hint !== "string") {
+    return null;
+  }
+  return {
+    name: value.name,
+    project_hint: value.project_hint,
+    path_hint: value.path_hint,
+    occurred_at: value.occurred_at,
+  };
+}
+
+/** Same `others` list as POST /usage/fingerprints ingest. Missing or malformed → []. */
+export function liveOverlapFromEnvelope(payload: unknown): LiveOverlapPerson[] {
+  if (!isRecord(payload)) {
+    return [];
+  }
+  const raw = Array.isArray(payload.others)
+    ? payload.others
+    : isRecord(payload.data) && Array.isArray(payload.data.others)
+      ? payload.data.others
+      : null;
+  if (raw === null) {
+    return [];
+  }
+  const others: LiveOverlapPerson[] = [];
+  for (const item of raw) {
+    const person = parseLiveOverlapPerson(item);
+    if (person) {
+      others.push(person);
+    }
+  }
+  return others;
+}
+
+export async function fetchLiveFingerprintOthers(
+  query: { project_hint: string; path_hints?: readonly string[] },
+  requester: WebRequester = request,
+): Promise<LiveOverlapPerson[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LIVE_FINGERPRINT_TIMEOUT_MS);
+  try {
+    const payload = await requester<unknown>(
+      liveFingerprintsQuery(query.project_hint, query.path_hints ?? []),
+      { method: "GET", signal: controller.signal },
+    );
+    return liveOverlapFromEnvelope(payload);
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // --- Session relay ---
 
 export async function sendSessionChunk(chunk: SessionChunk): Promise<void> {

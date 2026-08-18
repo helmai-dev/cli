@@ -20,6 +20,13 @@ Standalone binary (macOS, Linux, Windows/WSL — no Node required):
 curl -fsSL https://tryhelm.ai/install | bash
 ```
 
+The script copies to `/usr/local/bin` by default. If another `helm` is
+earlier on PATH (Homebrew on macOS, an older npm global), the install
+still succeeds and prints which binary `helm --version` will run. Re-run
+with `--dir` pointing at a directory that wins, or move the install
+directory earlier in PATH. A root-owned curl install is removed with
+`sudo rm /usr/local/bin/helm`.
+
 Or via a package manager (requires Node.js 18+):
 
 ```bash
@@ -92,9 +99,10 @@ and their output streams back into the Helm canvas.
 | `helm setup` | Link the Helm Web account, enable team context in supported coding agents, and run the first usage scan |
 | `helm connect` | Link this CLI to a Helm Web account (device-code auth) |
 | `helm whoami` | Show which account and machine this CLI is linked as (never prints a token) |
-| `helm hooks install` | Install fail-open team-context integrations for supported local coding agents |
+| `helm hooks install` | Install fail-open team-context integrations for supported local coding agents, including the Helm MCP server in Claude Code and Cursor |
 | `helm hooks status` | Show each integration, runtime detection, and derived coverage (`--json` for Desktop/automation) |
-| `helm hooks uninstall` | Remove only files and hook entries managed by Helm |
+| `helm hooks uninstall` | Remove only files, hook entries, and Helm MCP registrations managed by Helm |
+| `helm mcp` | stdio MCP server that exposes Helm team tools (todos, notes, awareness, live teammates) to local coding agents |
 | `helm scan` | Report local Claude Code and Codex usage and sync it to the team dashboard (requires a linked account) |
 | `helm audit` | Observed API-equivalent spend from local transcripts, plus realized provider-cache savings. `--team <id>` prints the Helm Web team rollup after `helm connect`. `shared_projects` and `shared_paths` print as observed overlap when the rollup includes them. Optional `--users` / `--teams` add an unshared-replay ceiling on the local path. Does not compute identified savings. |
 | `helm map <project-id> [path]` | Register a local checkout for a project |
@@ -110,14 +118,25 @@ and their output streams back into the Helm canvas.
 ## Coding-agent integrations
 
 `helm setup` calls `helm hooks install`. It currently configures Claude Code,
-Codex, Cursor, OpenCode, Gemini CLI, GitHub Copilot CLI, Pi, Amp, and Kilo.
-Grok Code reads the Claude Code hooks through its compatibility layer, so Helm
-reports Grok as derived coverage and does not install a duplicate hook.
+Codex, Cursor, OpenCode, Gemini CLI, GitHub Copilot CLI, Pi, Amp, and Kilo,
+and registers a `helm` MCP server in Claude Code (`~/.claude.json`) and Cursor
+(`~/.cursor/mcp.json`) that launches `helm mcp`. Grok Code reads the Claude
+Code hooks through its compatibility layer, so Helm reports Grok as derived
+coverage and does not install a duplicate hook.
 
 The integration files fail open: a missing, disconnected, or slow Helm CLI does
-not prevent an agent session from running. Existing unrelated hooks and settings
-are preserved, and standalone plugin files are overwritten only when they carry
-Helm's ownership marker. Run `helm hooks status` to inspect the exact paths.
+not prevent an agent session from running. Existing unrelated hooks, MCP
+servers, and settings are preserved, and standalone plugin files are overwritten
+only when they carry Helm's ownership marker. `helm logout` and
+`helm hooks uninstall` remove only the Helm MCP entry. Run `helm hooks status`
+to inspect the exact paths.
+
+`helm mcp` is a local stdio server. Coding agents host it; it authenticates with
+the existing `helm connect` token and forwards the web MCP tools the user can
+already call, plus a live-teammates read of path/project overlap. Prompt text
+stays on this machine. An unlinked CLI still advertises the tools and tells the
+agent to run `helm connect`. This is not an HTTP proxy and does not start
+agent-to-agent chat.
 
 For agents that expose turn lifecycle hooks, Helm uses the submitted prompt to
 retrieve a small relevant team-context pack before work begins. It then retains
@@ -139,6 +158,13 @@ seconds and the session continues; unlinked machines send nothing. A 2xx
 `others` list becomes one short hook notice naming the person, the path
 or project, and how recently they were there. Missing or empty `others`
 stays silent.
+
+On UserPromptSubmit, a linked session also GETs live overlap for this
+project folder and any project-relative path extracted locally from the
+prompt. The prompt itself is not uploaded. If a teammate matches, Helm
+adds one short notice on the same hook channel as the context pack
+("Alex was on Foo.php 3 minutes ago") before the model call. A missing
+or failing live endpoint is ignored.
 
 ## How it works
 

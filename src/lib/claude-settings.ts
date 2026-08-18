@@ -7,6 +7,7 @@
  *  - SessionStart      → inject the full project context pack
  *  - UserPromptSubmit  → inject a delta digest (inject dedupes by content
  *                        hash per session, so unchanged context emits nothing)
+ *                        and, when linked, a one-line live teammate notice
  *  - PostToolUse       → retain sanitized, bounded evidence for this turn;
  *                        one teammate-path notice when the fingerprint POST
  *                        returns others
