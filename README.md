@@ -156,6 +156,13 @@ same project or file. They are labels, not savings, and they measure nothing
 about cost. If Helm Web is slow or unreachable, the send is dropped after 1.2
 seconds and the session continues; unlinked machines send nothing.
 
+On UserPromptSubmit, a linked session also GETs live overlap for this
+project folder and any project-relative path extracted locally from the
+prompt. The prompt itself is not uploaded. If a teammate matches, Helm
+adds one short notice on the same hook channel as the context pack
+("Alex was on Foo.php 3 minutes ago") before the model call. A missing
+or failing live endpoint is ignored.
+
 ## How it works
 
 The daemon heartbeats into Helm's device registry every 30 seconds
