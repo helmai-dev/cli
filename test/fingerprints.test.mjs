@@ -11,6 +11,9 @@ import {
   WORK_FINGERPRINTS_ENDPOINT,
   WORK_FINGERPRINT_TIMEOUT_MS,
 } from "../dist/lib/api-web.js";
+import { mergeCodexHooks } from "../dist/lib/codex-hooks.js";
+import { HELM_OBSERVE_HOOK_COMMAND } from "../dist/lib/claude-settings.js";
+import { normalizeHookPayload } from "../dist/commands/inject.js";
 
 const PROJECT_CWD = "/Users/team/project";
 const HOME_DIR = "/Users/team";
@@ -252,7 +255,32 @@ test("sendWorkFingerprints POSTs the envelope to WORK_FINGERPRINTS_ENDPOINT with
   assert.equal(calls[0].options?.signal instanceof AbortSignal, true);
 });
 
-test("fingerprint POST budget fits inside Codex observe kill", () => {
-  assert.ok(WORK_FINGERPRINT_TIMEOUT_MS <= 1500);
+test("fingerprint POST budget fits inside the Codex observe timeout helm installs", () => {
+  const matchers = mergeCodexHooks({}).hooks.PostToolUse;
+  const observeEntry = matchers
+    .flatMap((matcher) => matcher.hooks ?? [])
+    .find((entry) => entry.command === HELM_OBSERVE_HOOK_COMMAND);
+  assert.ok(observeEntry);
+  assert.equal(typeof observeEntry.timeout, "number");
+
+  const killMs = observeEntry.timeout * 1000;
+  assert.ok(WORK_FINGERPRINT_TIMEOUT_MS <= killMs - 500);
   assert.ok(WORK_FINGERPRINT_TIMEOUT_MS >= 500);
+});
+
+test("provider mapping is welded to the strings inject actually writes", () => {
+  const claudeAmbient = normalizeHookPayload({}).provider;
+  const codexAmbient = normalizeHookPayload({}, "codex").provider;
+  const facts = factsFromInput({ file_path: AUTH_FILE });
+
+  assert.equal(claudeAmbient, "claude-compatible");
+  assert.equal(codexAmbient, "codex");
+  assert.equal(
+    buildWorkFingerprint({ provider: claudeAmbient, cwd: PROJECT_CWD }, facts, HOME_DIR).provider,
+    "claude",
+  );
+  assert.equal(
+    buildWorkFingerprint({ provider: codexAmbient, cwd: PROJECT_CWD }, facts, HOME_DIR).provider,
+    "codex",
+  );
 });
