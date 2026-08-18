@@ -274,14 +274,14 @@ export async function reportWorkFingerprint(
   }
 }
 
-const MAX_OTHER_NAME_CHARS = 80;
-const MAX_OTHER_PROJECT_CHARS = 128;
-const MAX_OTHER_PATH_CHARS = MAX_PATH_HINT_CHARS;
+export const MAX_OTHER_NAME_CHARS = 80;
+export const MAX_OTHER_PROJECT_CHARS = 128;
+export const MAX_OTHER_PATH_CHARS = MAX_PATH_HINT_CHARS;
 /** Newlines and other controls would turn a one-line hook notice into
  *  extra system text. Skip the entry instead of collapsing them. */
 const NOTICE_UNSAFE_CHARS = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/;
 
-function noticeDisplayField(value: unknown, maxChars: number): string | null {
+export function sanitizeNoticeField(value: unknown, maxChars: number): string | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -296,15 +296,15 @@ function parseFingerprintOther(value: unknown): FingerprintOther | null {
   if (!isPlainRecord(value)) {
     return null;
   }
-  const name = noticeDisplayField(value.name, MAX_OTHER_NAME_CHARS);
-  const project_hint = noticeDisplayField(value.project_hint, MAX_OTHER_PROJECT_CHARS);
+  const name = sanitizeNoticeField(value.name, MAX_OTHER_NAME_CHARS);
+  const project_hint = sanitizeNoticeField(value.project_hint, MAX_OTHER_PROJECT_CHARS);
   if (name === null || project_hint === null) {
     return null;
   }
   let path_hint: string | null = null;
   if (typeof value.path_hint === "string") {
     if (value.path_hint.trim() !== "") {
-      path_hint = noticeDisplayField(value.path_hint, MAX_OTHER_PATH_CHARS);
+      path_hint = sanitizeNoticeField(value.path_hint, MAX_OTHER_PATH_CHARS);
       if (path_hint === null) {
         return null;
       }

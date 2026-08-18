@@ -105,6 +105,9 @@ and their output streams back into the Helm canvas.
 | `helm mcp` | stdio MCP server that exposes Helm team tools (todos, notes, awareness, live teammates) to local coding agents |
 | `helm scan` | Report local Claude Code and Codex usage and sync it to the team dashboard (requires a linked account) |
 | `helm audit` | Observed API-equivalent spend from local transcripts, plus realized provider-cache savings. `--team <id>` prints the Helm Web team rollup after `helm connect`. `shared_projects` and `shared_paths` print as observed overlap when the rollup includes them. Optional `--users` / `--teams` add an unshared-replay ceiling on the local path. Does not compute identified savings. |
+| `helm proxy` | Loopback model proxy on 127.0.0.1 (port 8787 or a free port). Passes Anthropic Messages and OpenAI-compatible chat through with the client's own auth headers. `--daemon` backgrounds it. |
+| `helm wrap claude\|codex` | Start the proxy if needed and point that agent at it (`ANTHROPIC_BASE_URL` or Codex/OpenAI base URL). Undo with `helm unwrap`. Does not touch Kubernetes Helm. |
+| `helm unwrap claude\|codex` | Restore the agent's previous provider URL |
 | `helm map <project-id> [path]` | Register a local checkout for a project |
 | `helm daemon start` | Start the background agent-runner daemon (`--foreground` runs it in-process for supervisors) |
 | `helm daemon stop` | Stop the daemon |
@@ -145,6 +148,15 @@ candidate when the turn completes. Candidates require an explicit team-admin
 review before they become shared Context Memory; rejected candidates never enter
 retrieval. Repository remotes are matched automatically, so normal usage does not
 require `helm map` or another per-project CLI step.
+
+`helm wrap claude` or `helm wrap codex` starts `helm proxy` if needed and
+points that agent at it. Claude Code honors `ANTHROPIC_BASE_URL` in
+`~/.claude/settings.json`. Codex honors the OpenAI-compatible `base_url` in
+`~/.codex/config.toml`. `helm unwrap` restores the previous value. The
+proxy forwards the client's own provider tokens; Helm does not need those
+keys. On each request it can see the prompt locally, then POST only the
+existing usage and fingerprint fields. Prompt text never goes to Helm Web.
+Identified savings stay null. `helm wrap` only accepts `claude` and `codex`.
 
 When this machine is linked, the tool hook also sends a work fingerprint for
 each tool call in a mapped Claude Code or Codex session: the provider, the

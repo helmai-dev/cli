@@ -4,8 +4,12 @@ import { hasLinkedAccount } from "./account-link.js";
 import { fetchLiveFingerprintOthers, type LiveOverlapPerson } from "./api-web.js";
 import { loadCredentials } from "./config.js";
 import {
+  MAX_OTHER_NAME_CHARS,
+  MAX_OTHER_PATH_CHARS,
+  MAX_OTHER_PROJECT_CHARS,
   pathHintsFromPrompt,
   projectHintFromCwd,
+  sanitizeNoticeField,
   type ProjectHint,
   type RelativePathHint,
 } from "./fingerprints.js";
@@ -50,10 +54,13 @@ export function formatLiveOverlapNotice(
   now: Date = new Date(),
 ): string | null {
   for (const person of others) {
-    const name = person.name.trim();
-    const where = (person.path_hint ?? person.project_hint).trim();
+    const name = sanitizeNoticeField(person.name, MAX_OTHER_NAME_CHARS);
+    const where = sanitizeNoticeField(
+      person.path_hint ?? person.project_hint,
+      person.path_hint ? MAX_OTHER_PATH_CHARS : MAX_OTHER_PROJECT_CHARS,
+    );
     const when = formatRelativeOccurredAt(person.occurred_at, now);
-    if (name === "" || where === "" || when === null) {
+    if (name === null || where === null || when === null) {
       continue;
     }
     return `${name} was on ${where} ${when}`;

@@ -261,6 +261,16 @@ test("notice names the person, path or project, and relative time without saving
   assert.equal(pathNotice.includes("usd"), false);
 });
 
+test("live overlap notice skips names or paths with control characters", () => {
+  assert.equal(
+    formatLiveOverlapNotice(
+      [alexOnFoo({ name: "Alex\ninject" })],
+      NOW,
+    ),
+    null,
+  );
+});
+
 test("unchanged context pack still emits the live notice on UserPromptSubmit", () => {
   const pack = "<helm-team-context>\nshared pack\n</helm-team-context>";
   const notice = "Alex was on Foo.php 3 minutes ago";

@@ -74,10 +74,10 @@ function recordingRuntime(overrides = {}) {
   };
 }
 
-test("helm --help lists mcp and does not invent wrap", () => {
+test("helm --help lists mcp and wrap", () => {
   const help = execFileSync(process.execPath, [cli, "--help"], { encoding: "utf8" });
   assert.match(help, /^\s+mcp\b/m);
-  assert.doesNotMatch(help, /^\s+wrap\b/m);
+  assert.match(help, /^\s+wrap\b/m);
 });
 
 test("helm mcp --help exists", () => {
