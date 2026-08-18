@@ -68,3 +68,98 @@ test("getTeamUsage refuses a payload that is not a { data } envelope", async () 
     /data/,
   );
 });
+
+function overlapPeople() {
+  return [
+    { id: "u1", name: "Ada", cost_usd: 30 },
+    { id: "u2", name: "Grace", cost_usd: 12.5 },
+  ];
+}
+
+function sharedProjectsFixture() {
+  return [
+    {
+      label: "helm-cli",
+      people: overlapPeople(),
+      cost_usd: 42.5,
+    },
+  ];
+}
+
+function sharedPathsFixture() {
+  return [
+    {
+      path_hint: "src/lib/api-web.ts",
+      project_hint: "helm-cli",
+      people: [
+        { id: "u1", name: "Ada" },
+        { id: "u2", name: "Grace" },
+      ],
+      count: 3,
+    },
+  ];
+}
+
+test("getTeamUsage keeps shared overlap keys when present", async () => {
+  const data = rollupFixture({
+    shared_projects: sharedProjectsFixture(),
+    shared_paths: sharedPathsFixture(),
+  });
+
+  const rollup = await getTeamUsage("team-9", 14, async () => ({ data }));
+
+  assert.equal(rollup.shared_projects?.[0].label, "helm-cli");
+  assert.deepEqual(
+    rollup.shared_projects?.[0].people.map((person) => person.name),
+    ["Ada", "Grace"],
+  );
+  assert.equal(rollup.shared_projects?.[0].cost_usd, 42.5);
+  assert.equal(rollup.shared_paths?.[0].path_hint, "src/lib/api-web.ts");
+  assert.equal(rollup.shared_paths?.[0].count, 3);
+  assert.equal(Object.hasOwn(rollup, "identified_savings_usd"), false);
+});
+
+test("getTeamUsage does not invent shared overlap keys when they are absent", async () => {
+  const rollup = await getTeamUsage("team-9", 14, async () => ({ data: rollupFixture() }));
+
+  assert.equal(Object.hasOwn(rollup, "shared_projects"), false);
+  assert.equal(Object.hasOwn(rollup, "shared_paths"), false);
+});
+
+test("getTeamUsage keeps a partial overlap key and omits the missing one", async () => {
+  const data = rollupFixture({
+    shared_projects: sharedProjectsFixture(),
+  });
+
+  const rollup = await getTeamUsage("team-9", 14, async () => ({ data }));
+
+  assert.equal(rollup.shared_projects?.[0].label, "helm-cli");
+  assert.equal(Object.hasOwn(rollup, "shared_paths"), false);
+});
+
+test("getTeamUsage skips a non-array overlap key without failing the GET", async () => {
+  const data = rollupFixture({
+    shared_projects: "not-rows",
+    shared_paths: sharedPathsFixture(),
+  });
+
+  const rollup = await getTeamUsage("team-9", 14, async () => ({ data }));
+
+  assert.equal(Object.hasOwn(rollup, "shared_projects"), false);
+  assert.equal(rollup.shared_paths?.[0].path_hint, "src/lib/api-web.ts");
+  assert.equal(rollup.totals.cost_usd, 42.5);
+});
+
+test("getTeamUsage drops a malformed overlap row and keeps the valid one", async () => {
+  const data = rollupFixture({
+    shared_projects: [
+      { label: "helm-cli", people: overlapPeople(), cost_usd: 42.5 },
+      { label: "no-people", people: [{ name: "Anon" }], cost_usd: 1 },
+    ],
+  });
+
+  const rollup = await getTeamUsage("team-9", 14, async () => ({ data }));
+
+  assert.deepEqual(rollup.shared_projects, sharedProjectsFixture());
+  assert.equal(Object.hasOwn(rollup, "shared_paths"), false);
+});
