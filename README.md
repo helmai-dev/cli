@@ -20,6 +20,13 @@ Standalone binary (macOS, Linux, Windows/WSL — no Node required):
 curl -fsSL https://tryhelm.ai/install | bash
 ```
 
+The script copies to `/usr/local/bin` by default. If another `helm` is
+earlier on PATH (Homebrew on macOS, an older npm global), the install
+still succeeds and prints which binary `helm --version` will run. Re-run
+with `--dir` pointing at a directory that wins, or move the install
+directory earlier in PATH. A root-owned curl install is removed with
+`sudo rm /usr/local/bin/helm`.
+
 Or via a package manager (requires Node.js 18+):
 
 ```bash
