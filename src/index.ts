@@ -187,6 +187,46 @@ program
     await mapProjectCommand(projectId, localPath);
   });
 
+const proxy = program
+  .command("proxy")
+  .description(
+    "Loopback model proxy: pass Anthropic Messages and OpenAI-compatible chat through to the real providers, and record bounded usage on this machine",
+  )
+  .option("--host <host>", "loopback bind address", "127.0.0.1")
+  .option("--port <n>", "preferred port (uses a free port if this one is taken)", "8787")
+  .option("--daemon", "run in the background")
+  .action(async (options: { host?: string; port?: string; daemon?: boolean }) => {
+    const { proxyCommand } = await import("./commands/proxy.js");
+    await proxyCommand(options);
+  });
+
+proxy
+  .command("stop")
+  .description("Stop a background helm proxy")
+  .action(async () => {
+    const { proxyStopCommand } = await import("./commands/proxy.js");
+    await proxyStopCommand();
+  });
+
+program
+  .command("wrap")
+  .description("Point Claude Code or Codex at the local Helm proxy")
+  .argument("<agent>", "claude or codex")
+  .option("--undo", "restore the previous provider URL")
+  .action(async (agent: string, options: { undo?: boolean }) => {
+    const { wrapCommand } = await import("./commands/wrap.js");
+    await wrapCommand(agent, options);
+  });
+
+program
+  .command("unwrap")
+  .description("Restore Claude Code or Codex to the provider URL they used before helm wrap")
+  .argument("<agent>", "claude or codex")
+  .action(async (agent: string) => {
+    const { unwrapCommand } = await import("./commands/wrap.js");
+    await unwrapCommand(agent);
+  });
+
 const daemon = program.command("daemon").description("Manage the background agent-runner daemon");
 
 daemon
@@ -316,9 +356,11 @@ program
     console.log("");
   });
 
-// When spawned as the background daemon, run the loop directly and skip
-// Commander.js (avoids Bun compiled-binary arg issues).
-if (process.env.HELM_DAEMON_MODE === "1") {
+// When spawned as the background daemon or proxy, run that loop directly and
+// skip Commander.js (avoids Bun compiled-binary arg issues).
+if (process.env.HELM_PROXY_MODE === "1") {
+  import("./commands/proxy.js").then((m) => m.runProxyChildFromEnv());
+} else if (process.env.HELM_DAEMON_MODE === "1") {
   import("./lib/daemon-loop-web.js").then((m) => m.runWebDaemonLoop());
 } else {
   checkForUpdate();

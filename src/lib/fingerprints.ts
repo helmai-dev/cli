@@ -50,7 +50,9 @@ export const liveFingerprintEnvironment: FingerprintEnvironment = {
     return turn ? { provider: turn.provider, cwd: turn.cwd } : null;
   },
   isLinked: () => hasLinkedAccount(loadCredentials()),
-  send: (body) => sendWorkFingerprints(body),
+  send: async (body) => {
+    await sendWorkFingerprints(body);
+  },
 };
 
 /** Grok Code shares Claude's settings file (src/commands/hooks.ts) and is
@@ -106,7 +108,7 @@ export function pathCandidateFromToolInput(toolInput: unknown): WorkPathCandidat
   return null;
 }
 
-function projectHint(cwd: string, homeDir: string): ProjectHint | null {
+export function projectHintFromCwd(cwd: string, homeDir: string = os.homedir()): ProjectHint | null {
   if (cwd === "" || cwd === ".") {
     return null;
   }
@@ -177,7 +179,7 @@ export function buildWorkFingerprint(
   if (!provider) {
     return null;
   }
-  const project_hint = projectHint(context.cwd, homeDir);
+  const project_hint = projectHintFromCwd(context.cwd, homeDir);
   if (!project_hint) {
     return null;
   }

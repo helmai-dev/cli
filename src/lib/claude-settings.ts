@@ -46,6 +46,7 @@ interface HookMatcher {
 
 export interface ClaudeSettings {
   hooks?: Record<string, HookMatcher[]>;
+  env?: Record<string, unknown>;
   [key: string]: unknown;
 }
 

@@ -759,18 +759,91 @@ export const WORK_FINGERPRINTS_ENDPOINT = "/usage/fingerprints";
 
 export const WORK_FINGERPRINT_TIMEOUT_MS = 1200;
 
+export const LIVE_FINGERPRINTS_ENDPOINT = "/usage/fingerprints/live";
+
+export const LIVE_FINGERPRINT_TIMEOUT_MS = 400;
+
+export interface LiveFingerprintOther {
+  name: string;
+  path_hint: string | null;
+  occurred_at: string | null;
+}
+
+export interface FingerprintStoreResult {
+  accepted?: number;
+  others: LiveFingerprintOther[];
+}
+
+export function parseLiveFingerprintOthers(value: unknown): LiveFingerprintOther[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  const raw = Array.isArray(value.others)
+    ? value.others
+    : isRecord(value.data) && Array.isArray(value.data.others)
+      ? value.data.others
+      : Array.isArray(value.data)
+        ? value.data
+        : [];
+  const others: LiveFingerprintOther[] = [];
+  for (const item of raw) {
+    if (!isRecord(item) || typeof item.name !== "string") {
+      continue;
+    }
+    const name = item.name.trim();
+    if (name === "") {
+      continue;
+    }
+    others.push({
+      name,
+      path_hint: typeof item.path_hint === "string" && item.path_hint !== "" ? item.path_hint : null,
+      occurred_at: typeof item.occurred_at === "string" && item.occurred_at !== "" ? item.occurred_at : null,
+    });
+  }
+  return others;
+}
+
+export function liveFingerprintsEndpoint(projectHint: string, pathHint: string | null): string {
+  const params = new URLSearchParams({ project_hint: projectHint });
+  if (pathHint) {
+    params.set("path_hint", pathHint);
+  }
+  return `${LIVE_FINGERPRINTS_ENDPOINT}?${params.toString()}`;
+}
+
+export async function getLiveFingerprints(
+  query: { project_hint: string; path_hint?: string | null },
+  requester: WebRequester = request,
+): Promise<LiveFingerprintOther[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LIVE_FINGERPRINT_TIMEOUT_MS);
+  try {
+    const payload = await requester<unknown>(
+      liveFingerprintsEndpoint(query.project_hint, query.path_hint ?? null),
+      { method: "GET", signal: controller.signal },
+    );
+    return parseLiveFingerprintOthers(payload);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function sendWorkFingerprints(
   body: WorkFingerprintsBody,
   requester: WebRequester = request,
-): Promise<void> {
+): Promise<FingerprintStoreResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), WORK_FINGERPRINT_TIMEOUT_MS);
   try {
-    await requester<unknown>(WORK_FINGERPRINTS_ENDPOINT, {
+    const payload = await requester<unknown>(WORK_FINGERPRINTS_ENDPOINT, {
       method: "POST",
       body: JSON.stringify(body),
       signal: controller.signal,
     });
+    const others = parseLiveFingerprintOthers(payload);
+    const accepted =
+      isRecord(payload) && typeof payload.accepted === "number" ? payload.accepted : undefined;
+    return { accepted, others };
   } finally {
     clearTimeout(timer);
   }
