@@ -41,7 +41,14 @@ export interface AmbientProjectContext {
 export interface FingerprintEnvironment {
   readonly readTurn: (sessionId: string) => AmbientProjectContext | null;
   readonly isLinked: () => boolean;
-  readonly send: (body: WorkFingerprintsBody) => Promise<void>;
+  readonly send: (body: WorkFingerprintsBody) => Promise<unknown>;
+}
+
+export interface FingerprintOther {
+  readonly name: string;
+  readonly project_hint: string;
+  readonly path_hint: string | null;
+  readonly occurred_at: string;
 }
 
 export const liveFingerprintEnvironment: FingerprintEnvironment = {
@@ -194,21 +201,83 @@ export async function reportWorkFingerprint(
   sessionId: string,
   facts: ToolEventFacts,
   env: FingerprintEnvironment = liveFingerprintEnvironment,
-): Promise<void> {
+  now: Date = new Date(),
+): Promise<string | null> {
   try {
     const context = env.readTurn(sessionId);
     if (!context) {
-      return;
+      return null;
     }
     const fingerprint = buildWorkFingerprint(context, facts);
     if (!fingerprint) {
-      return;
+      return null;
     }
     if (!env.isLinked()) {
-      return;
+      return null;
     }
     const fingerprints: [WorkFingerprint, ...WorkFingerprint[]] = [fingerprint];
-    await env.send({ fingerprints });
+    const response = await env.send({ fingerprints });
+    return teammateNoticeFromResponse(response, now);
   } catch {
+    return null;
   }
+}
+
+function parseFingerprintOther(value: unknown): FingerprintOther | null {
+  if (!isPlainRecord(value)) {
+    return null;
+  }
+  const name = typeof value.name === "string" ? value.name.trim() : "";
+  const project_hint = typeof value.project_hint === "string" ? value.project_hint.trim() : "";
+  if (!name || !project_hint) {
+    return null;
+  }
+  let path_hint: string | null = null;
+  if (typeof value.path_hint === "string") {
+    const trimmed = value.path_hint.trim();
+    path_hint = trimmed === "" ? null : trimmed;
+  } else if (value.path_hint !== null) {
+    return null;
+  }
+  if (typeof value.occurred_at !== "string" || !Number.isFinite(Date.parse(value.occurred_at))) {
+    return null;
+  }
+  return { name, project_hint, path_hint, occurred_at: value.occurred_at };
+}
+
+function relativeOccurredAt(occurredAt: string, now: Date): string | null {
+  const then = Date.parse(occurredAt);
+  if (!Number.isFinite(then)) {
+    return null;
+  }
+  const diffSec = Math.max(0, Math.floor((now.getTime() - then) / 1000));
+  if (diffSec < 60) {
+    return "just now";
+  }
+  if (diffSec < 3600) {
+    return `${Math.floor(diffSec / 60)}m ago`;
+  }
+  if (diffSec < 86400) {
+    return `${Math.floor(diffSec / 3600)}h ago`;
+  }
+  return `${Math.floor(diffSec / 86400)}d ago`;
+}
+
+export function teammateNoticeFromResponse(payload: unknown, now: Date): string | null {
+  if (!isPlainRecord(payload) || !Array.isArray(payload.others) || payload.others.length === 0) {
+    return null;
+  }
+  for (const entry of payload.others) {
+    const other = parseFingerprintOther(entry);
+    if (!other) {
+      continue;
+    }
+    const ago = relativeOccurredAt(other.occurred_at, now);
+    if (!ago) {
+      continue;
+    }
+    const where = other.path_hint ?? other.project_hint;
+    return `${other.name} was in ${where} ${ago}`;
+  }
+  return null;
 }
