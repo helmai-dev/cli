@@ -274,19 +274,41 @@ export async function reportWorkFingerprint(
   }
 }
 
+const MAX_OTHER_NAME_CHARS = 80;
+const MAX_OTHER_PROJECT_CHARS = 128;
+const MAX_OTHER_PATH_CHARS = MAX_PATH_HINT_CHARS;
+/** Newlines and other controls would turn a one-line hook notice into
+ *  extra system text. Skip the entry instead of collapsing them. */
+const NOTICE_UNSAFE_CHARS = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/;
+
+function noticeDisplayField(value: unknown, maxChars: number): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > maxChars || NOTICE_UNSAFE_CHARS.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+
 function parseFingerprintOther(value: unknown): FingerprintOther | null {
   if (!isPlainRecord(value)) {
     return null;
   }
-  const name = typeof value.name === "string" ? value.name.trim() : "";
-  const project_hint = typeof value.project_hint === "string" ? value.project_hint.trim() : "";
-  if (!name || !project_hint) {
+  const name = noticeDisplayField(value.name, MAX_OTHER_NAME_CHARS);
+  const project_hint = noticeDisplayField(value.project_hint, MAX_OTHER_PROJECT_CHARS);
+  if (name === null || project_hint === null) {
     return null;
   }
   let path_hint: string | null = null;
   if (typeof value.path_hint === "string") {
-    const trimmed = value.path_hint.trim();
-    path_hint = trimmed === "" ? null : trimmed;
+    if (value.path_hint.trim() !== "") {
+      path_hint = noticeDisplayField(value.path_hint, MAX_OTHER_PATH_CHARS);
+      if (path_hint === null) {
+        return null;
+      }
+    }
   } else if (value.path_hint !== null) {
     return null;
   }
