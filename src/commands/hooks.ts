@@ -72,6 +72,12 @@ import {
   anyCommandAvailable,
   getUnsupportedAgentRecommendations,
 } from "../lib/agent-runtime-detection.js";
+import {
+  allHelmMcpHostsInstalled,
+  installHelmMcpHosts,
+  mcpHostStatus,
+  uninstallHelmMcpHosts,
+} from "../lib/mcp-hosts.js";
 
 export interface AgentHookStatus {
   name: string;
@@ -159,7 +165,8 @@ export function getAgentHookStatus(): AgentHookStatus[] {
 
 export function allAgentHooksInstalled(): boolean {
   try {
-    return getAgentHookStatus().every((provider) => provider.installed);
+    return getAgentHookStatus().every((provider) => provider.installed) &&
+      allHelmMcpHostsInstalled();
   } catch {
     return false;
   }
@@ -197,12 +204,16 @@ export async function hooksInstallCommand(): Promise<void> {
   writePiExtension(piPath);
   writeAmpPlugin(ampPath);
   writeKiloPlugin(kiloPath);
+  const mcpHosts = installHelmMcpHosts();
 
   console.log(chalk.green("\n✓ Installed Helm agent integrations"));
   for (const { name, path, derivedFrom, runtimeDetected } of getAgentHookStatus()) {
     const suffix = derivedFrom ? ` via ${derivedFrom}` : path;
     const readiness = runtimeDetected ? "" : " (ready when installed)";
     console.log(chalk.gray(`  ${name.padEnd(12)} ${suffix}${readiness}`));
+  }
+  for (const host of mcpHosts) {
+    console.log(chalk.gray(`  ${host.name.padEnd(12)} ${host.path}`));
   }
   console.log(
     chalk.gray(
@@ -250,6 +261,7 @@ export async function hooksUninstallCommand(): Promise<void> {
   removePiExtension(piPath);
   removeAmpPlugin(ampPath);
   removeKiloPlugin(kiloPath);
+  uninstallHelmMcpHosts();
   console.log(chalk.green("\n✓ Removed Helm agent integrations\n"));
 }
 
@@ -272,10 +284,25 @@ export async function hooksStatusCommand(options: HooksStatusOptions = {}): Prom
     return;
   }
   const recommendations = getUnsupportedAgentRecommendations().filter((agent) => agent.detected);
+  let mcpHosts: ReturnType<typeof mcpHostStatus> = [];
+  try {
+    mcpHosts = mcpHostStatus();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (options.json) {
+      console.log(JSON.stringify({ error: message }));
+      process.exitCode = 1;
+    } else {
+      console.log(chalk.yellow(`\n${message}\n`));
+    }
+    return;
+  }
   if (options.json) {
     console.log(JSON.stringify({
-      allInstalled: statuses.every((provider) => provider.installed),
+      allInstalled: statuses.every((provider) => provider.installed) &&
+        mcpHosts.every((host) => host.installed),
       integrations: statuses,
+      mcp: mcpHosts,
       recommendations,
     }));
     return;
@@ -287,13 +314,17 @@ export async function hooksStatusCommand(options: HooksStatusOptions = {}): Prom
     const readiness = provider.runtimeDetected ? "" : " (runtime not detected; ready when installed)";
     console.log(`  ${icon} ${provider.name.padEnd(12)} ${chalk.gray(`${detail}${readiness}`)}`);
   }
+  for (const host of mcpHosts) {
+    const icon = host.installed ? chalk.green("✓") : chalk.gray("○");
+    console.log(`  ${icon} ${host.name.padEnd(12)} ${chalk.gray(host.path)}`);
+  }
   if (recommendations.length > 0) {
     console.log(chalk.yellow("\n  Detected but not automatically configured:"));
     for (const agent of recommendations) {
       console.log(chalk.gray(`    ${agent.name}: ${agent.recommendation}`));
     }
   }
-  if (!statuses.every((provider) => provider.installed)) {
+  if (!statuses.every((provider) => provider.installed) || !mcpHosts.every((host) => host.installed)) {
     console.log(chalk.gray("\n  Run `helm hooks install` to install missing integrations.\n"));
   } else {
     console.log("");

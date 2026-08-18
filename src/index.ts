@@ -118,6 +118,14 @@ hooks
   });
 
 program
+  .command("mcp")
+  .description("stdio MCP server: Helm team tools for local coding agents")
+  .action(async () => {
+    const { mcpCommand } = await import("./commands/mcp.js");
+    await mcpCommand();
+  });
+
+program
   .command("auth-import", { hidden: true })
   .description("Provision credentials from a trusted local caller (reads JSON on stdin)")
   .action(async () => {
@@ -263,11 +271,8 @@ program
   .command("logout")
   .description("Clear Helm credentials for the active environment")
   .action(async () => {
-    const { clearCredentials } = await import("./lib/config.js");
-    const chalk = (await import("chalk")).default;
-
-    clearCredentials();
-    console.log(chalk.green("\n✓ Logged out successfully\n"));
+    const { logoutCommand } = await import("./commands/logout.js");
+    await logoutCommand();
   });
 
 program
