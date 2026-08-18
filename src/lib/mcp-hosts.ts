@@ -103,6 +103,14 @@ export function writeMcpHostConfig(config: McpHostConfig, configPath: string): v
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
 }
 
+export function assertMcpHostsWritable(input: {
+  claudePath?: string;
+  cursorPath?: string;
+} = {}): void {
+  readMcpHostConfig(input.claudePath ?? getClaudeMcpConfigPath());
+  readMcpHostConfig(input.cursorPath ?? getCursorMcpConfigPath());
+}
+
 export function installHelmMcpHosts(input: {
   claudePath?: string;
   cursorPath?: string;

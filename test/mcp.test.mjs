@@ -22,6 +22,7 @@ import {
 } from "../dist/lib/mcp-stdio.js";
 import {
   allHelmMcpHostsInstalled,
+  assertMcpHostsWritable,
   helmMcpServerEntry,
   helmMcpServerInstalled,
   installHelmMcpHosts,
@@ -350,4 +351,19 @@ test("Content-Length framing round-trips an MCP message", () => {
 
 test("unlinked error text is the public connect instruction", () => {
   assert.equal(UNLINKED_MCP_MESSAGE, "Not connected. Run `helm connect` first.");
+});
+
+test("invalid MCP host JSON is refused before install", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "helm-mcp-invalid-"));
+  const claudePath = path.join(root, ".claude.json");
+  const cursorPath = path.join(root, ".cursor", "mcp.json");
+  fs.writeFileSync(claudePath, "{ not json");
+  fs.mkdirSync(path.dirname(cursorPath), { recursive: true });
+  fs.writeFileSync(cursorPath, JSON.stringify({ mcpServers: {} }));
+  assert.throws(
+    () => assertMcpHostsWritable({ claudePath, cursorPath }),
+    /not valid JSON/,
+  );
+  assert.equal(fs.readFileSync(claudePath, "utf8"), "{ not json");
+  assert.deepEqual(JSON.parse(fs.readFileSync(cursorPath, "utf8")), { mcpServers: {} });
 });

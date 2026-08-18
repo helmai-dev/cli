@@ -74,6 +74,7 @@ import {
 } from "../lib/agent-runtime-detection.js";
 import {
   allHelmMcpHostsInstalled,
+  assertMcpHostsWritable,
   installHelmMcpHosts,
   mcpHostStatus,
   uninstallHelmMcpHosts,
@@ -194,6 +195,7 @@ export async function hooksInstallCommand(): Promise<void> {
   assertPiExtensionWritable(piPath);
   assertAmpPluginWritable(ampPath);
   assertKiloPluginWritable(kiloPath);
+  assertMcpHostsWritable();
 
   writeClaudeSettings(mergeHelmHooks(claude), claudePath);
   writeCodexHooks(mergeCodexHooks(codex), codexPath);
@@ -251,6 +253,7 @@ export async function hooksUninstallCommand(): Promise<void> {
   const codex = readCodexHooks(codexPath);
   const cursor = readCursorHooks(cursorPath);
   const gemini = readGeminiSettings(geminiPath);
+  assertMcpHostsWritable();
 
   writeClaudeSettings(removeHelmHooks(claude), claudePath);
   writeCodexHooks(removeCodexHooks(codex), codexPath);
