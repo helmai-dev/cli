@@ -125,6 +125,16 @@ review before they become shared Context Memory; rejected candidates never enter
 retrieval. Repository remotes are matched automatically, so normal usage does not
 require `helm map` or another per-project CLI step.
 
+When this machine is linked, the tool hook also sends a work fingerprint for
+each tool call in a mapped Claude Code or Codex session: the provider, the
+project folder name, a project-relative file or folder when the tool call
+already named one, the tool name, and the event time. That is the whole
+payload. Prompts, file contents, command lines, tool output, and diffs never
+leave this machine. Fingerprints let the team see that work happened in the
+same project or file. They are labels, not savings, and they measure nothing
+about cost. If Helm Web is slow or unreachable, the send is dropped after 1.2
+seconds and the session continues; unlinked machines send nothing.
+
 ## How it works
 
 The daemon heartbeats into Helm's device registry every 30 seconds
