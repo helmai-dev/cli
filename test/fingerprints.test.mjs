@@ -238,11 +238,9 @@ test("wire body never contains prompt text, file contents, diffs, or absolute pa
   assert.equal(body.fingerprints[0].path_hint, "src/auth.ts");
   assert.equal(body.fingerprints[0].tool_name, "Write");
   assert.equal(body.fingerprints[0].session_key, observeSessionKey("session-1"));
-  assert.equal(serialized.includes("inputHash"), false);
-  assert.equal(serialized.includes("outputHash"), false);
-  assert.equal(serialized.includes("inputExcerpt"), false);
-  assert.equal(serialized.includes("outputExcerpt"), false);
-  assert.equal(serialized.includes("\"prompt\""), false);
+  for (const key of ["prompt", "inputHash", "outputHash", "excerpt", "inputExcerpt", "outputExcerpt"]) {
+    assert.equal(serialized.includes(`"${key}"`), false, key);
+  }
 });
 
 test("Bash command and WebSearch query never become a path hint", () => {

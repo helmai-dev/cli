@@ -407,6 +407,14 @@ test("pass-through happy path forwards auth and body, records usage, never uploa
     assert.equal(usagePost.body.events[0].input_tokens, 11);
     assert.equal(usagePost.body.events[0].output_tokens, 7);
     assert.equal(usagePost.body.events[0].shared_context_savings_usd, undefined);
+    const fingerprintPost = helmPosts.find((post) => post.kind === "fingerprints");
+    assert.ok(fingerprintPost);
+    for (const fingerprint of fingerprintPost.body.fingerprints) {
+      assert.equal(typeof fingerprint.session_key, "string");
+      assert.ok(fingerprint.session_key.length > 0);
+      assert.ok(fingerprint.session_key.length <= 64);
+      assert.equal(Object.hasOwn(fingerprint, "prompt"), false);
+    }
   } finally {
     await proxy.close();
     await provider.close();
