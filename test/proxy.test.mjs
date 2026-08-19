@@ -413,6 +413,84 @@ test("pass-through happy path forwards auth and body, records usage, never uploa
   }
 });
 
+test("one proxied request stamps the same session_key on every fingerprint and never uploads the prompt", async () => {
+  const helmPosts = [];
+  const provider = await listenMock((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "msg_2",
+      model: "claude-sonnet-4-20250514",
+      usage: { input_tokens: 9, output_tokens: 3, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      content: [{ type: "text", text: "ok" }],
+    }));
+  });
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0 },
+    {
+      anthropicUpstream: provider.url,
+      openaiUpstream: provider.url,
+      cwd: PROJECT_CWD,
+      homeDir: HOME_DIR,
+      now: () => NOW,
+      log: () => {},
+      linked: true,
+      deviceUlid: "01DEVICE",
+      fetchLiveOthers: async () => [],
+      sendUsage: async () => ({ accepted: 1 }),
+      sendFingerprints: async (body) => {
+        helmPosts.push({ kind: "fingerprints", body });
+      },
+    },
+  );
+
+  try {
+    const response = await fetch(`${proxy.url}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "sk-ant-user-token",
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        messages: [
+          { role: "user", content: SECRET },
+          {
+            role: "assistant",
+            content: [
+              { type: "tool_use", name: "Read", input: { file_path: "/Users/team/billing/src/Foo.php" } },
+              { type: "tool_use", name: "Read", input: { file_path: "/Users/team/billing/src/Bar.php" } },
+            ],
+          },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200);
+    await proxy.reported;
+
+    const fingerprintPost = helmPosts.find((post) => post.kind === "fingerprints");
+    assert.ok(fingerprintPost);
+    const rows = fingerprintPost.body.fingerprints;
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].path_hint, "src/Foo.php");
+    assert.equal(rows[1].path_hint, "src/Bar.php");
+    assert.equal(typeof rows[0].session_key, "string");
+    assert.ok(rows[0].session_key.length > 0);
+    assert.ok(rows[0].session_key.length <= 64);
+    assert.equal(rows[0].session_key, rows[1].session_key);
+    assert.equal(Object.hasOwn(rows[0], "prompt"), false);
+    assert.equal(Object.hasOwn(rows[1], "prompt"), false);
+    const serialized = JSON.stringify(fingerprintPost.body);
+    assert.equal(serialized.includes(SECRET), false);
+    assert.equal(serialized.includes("\"prompt\""), false);
+    assert.equal(serialized.includes("inputHash"), false);
+    assert.equal(serialized.includes("inputExcerpt"), false);
+  } finally {
+    await proxy.close();
+    await provider.close();
+  }
+});
+
 test("unlinked proxy still completes the provider call", async () => {
   const provider = await listenMock((_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });

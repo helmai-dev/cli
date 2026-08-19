@@ -11,6 +11,7 @@ import { usageCostUsd } from "./claude-scan.js";
 import { loadCredentials, loadMachineIdentity } from "./config.js";
 import {
   buildWorkFingerprint,
+  mintProxySessionKey,
   projectHintFromCwd,
   type WorkFingerprintsBody,
 } from "./fingerprints.js";
@@ -389,12 +390,18 @@ async function reportAfterResponse(input: {
   }
 
   const fingerprintProvider = usageProviderFor(input.provider) === "claude" ? "claude-compatible" : "codex";
+  const sessionKey = mintProxySessionKey();
   const fingerprints: WorkFingerprintsBody | null = (() => {
     const built = [];
     for (const fact of input.facts) {
       const fingerprint = buildWorkFingerprint(
         { provider: fingerprintProvider, cwd: input.cwd },
-        { toolName: fact.toolName, pathCandidate: fact.pathCandidate, occurredAt: input.now.toISOString() },
+        {
+          toolName: fact.toolName,
+          pathCandidate: fact.pathCandidate,
+          occurredAt: input.now.toISOString(),
+          sessionKey,
+        },
         input.homeDir,
       );
       if (fingerprint) {
