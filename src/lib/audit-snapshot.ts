@@ -111,6 +111,13 @@ export interface SharedPathOverlap {
   count: number;
 }
 
+export interface DiagnoseBucket {
+  key: string;
+  label: string;
+  cost_usd: number | null;
+  count: number | null;
+}
+
 /** Field names copy App\Support\TeamUsageRollup::build. */
 export interface TeamRollupObserved {
   days: number;
@@ -123,6 +130,8 @@ export interface TeamRollupObserved {
   by_provider: TeamRollupProviderRow[];
   shared_projects?: SharedProjectOverlap[];
   shared_paths?: SharedPathOverlap[];
+  avoidable_spend?: number | null;
+  diagnose_buckets?: DiagnoseBucket[];
 }
 
 interface AuditSnapshotBase {

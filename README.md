@@ -98,7 +98,9 @@ transcripts on this machine and does not need a Helm Web account.
 `helm audit --team <id>` prints the same team usage rollup the `/usage`
 page shows and refuses until the CLI is linked. If that rollup includes
 `shared_projects` or `shared_paths`, those sections print as observed
-overlap. They are not savings. Commands that talk to Helm Web, or that
+overlap. If it includes `avoidable_spend` or `diagnose_buckets`, those
+print as observed Diagnose. They are stored numbers, not identified
+savings. Commands that talk to Helm Web, or that
 sync team usage (`helm scan`, `helm map`, `helm daemon start`), refuse
 until the CLI is linked. They print the register/login URLs and
 `helm connect` as the next step. `helm scan --no-upload` still prints a
@@ -121,7 +123,7 @@ and their output streams back into the Helm canvas.
 | `helm hooks uninstall` | Remove only files, hook entries, and Helm MCP registrations managed by Helm |
 | `helm mcp` | stdio MCP server that exposes Helm team tools (todos, notes, awareness, live teammates) to local coding agents |
 | `helm scan` | Report local Claude Code and Codex usage and sync it to the team dashboard (requires a linked account) |
-| `helm audit` | Observed API-equivalent spend from local transcripts, plus realized provider-cache savings. `--team <id>` prints the Helm Web team rollup after `helm connect`. `shared_projects` and `shared_paths` print as observed overlap when the rollup includes them. Optional `--users` / `--teams` add an unshared-replay ceiling on the local path. Does not compute identified savings. |
+| `helm audit` | Observed API-equivalent spend from local transcripts, plus realized provider-cache savings. `--team <id>` prints the Helm Web team rollup after `helm connect`. `shared_projects` and `shared_paths` print as observed overlap when the rollup includes them. `avoidable_spend` and `diagnose_buckets` print as observed Diagnose when the rollup includes them. Optional `--users` / `--teams` add an unshared-replay ceiling on the local path. Does not compute identified savings. |
 | `helm proxy` | Loopback model proxy on 127.0.0.1 (port 8787 or a free port). Passes Anthropic Messages and OpenAI-compatible chat through with the client's own auth headers. `--daemon` backgrounds it. |
 | `helm wrap claude\|codex` | Start the proxy if needed and point that agent at it (`ANTHROPIC_BASE_URL` or Codex/OpenAI base URL). Undo with `helm unwrap`. Does not touch Kubernetes Helm. |
 | `helm unwrap claude\|codex` | Restore the agent's previous provider URL |

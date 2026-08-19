@@ -72,7 +72,7 @@ program
   .option("--teams <n>", "Self-reported team count. Does not multiply the replay scenario")
   .option(
     "--team <id>",
-    "Helm Web team id. Prints that team's uploaded usage rollup. shared_projects and shared_paths print as observed overlap when present. Requires helm connect",
+    "Helm Web team id. Prints that team's uploaded usage rollup. shared_projects and shared_paths print as observed overlap when present. avoidable_spend and diagnose_buckets print as observed Diagnose when present. Requires helm connect",
   )
   .action(
     async (options: {

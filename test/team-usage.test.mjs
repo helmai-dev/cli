@@ -163,3 +163,118 @@ test("getTeamUsage drops a malformed overlap row and keeps the valid one", async
   assert.deepEqual(rollup.shared_projects, sharedProjectsFixture());
   assert.equal(Object.hasOwn(rollup, "shared_paths"), false);
 });
+
+function diagnoseBucketsFixture() {
+  return [
+    {
+      key: "repeated_context",
+      label: "Repeated context / caching opportunity",
+      cost_usd: null,
+      count: null,
+    },
+    {
+      key: "model_over_provisioning",
+      label: "Model over-provisioning",
+      cost_usd: null,
+      count: null,
+    },
+    {
+      key: "duplicate_workloads",
+      label: "Duplicate AI workloads",
+      cost_usd: null,
+      count: 2,
+    },
+    {
+      key: "prompt_inefficiency",
+      label: "Prompt/token inefficiency",
+      cost_usd: null,
+      count: null,
+    },
+  ];
+}
+
+test("getTeamUsage keeps present diagnose keys including a null avoidable_spend", async () => {
+  const data = rollupFixture({
+    avoidable_spend: null,
+    diagnose_buckets: diagnoseBucketsFixture(),
+  });
+
+  const rollup = await getTeamUsage("team-9", 14, async () => ({ data }));
+
+  assert.equal(Object.hasOwn(rollup, "avoidable_spend"), true);
+  assert.equal(rollup.avoidable_spend, null);
+  assert.deepEqual(rollup.diagnose_buckets, diagnoseBucketsFixture());
+  assert.equal(rollup.diagnose_buckets?.[2].key, "duplicate_workloads");
+  assert.equal(rollup.diagnose_buckets?.[2].count, 2);
+  assert.equal(rollup.diagnose_buckets?.[3].key, "prompt_inefficiency");
+  assert.equal(Object.hasOwn(rollup, "identified_savings_usd"), false);
+});
+
+test("getTeamUsage does not invent diagnose keys when they are absent", async () => {
+  const rollup = await getTeamUsage("team-9", 14, async () => ({ data: rollupFixture() }));
+
+  assert.equal(Object.hasOwn(rollup, "avoidable_spend"), false);
+  assert.equal(Object.hasOwn(rollup, "diagnose_buckets"), false);
+});
+
+test("getTeamUsage keeps a partial diagnose key and omits the missing one", async () => {
+  const onlySpend = await getTeamUsage("team-9", 14, async () => ({
+    data: rollupFixture({ avoidable_spend: null }),
+  }));
+  assert.equal(Object.hasOwn(onlySpend, "avoidable_spend"), true);
+  assert.equal(onlySpend.avoidable_spend, null);
+  assert.equal(Object.hasOwn(onlySpend, "diagnose_buckets"), false);
+
+  const onlyBuckets = await getTeamUsage("team-9", 14, async () => ({
+    data: rollupFixture({
+      diagnose_buckets: [
+        {
+          key: "duplicate_workloads",
+          label: "Duplicate AI workloads",
+          cost_usd: null,
+          count: 2,
+        },
+      ],
+    }),
+  }));
+  assert.equal(Object.hasOwn(onlyBuckets, "avoidable_spend"), false);
+  assert.equal(onlyBuckets.diagnose_buckets?.length, 1);
+  assert.equal(onlyBuckets.diagnose_buckets?.[0].key, "duplicate_workloads");
+  assert.equal(onlyBuckets.diagnose_buckets?.[0].count, 2);
+});
+
+test("getTeamUsage skips junk diagnose keys without failing the GET", async () => {
+  const data = rollupFixture({
+    avoidable_spend: "not-a-number",
+    diagnose_buckets: "not-rows",
+  });
+
+  const rollup = await getTeamUsage("team-9", 14, async () => ({ data }));
+
+  assert.equal(Object.hasOwn(rollup, "avoidable_spend"), false);
+  assert.equal(Object.hasOwn(rollup, "diagnose_buckets"), false);
+  assert.equal(rollup.totals.cost_usd, 42.5);
+});
+
+test("getTeamUsage drops a malformed diagnose row and fills a missing label from key", async () => {
+  const data = rollupFixture({
+    avoidable_spend: 42.5,
+    diagnose_buckets: [
+      { key: "", label: "empty key", cost_usd: null, count: null },
+      { key: "duplicate_workloads", cost_usd: null, count: 2 },
+      { label: "no key", cost_usd: null, count: 1 },
+    ],
+  });
+
+  const rollup = await getTeamUsage("team-9", 14, async () => ({ data }));
+
+  assert.equal(rollup.avoidable_spend, 42.5);
+  assert.deepEqual(rollup.diagnose_buckets, [
+    {
+      key: "duplicate_workloads",
+      label: "duplicate_workloads",
+      cost_usd: null,
+      count: 2,
+    },
+  ]);
+});
