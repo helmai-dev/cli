@@ -252,6 +252,7 @@ test("human team audit prints observed rollup, models, and people without saving
   assert.doesNotMatch(text, /Unshared replay/);
   assert.doesNotMatch(text, /Shared projects/);
   assert.doesNotMatch(text, /Shared paths/);
+  assert.doesNotMatch(text, /Diagnose \(observed\)/);
 });
 
 test("empty team audit points at helm scan and does not open a sales form", () => {
@@ -387,4 +388,196 @@ test("audit --help names overlap sections as observed overlap", () => {
   assert.match(help, /observed overlap/);
   assert.doesNotMatch(help, /14%/);
   assert.doesNotMatch(help, /saved tokens/i);
+});
+
+function diagnoseBucketsFixture() {
+  return [
+    {
+      key: "repeated_context",
+      label: "Repeated context / caching opportunity",
+      cost_usd: null,
+      count: null,
+    },
+    {
+      key: "model_over_provisioning",
+      label: "Model over-provisioning",
+      cost_usd: null,
+      count: null,
+    },
+    {
+      key: "duplicate_workloads",
+      label: "Duplicate AI workloads",
+      cost_usd: null,
+      count: 2,
+    },
+    {
+      key: "prompt_inefficiency",
+      label: "Prompt/token inefficiency",
+      cost_usd: null,
+      count: null,
+    },
+  ];
+}
+
+test("human team audit prints present diagnose keys as observed Diagnose", () => {
+  const snapshot = auditSnapshotFromTeamRollup(
+    teamRollup({
+      avoidable_spend: null,
+      diagnose_buckets: diagnoseBucketsFixture(),
+    }),
+    30,
+  );
+  const text = stripAnsi(formatAuditHuman(snapshot));
+
+  assert.match(text, /Diagnose \(observed\)/);
+  assert.match(text, /avoidable_spend\s+not computed/);
+  assert.match(text, /Repeated context \/ caching opportunity\s+not computed/);
+  assert.match(text, /Model over-provisioning\s+not computed/);
+  assert.match(text, /Duplicate AI workloads\s+2 people/);
+  assert.match(text, /Prompt\/token inefficiency\s+not computed/);
+  assert.match(text, /identified_savings_usd\s+not computed/);
+  assert.equal(snapshot.not_computed.identified_savings_usd, null);
+  assert.doesNotMatch(text, /14%/);
+  assert.doesNotMatch(text, /we saved/i);
+  assert.doesNotMatch(text, /saved tokens/i);
+});
+
+test("empty team audit prints present diagnose keys as observed Diagnose", () => {
+  const snapshot = auditSnapshotFromTeamRollup(
+    teamRollup({
+      totals: {
+        cost_usd: 0,
+        sessions: 0,
+        calls: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_write_tokens: 0,
+        cache_read_tokens: 0,
+        total_tokens: 0,
+        cache_read_share: 0,
+      },
+      by_user: [],
+      by_project: [],
+      by_model: [],
+      avoidable_spend: null,
+      diagnose_buckets: diagnoseBucketsFixture(),
+    }),
+    30,
+  );
+  const text = stripAnsi(formatAuditHuman(snapshot));
+
+  assert.match(text, /Diagnose \(observed\)/);
+  assert.match(text, /Duplicate AI workloads\s+2 people/);
+  assert.match(text, /identified_savings_usd\s+not computed/);
+  assert.doesNotMatch(text, /14%/);
+  assert.doesNotMatch(text, /we saved/i);
+});
+
+test("human team audit skips diagnose when those keys are absent", () => {
+  const snapshot = auditSnapshotFromTeamRollup(teamRollup(), 30);
+  const text = stripAnsi(formatAuditHuman(snapshot));
+
+  assert.doesNotMatch(text, /Diagnose \(observed\)/);
+  assert.doesNotMatch(text, /avoidable_spend/);
+  assert.doesNotMatch(text, /duplicate_workloads/);
+});
+
+test("human team audit prints a partial diagnose key and skips the missing one", () => {
+  const spendOnly = stripAnsi(
+    formatAuditHuman(auditSnapshotFromTeamRollup(teamRollup({ avoidable_spend: null }), 30)),
+  );
+  assert.match(spendOnly, /Diagnose \(observed\)/);
+  assert.match(spendOnly, /avoidable_spend\s+not computed/);
+  assert.doesNotMatch(spendOnly, /Duplicate AI workloads/);
+  assert.doesNotMatch(spendOnly, /14%/);
+
+  const bucketsOnly = stripAnsi(
+    formatAuditHuman(
+      auditSnapshotFromTeamRollup(
+        teamRollup({
+          diagnose_buckets: [
+            {
+              key: "duplicate_workloads",
+              label: "Duplicate AI workloads",
+              cost_usd: null,
+              count: 2,
+            },
+          ],
+        }),
+        30,
+      ),
+    ),
+  );
+  assert.match(bucketsOnly, /Diagnose \(observed\)/);
+  assert.match(bucketsOnly, /Duplicate AI workloads\s+2 people/);
+  assert.doesNotMatch(bucketsOnly, /avoidable_spend/);
+  assert.doesNotMatch(bucketsOnly, /Repeated context/);
+
+  const storedCost = stripAnsi(
+    formatAuditHuman(
+      auditSnapshotFromTeamRollup(
+        teamRollup({
+          diagnose_buckets: [
+            {
+              key: "duplicate_workloads",
+              label: "Duplicate AI workloads",
+              cost_usd: 42.5,
+              count: 2,
+            },
+          ],
+        }),
+        30,
+      ),
+    ),
+  );
+  assert.match(storedCost, /Duplicate AI workloads\s+\$42\.50\s+2 people/);
+  assert.doesNotMatch(storedCost, /we saved/i);
+  assert.doesNotMatch(storedCost, /identified savings/i);
+});
+
+test("json team audit includes present diagnose keys and omits a missing one", () => {
+  const present = JSON.parse(
+    formatAuditJson(
+      auditSnapshotFromTeamRollup(
+        teamRollup({
+          avoidable_spend: null,
+          diagnose_buckets: diagnoseBucketsFixture(),
+        }),
+        14,
+      ),
+    ),
+  );
+  assert.equal(present.observed.avoidable_spend, null);
+  assert.equal(present.observed.diagnose_buckets[2].key, "duplicate_workloads");
+  assert.equal(present.observed.diagnose_buckets[2].count, 2);
+  assert.equal(present.not_computed.identified_savings_usd, null);
+  assert.equal(Object.hasOwn(present.not_computed, "avoidable_spend"), false);
+
+  const partial = JSON.parse(
+    formatAuditJson(auditSnapshotFromTeamRollup(teamRollup({ avoidable_spend: 42.5 }), 14)),
+  );
+  assert.equal(partial.observed.avoidable_spend, 42.5);
+  assert.equal(Object.hasOwn(partial.observed, "diagnose_buckets"), false);
+});
+
+test("local audit does not print a Diagnose section", () => {
+  const summary = emptySummary();
+  summary.events = [usageEvent()];
+  summary.totalCostUsd = 12.34;
+  summary.totals = { input: 100, output: 50, cacheWrite: 100, cacheRead: 1e6, sessions: 2 };
+  summary.byProject = [{ project: "helm-cli", costUsd: 12.34, sessions: 2 }];
+  const text = stripAnsi(formatAuditHuman(auditSnapshotFromScan(summary, 30)));
+
+  assert.doesNotMatch(text, /Diagnose \(observed\)/);
+  assert.doesNotMatch(text, /avoidable_spend/);
+});
+
+test("audit --help names diagnose keys as observed Diagnose", () => {
+  const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist/index.js");
+  const help = execFileSync(process.execPath, [cli, "audit", "--help"], { encoding: "utf8" });
+
+  assert.match(help, /observed\s+Diagnose/);
+  assert.doesNotMatch(help, /14%/);
+  assert.doesNotMatch(help, /saved tokens/i);
+  assert.doesNotMatch(help, /we saved/i);
 });

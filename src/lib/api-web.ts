@@ -6,6 +6,7 @@
  */
 
 import type {
+  DiagnoseBucket,
   SharedPathOverlap,
   SharedPathPerson,
   SharedProjectOverlap,
@@ -719,6 +720,46 @@ function parseSharedPathRow(value: unknown): SharedPathOverlap | null {
   };
 }
 
+function parseOptionalFinite(value: unknown): number | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (isFiniteNumber(value)) {
+    return value;
+  }
+  return undefined;
+}
+
+function parseBucketMeasure(value: unknown): number | null | undefined {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (isFiniteNumber(value)) {
+    return value;
+  }
+  return undefined;
+}
+
+function parseDiagnoseBucket(value: unknown): DiagnoseBucket | null {
+  if (!isRecord(value) || typeof value.key !== "string" || value.key === "") {
+    return null;
+  }
+  const cost_usd = parseBucketMeasure(value.cost_usd);
+  const count = parseBucketMeasure(value.count);
+  if (cost_usd === undefined || count === undefined) {
+    return null;
+  }
+  return {
+    key: value.key,
+    label: typeof value.label === "string" ? value.label : value.key,
+    cost_usd,
+    count,
+  };
+}
+
 export function teamUsageFromEnvelope(payload: unknown): TeamRollupObserved {
   if (!isRecord(payload) || !isRecord(payload.data)) {
     throw new WebApiError("Team usage response was not a { data } envelope.", 502);
@@ -729,6 +770,8 @@ export function teamUsageFromEnvelope(payload: unknown): TeamRollupObserved {
   }
   const shared_projects = parseRows(data.shared_projects, parseSharedProjectRow);
   const shared_paths = parseRows(data.shared_paths, parseSharedPathRow);
+  const avoidable_spend = parseOptionalFinite(data.avoidable_spend);
+  const diagnose_buckets = parseRows(data.diagnose_buckets, parseDiagnoseBucket);
   const rollup = data as unknown as TeamRollupObserved;
   if (shared_projects === undefined) {
     delete rollup.shared_projects;
@@ -739,6 +782,16 @@ export function teamUsageFromEnvelope(payload: unknown): TeamRollupObserved {
     delete rollup.shared_paths;
   } else {
     rollup.shared_paths = shared_paths;
+  }
+  if (avoidable_spend === undefined) {
+    delete rollup.avoidable_spend;
+  } else {
+    rollup.avoidable_spend = avoidable_spend;
+  }
+  if (diagnose_buckets === undefined) {
+    delete rollup.diagnose_buckets;
+  } else {
+    rollup.diagnose_buckets = diagnose_buckets;
   }
   return rollup;
 }

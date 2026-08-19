@@ -163,6 +163,7 @@ function formatTeamAuditHuman(snapshot: TeamAuditSnapshot): string {
     lines.push("  Run helm scan on each machine that should appear here.");
     lines.push("");
     appendObservedOverlap(lines, rollup);
+    appendObservedDiagnose(lines, rollup);
     appendNotComputed(lines, snapshot);
     return lines.join("\n");
   }
@@ -192,6 +193,7 @@ function formatTeamAuditHuman(snapshot: TeamAuditSnapshot): string {
   }
   lines.push("");
   appendObservedOverlap(lines, rollup);
+  appendObservedDiagnose(lines, rollup);
   appendNotComputed(lines, snapshot);
   return lines.join("\n");
 }
@@ -226,6 +228,50 @@ function appendObservedOverlap(lines: string[], rollup: TeamRollupObserved): voi
   if (paths != null && paths.length > 0) {
     appendSharedPaths(lines, paths);
   }
+}
+
+function peopleCount(count: number): string {
+  return count === 1 ? "1 person" : `${count} people`;
+}
+
+function formatDiagnoseStored(costUsd: number | null, count: number | null): string {
+  if (costUsd != null && count != null) {
+    return `${usd(costUsd)}  ${peopleCount(count)}`;
+  }
+  if (costUsd != null) {
+    return usd(costUsd);
+  }
+  if (count != null) {
+    return peopleCount(count);
+  }
+  return "not computed";
+}
+
+function diagnoseRow(label: string, value: string): string {
+  return `    ${label.padEnd(Math.max(34, label.length + 2))}${value}`;
+}
+
+function appendObservedDiagnose(lines: string[], rollup: TeamRollupObserved): void {
+  const buckets = rollup.diagnose_buckets;
+  const hasSpend = Object.hasOwn(rollup, "avoidable_spend");
+  const hasBuckets = buckets != null && buckets.length > 0;
+  if (!hasSpend && !hasBuckets) {
+    return;
+  }
+
+  lines.push(chalk.bold("  Diagnose (observed)"));
+  if (hasSpend) {
+    const spend = rollup.avoidable_spend;
+    const value = spend == null ? "not computed" : usd(spend);
+    lines.push(diagnoseRow("avoidable_spend", value));
+  }
+  if (buckets != null && buckets.length > 0) {
+    for (const bucket of buckets) {
+      const label = bucket.label !== "" ? bucket.label : bucket.key;
+      lines.push(diagnoseRow(label, formatDiagnoseStored(bucket.cost_usd, bucket.count)));
+    }
+  }
+  lines.push("");
 }
 
 function appendNotComputed(lines: string[], snapshot: AuditSnapshot): void {
