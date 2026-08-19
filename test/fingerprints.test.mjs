@@ -38,6 +38,13 @@ function observeSessionKey(sessionId) {
   return createHash("sha256").update(sessionId).digest("hex");
 }
 
+function assertNoForbiddenUploadFields(value) {
+  const serialized = JSON.stringify(value);
+  for (const key of ["prompt", "inputHash", "outputHash", "excerpt", "inputExcerpt", "outputExcerpt"]) {
+    assert.equal(serialized.includes(`"${key}"`), false, key);
+  }
+}
+
 function claudeContext(cwd = PROJECT_CWD) {
   return { provider: "claude-compatible", cwd };
 }
@@ -116,12 +123,25 @@ test("buildWorkFingerprint copies a minted session_key and omits an empty one", 
   assert.equal(withKey.session_key, observeSessionKey("agent-session"));
   assert.equal(withKey.session_key.length, SESSION_KEY_MAX_CHARS);
 
-  const empty = buildWorkFingerprint(
-    claudeContext(),
-    { ...factsFromInput({ file_path: AUTH_FILE }), sessionKey: "" },
-    HOME_DIR,
-  );
-  assert.equal(Object.hasOwn(empty, "session_key"), false);
+  const omitted = [
+    buildWorkFingerprint(claudeContext(), { ...factsFromInput({ file_path: AUTH_FILE }), sessionKey: "" }, HOME_DIR),
+    buildWorkFingerprint(claudeContext(), { ...factsFromInput({ file_path: AUTH_FILE }), sessionKey: null }, HOME_DIR),
+    buildWorkFingerprint(
+      claudeContext(),
+      { ...factsFromInput({ file_path: AUTH_FILE }), sessionKey: "x".repeat(65) },
+      HOME_DIR,
+    ),
+  ];
+  for (const fingerprint of omitted) {
+    assert.equal(Object.hasOwn(fingerprint, "session_key"), false);
+    assert.deepEqual(Object.keys(fingerprint), [
+      "provider",
+      "project_hint",
+      "path_hint",
+      "tool_name",
+      "occurred_at",
+    ]);
+  }
 });
 
 test("observe session_key is a stable hash of the session id, never the prompt", async () => {
@@ -145,6 +165,7 @@ test("observe session_key is a stable hash of the session id, never the prompt",
   assert.notEqual(key1, "session-1");
   assert.equal(key1.includes("please fix auth"), false);
   assert.equal(JSON.stringify(first.calls.bodies[0]).includes("please fix auth"), false);
+  assertNoForbiddenUploadFields(first.calls.bodies[0]);
 });
 
 test("mintProxySessionKey is hex within the web max and is not a prompt", () => {
@@ -238,9 +259,7 @@ test("wire body never contains prompt text, file contents, diffs, or absolute pa
   assert.equal(body.fingerprints[0].path_hint, "src/auth.ts");
   assert.equal(body.fingerprints[0].tool_name, "Write");
   assert.equal(body.fingerprints[0].session_key, observeSessionKey("session-1"));
-  for (const key of ["prompt", "inputHash", "outputHash", "excerpt", "inputExcerpt", "outputExcerpt"]) {
-    assert.equal(serialized.includes(`"${key}"`), false, key);
-  }
+  assertNoForbiddenUploadFields(body);
 });
 
 test("Bash command and WebSearch query never become a path hint", () => {
