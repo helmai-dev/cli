@@ -1,9 +1,9 @@
 /**
  * `helm setup` — the one-command onboarding wizard. Walks a fresh machine
- * through the whole wedge: connect (device-code auth) → enable coding-agent
- * context hooks → first usage scan → dashboard URL. Every step is skippable
- * and re-runnable; running setup on an already-configured machine is a
- * fast no-op checklist.
+ * through wrap (laptop intercept) → connect → coding-agent hooks → first
+ * usage scan. Wrap works without an account. Every step is skippable and
+ * re-runnable; running setup on an already-configured machine is a fast
+ * no-op checklist.
  *
  * install.sh chains into this after a fresh install (stdin re-attached to
  * /dev/tty so prompts work under `curl | bash`).
@@ -13,10 +13,26 @@ import * as fs from "node:fs";
 import * as readline from "node:readline/promises";
 import * as tty from "node:tty";
 import chalk from "chalk";
+import { commandAvailable } from "../lib/agent-runtime-detection.js";
 import { accountUrls, hasLinkedAccount } from "../lib/account-link.js";
 import { fetchAuthenticatedUser } from "../lib/api-web.js";
 import { getApiUrl, loadCredentials } from "../lib/config.js";
 import { allAgentHooksInstalled } from "./hooks.js";
+import type { WrapAgent } from "./wrap.js";
+
+/** Claude Code / Codex on PATH — the agents `helm wrap` actually points. */
+export function agentsToWrap(
+  isAvailable: (name: string) => boolean = commandAvailable,
+): WrapAgent[] {
+  const found: WrapAgent[] = [];
+  if (isAvailable("claude")) {
+    found.push("claude");
+  }
+  if (isAvailable("codex")) {
+    found.push("codex");
+  }
+  return found;
+}
 
 /** Pure: interpret a y/n answer with a default. Exported for tests. */
 export function parseYesNo(input: string, defaultYes: boolean): boolean {
@@ -97,6 +113,8 @@ export async function setupCommand(): Promise<void> {
     console.log(chalk.yellow("\nhelm setup is interactive — run it in a terminal.\n"));
     console.log("Create a Helm Web account first, then link this CLI:");
     console.log(`  ${registerUrl}`);
+    console.log("  helm wrap claude    point Claude Code at the local Helm proxy");
+    console.log("  helm wrap codex     point Codex at the local Helm proxy");
     console.log("  helm connect        link this machine to that account");
     console.log("  helm hooks install  enable team context in supported coding agents");
     console.log("  helm scan           report + sync your AI usage\n");
@@ -107,12 +125,42 @@ export async function setupCommand(): Promise<void> {
     console.log(chalk.cyan.bold("\n  ⎈ Helm Setup\n"));
     console.log(
       chalk.gray(
-        "  Three steps: connect this machine, enable team context for your coding agents,\n" +
-          "  and scan your recent AI usage. Each step asks first; nothing is silent.\n",
+        "  Point Claude Code or Codex at Helm on this laptop, then connect and scan.\n" +
+          "  Each step asks first; nothing is silent. Prompts stay on this machine.\n",
       ),
     );
 
-    // Step 1 — connect
+    // Step 1 — wrap laptop agents through the loopback proxy
+    const wrapAgents = agentsToWrap();
+    if (wrapAgents.length === 0) {
+      console.log(
+        chalk.gray(
+          "  Claude Code / Codex not on PATH. After you install one: `helm wrap claude` or `helm wrap codex`.\n",
+        ),
+      );
+    } else if (
+      await ask(
+        promptInput.input,
+        `Point ${wrapAgents.join(" and ")} at Helm on this laptop?`,
+      )
+    ) {
+      const { wrapCommand } = await import("./wrap.js");
+      for (const agent of wrapAgents) {
+        try {
+          await wrapCommand(agent);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.log(chalk.yellow(`  Could not wrap ${agent}: ${message}`));
+          console.log(chalk.gray(`  Retry later with \`helm wrap ${agent}\`.\n`));
+        }
+      }
+    } else {
+      console.log(
+        chalk.gray("  Skipped — run `helm wrap claude` or `helm wrap codex` anytime.\n"),
+      );
+    }
+
+    // Step 2 — connect (wrap works without an account)
     if (await isConnected()) {
       console.log(chalk.green("  ✓ Already connected to helm-web\n"));
     } else if (
@@ -123,10 +171,9 @@ export async function setupCommand(): Promise<void> {
       if (!(await isConnected())) {
         console.log(
           chalk.yellow(
-            "\n  Setup paused — connection didn't complete. Re-run `helm setup` anytime.\n",
+            "\n  Connection didn't complete. `helm wrap` still works on this laptop. Re-run `helm setup` to link.\n",
           ),
         );
-        return;
       }
     } else {
       const { registerUrl } = accountUrls(getApiUrl());
@@ -135,10 +182,9 @@ export async function setupCommand(): Promise<void> {
           `\n  Skipped. Create an account at ${registerUrl}, then run \`helm connect\`.\n`,
         ),
       );
-      return;
     }
 
-    // Step 2 — hooks
+    // Step 3 — hooks
     const hooksOn = allAgentHooksInstalled();
     if (hooksOn) {
       console.log(
@@ -156,8 +202,12 @@ export async function setupCommand(): Promise<void> {
       console.log(chalk.gray("  Skipped — enable later with `helm hooks install`.\n"));
     }
 
-    // Step 3 — scan
-    if (
+    // Step 4 — scan (needs a linked account to sync)
+    if (!(await isConnected())) {
+      console.log(
+        chalk.gray("  Skipped scan — link this machine with `helm connect`, then `helm scan`.\n"),
+      );
+    } else if (
       await ask(
         promptInput.input,
         "Scan your last 30 days of local AI usage and sync your team dashboard?",
@@ -172,7 +222,7 @@ export async function setupCommand(): Promise<void> {
     console.log(chalk.cyan.bold("  Setup complete."));
     console.log(
       chalk.gray(
-        "  Team context is available across supported agents; Claude Code and Codex usage syncs automatically.",
+        "  `helm wrap claude` / `helm wrap codex` is the laptop intercept. Prompts stay here.",
       ),
     );
     console.log(`  Your team dashboard: ${chalk.underline(`${getApiUrl()}/usage`)}\n`);

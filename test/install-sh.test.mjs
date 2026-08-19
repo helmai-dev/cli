@@ -34,7 +34,7 @@ function createFixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), "helm-install-sh-"));
   const payloadDir = path.join(root, "payload");
   mkdirSync(payloadDir);
-  writeExecutable(path.join(payloadDir, "helm"), "#!/bin/sh\necho 1.3.8\n");
+  writeExecutable(path.join(payloadDir, "helm"), "#!/bin/sh\necho 1.3.9\n");
 
   const archive = path.join(root, "helm.tar.gz");
   execFileSync("tar", ["-czf", archive, "helm"], { cwd: payloadDir });
@@ -55,9 +55,9 @@ function createFixture() {
   writeFileSync(
     manifestPath,
     JSON.stringify({
-      latest: "1.3.8",
+      latest: "1.3.9",
       versions: {
-        "1.3.8": {
+        "1.3.9": {
           published_at: "2026-08-18T00:00:00Z",
           artifacts,
         },
@@ -95,10 +95,20 @@ fi
   return { root, fakeBin };
 }
 
-function runInstall({ fixture, installDir, pathPrefix = [], extraEnv = {}, args = [] }) {
+function runInstall({
+  fixture,
+  installDir,
+  pathPrefix = [],
+  extraEnv = {},
+  args = [],
+  passDir = true,
+}) {
   const cleanPath = pathWithoutNamedBin(process.env.PATH ?? "", "helm");
-  const pathEnv = [...pathPrefix, fixture.fakeBin, installDir, cleanPath].join(path.delimiter);
-  return spawnSync("bash", [installSh, "--dir", installDir, ...args], {
+  const pathEnv = [...pathPrefix, fixture.fakeBin, ...(passDir ? [installDir] : []), cleanPath].join(
+    path.delimiter,
+  );
+  const argv = passDir ? [installSh, "--dir", installDir, ...args] : [installSh, ...args];
+  return spawnSync("bash", argv, {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -115,7 +125,7 @@ function combinedOutput(result) {
   return `${result.stdout ?? ""}${result.stderr ?? ""}`;
 }
 
-test("our CLI already on PATH in a different dir still succeeds and warns about both paths", () => {
+test("our CLI already on PATH is replaced so wrap is not a second hidden binary", () => {
   const fixture = createFixture();
   try {
     const installDir = path.join(fixture.root, "usr-local-bin");
@@ -129,14 +139,38 @@ test("our CLI already on PATH in a different dir still succeeds and warns about 
     const installedBin = path.join(installDir, "helm");
 
     assert.equal(result.status, 0, output);
-    assert.match(output, /Installed helm v1\.3\.8 to /);
+    assert.match(output, /Installed helm v1\.3\.9 to /);
     assert.match(output, /usr-local-bin\/helm/);
-    assert.match(output, /opt-homebrew-bin\/helm/);
-    assert.match(output, /helm --version will not show this install/i);
+    assert.match(output, /Replaced earlier helm on PATH: .*opt-homebrew-bin\/helm/);
+    assert.doesNotMatch(output, /will not show this install/i);
     assert.doesNotMatch(output, /Kubernetes Helm/);
     assert.equal(existsSync(installedBin), true);
-    assert.equal(readFileSync(shadowBin, "utf8"), "#!/bin/sh\necho 1.3.7\n");
-    assert.notEqual(readFileSync(installedBin, "utf8"), readFileSync(shadowBin, "utf8"));
+    assert.equal(readFileSync(shadowBin, "utf8"), readFileSync(installedBin, "utf8"));
+    assert.match(readFileSync(shadowBin, "utf8"), /echo 1\.3\.9/);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("default install dir follows our CLI on PATH so Homebrew wins the copy", () => {
+  const fixture = createFixture();
+  try {
+    const shadowDir = path.join(fixture.root, "opt-homebrew-bin");
+    const shadowBin = path.join(shadowDir, "helm");
+    writeExecutable(shadowBin, "#!/bin/sh\necho 1.3.7\n");
+
+    const result = runInstall({
+      fixture,
+      installDir: path.join(fixture.root, "unused-usr-local-bin"),
+      pathPrefix: [shadowDir],
+      passDir: false,
+    });
+    const output = combinedOutput(result);
+
+    assert.equal(result.status, 0, output);
+    assert.match(output, /Installed helm v1\.3\.9 to .*opt-homebrew-bin\/helm/);
+    assert.doesNotMatch(output, /will not show this install/i);
+    assert.match(readFileSync(shadowBin, "utf8"), /echo 1\.3\.9/);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -177,11 +211,47 @@ test("no incumbent produces no PATH shadow warning", () => {
     const output = combinedOutput(result);
 
     assert.equal(result.status, 0, output);
-    assert.match(output, /Installed helm v1\.3\.8 to /);
+    assert.match(output, /Installed helm v1\.3\.9 to /);
     assert.doesNotMatch(output, /will not show this install/i);
     assert.doesNotMatch(output, /different helm/i);
     assert.equal(existsSync(path.join(installDir, "helm")), true);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
+});
+
+test("headless next steps name helm wrap claude and helm wrap codex", () => {
+  const fixture = createFixture();
+  try {
+    const installDir = path.join(fixture.root, "usr-local-bin");
+    mkdirSync(installDir);
+
+    const result = runInstall({
+      fixture,
+      installDir,
+      extraEnv: { HELM_SKIP_SETUP: "1", HELM_UPDATE_ONLY: "" },
+    });
+    const output = combinedOutput(result);
+
+    assert.equal(result.status, 0, output);
+    assert.match(output, /helm wrap claude/);
+    assert.match(output, /helm wrap codex/);
+    assert.doesNotMatch(output, /prompt cach/i);
+    assert.doesNotMatch(output, /Cursor cloud/i);
+    assert.doesNotMatch(output, /shared_context_savings_usd/);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("Homebrew formula version matches package.json and requires proxy plus wrap", () => {
+  const pkg = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+  const formula = readFileSync(path.join(repoRoot, "Formula/helm.rb"), "utf8");
+  assert.match(formula, new RegExp(`version "${pkg.version}"`));
+  assert.match(formula, /helm wrap claude/);
+  assert.match(formula, /helm wrap codex/);
+  assert.match(formula, /helm proxy/);
+  assert.match(formula, /does not intercept Cursor cloud VMs/);
+  assert.doesNotMatch(formula, /shared_context_savings_usd/);
+  assert.doesNotMatch(formula, /prompt cach/i);
 });

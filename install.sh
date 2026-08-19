@@ -8,6 +8,10 @@ HELM_BIN_NAME="${HELM_BIN_NAME:-helm}"
 desired_version="latest"
 install_dir="${HELM_INSTALL_DIR:-}"
 force_install="${HELM_FORCE_INSTALL:-0}"
+user_set_dir=0
+if [[ -n "${HELM_INSTALL_DIR:-}" ]]; then
+  user_set_dir=1
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -17,6 +21,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dir)
       install_dir="${2:-$HELM_INSTALL_DIR_DEFAULT}"
+      user_set_dir=1
       shift 2
       ;;
     --bin-name)
@@ -74,15 +79,33 @@ if [[ "$platform" == "windows" ]]; then
   [[ "$HELM_BIN_NAME" == *.exe ]] || HELM_BIN_NAME="$HELM_BIN_NAME.exe"
 fi
 
+is_kubernetes_helm() {
+  local ver="${1:-}"
+  [[ "$ver" == *"version.BuildInfo"* || "$ver" == *"Kubernetes"* ]]
+}
+
+# Our CLI prints a bare semver (commander). Kubernetes Helm prints a Go
+# BuildInfo struct. Only treat the former as safe to replace on PATH.
+is_our_helm() {
+  local ver="${1:-}"
+  if is_kubernetes_helm "$ver"; then
+    return 1
+  fi
+  [[ "$ver" =~ [0-9]+\.[0-9]+ ]]
+}
+
 # Kubernetes Helm also installs a binary called `helm`, and it is on a great
 # many developer machines. Overwriting it would break their cluster tooling
 # with no warning, so refuse and explain rather than clobber. Identify the
 # incumbent by its version output: Kubernetes Helm prints a Go
 # `version.BuildInfo{...}` struct, ours prints a bare semver.
 existing_bin="$(command -v "$HELM_BIN_NAME" 2>/dev/null || true)"
-if [[ -n "$existing_bin" && "$force_install" != "1" ]]; then
+existing_version=""
+if [[ -n "$existing_bin" ]]; then
   existing_version="$("$existing_bin" --version 2>&1 || true)"
-  if [[ "$existing_version" == *"version.BuildInfo"* || "$existing_version" == *"Kubernetes"* ]]; then
+fi
+if [[ -n "$existing_bin" && "$force_install" != "1" ]]; then
+  if is_kubernetes_helm "$existing_version"; then
     echo ""
     echo "Kubernetes Helm is already installed as '$HELM_BIN_NAME':"
     echo "  $existing_bin"
@@ -100,6 +123,13 @@ if [[ -n "$existing_bin" && "$force_install" != "1" ]]; then
     echo ""
     exit 1
   fi
+fi
+
+# Homebrew on Apple Silicon puts /opt/homebrew/bin ahead of /usr/local/bin.
+# If PATH already runs our CLI, install onto that directory so `helm wrap`
+# is not a second hidden binary.
+if [[ "$user_set_dir" != "1" && -n "$existing_bin" ]] && is_our_helm "$existing_version"; then
+  install_dir="$(cd "$(dirname "$existing_bin")" && pwd)"
 fi
 
 tmp_dir="$(mktemp -d)"
@@ -157,66 +187,88 @@ else
   tar -xzf "$archive_path" -C "$tmp_dir"
 fi
 
-if [[ "$platform" == "windows" ]]; then
-  if [[ ! -d "$install_dir" ]]; then
-    mkdir -p "$install_dir" 2>/dev/null || {
-      echo "Unable to create $install_dir."
+install_binary() {
+  local dest="$1"
+  local dest_dir
+  dest_dir="$(dirname "$dest")"
+  local use_sudo=0
+
+  if [[ "$platform" == "windows" ]]; then
+    if [[ ! -d "$dest_dir" ]]; then
+      mkdir -p "$dest_dir" 2>/dev/null || {
+        echo "Unable to create $dest_dir."
+        echo "Use --dir to choose a writable install directory."
+        return 1
+      }
+    fi
+    if [[ ! -w "$dest_dir" ]]; then
+      echo "Unable to write to $dest_dir."
       echo "Use --dir to choose a writable install directory."
-      exit 1
-    }
+      return 1
+    fi
+    cp "$tmp_dir/$HELM_ARTIFACT_NAME" "$dest"
+    return 0
   fi
 
-  if [[ ! -w "$install_dir" ]]; then
-    echo "Unable to write to $install_dir."
-    echo "Use --dir to choose a writable install directory."
-    exit 1
+  if [[ ! -d "$dest_dir" ]]; then
+    mkdir -p "$dest_dir" 2>/dev/null || true
   fi
 
-  cp "$tmp_dir/$HELM_ARTIFACT_NAME" "$install_dir/$HELM_BIN_NAME"
-else
-  if [[ ! -d "$install_dir" ]]; then
-    mkdir -p "$install_dir" 2>/dev/null || true
-  fi
-
-  if [[ -w "$install_dir" ]]; then
-    cp "$tmp_dir/$HELM_ARTIFACT_NAME" "$install_dir/$HELM_BIN_NAME"
-    chmod 0755 "$install_dir/$HELM_BIN_NAME"
+  if [[ -d "$dest_dir" && -w "$dest_dir" && ( ! -e "$dest" || -w "$dest" ) ]]; then
+    cp "$tmp_dir/$HELM_ARTIFACT_NAME" "$dest"
+    chmod 0755 "$dest"
   else
     echo ""
-    echo "Helm needs elevated permissions to install to $install_dir"
+    echo "Helm needs elevated permissions to install to $dest_dir"
     echo ""
-    sudo mkdir -p "$install_dir"
-    sudo cp "$tmp_dir/$HELM_ARTIFACT_NAME" "$install_dir/$HELM_BIN_NAME"
-    sudo chmod 0755 "$install_dir/$HELM_BIN_NAME"
+    sudo mkdir -p "$dest_dir"
+    sudo cp "$tmp_dir/$HELM_ARTIFACT_NAME" "$dest"
+    sudo chmod 0755 "$dest"
+    use_sudo=1
   fi
 
   # macOS: Bun-compiled binaries have an embedded linker signature that becomes
   # invalid after download/copy. Strip and re-sign the INSTALLED binary so
   # Gatekeeper allows execution. Must happen after cp, not before.
   if [[ "$platform" == "darwin" ]]; then
-    target="$install_dir/$HELM_BIN_NAME"
-    if [[ -w "$target" ]]; then
-      xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
-      codesign --remove-signature "$target" 2>/dev/null || true
-      codesign --force --sign - "$target" 2>/dev/null || true
+    if [[ "$use_sudo" == "1" || ! -w "$dest" ]]; then
+      sudo xattr -dr com.apple.quarantine "$dest" 2>/dev/null || true
+      sudo codesign --remove-signature "$dest" 2>/dev/null || true
+      sudo codesign --force --sign - "$dest" 2>/dev/null || true
     else
-      sudo xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
-      sudo codesign --remove-signature "$target" 2>/dev/null || true
-      sudo codesign --force --sign - "$target" 2>/dev/null || true
+      xattr -dr com.apple.quarantine "$dest" 2>/dev/null || true
+      codesign --remove-signature "$dest" 2>/dev/null || true
+      codesign --force --sign - "$dest" 2>/dev/null || true
     fi
   fi
+}
+
+if ! install_binary "$install_dir/$HELM_BIN_NAME"; then
+  exit 1
 fi
 
 echo "Installed $HELM_BIN_NAME v$resolved_version to $install_dir/$HELM_BIN_NAME"
 
 # A copy to $install_dir can still lose to an older helm earlier on PATH
-# (Homebrew on macOS, an npm global, a leftover dev build). That is not a
-# Kubernetes Helm collision: the file we wanted is in place. Tell the user
-# which binary they will actually run instead of exiting 0 in silence.
+# (Homebrew on macOS, an npm global, a leftover dev build). If that winner
+# is our CLI, replace it so `helm wrap` is not a second hidden binary.
 installed_bin="$install_dir/$HELM_BIN_NAME"
+replaced_path_winner=0
 hash -r 2>/dev/null || true
 path_bin="$(command -v "$HELM_BIN_NAME" 2>/dev/null || true)"
 if [[ -n "$path_bin" ]] && ! [[ "$path_bin" -ef "$installed_bin" ]]; then
+  path_version="$("$path_bin" --version 2>&1 || true)"
+  if is_our_helm "$path_version" && install_binary "$path_bin"; then
+    echo "Replaced earlier $HELM_BIN_NAME on PATH: $path_bin"
+    replaced_path_winner=1
+    hash -r 2>/dev/null || true
+    path_bin="$(command -v "$HELM_BIN_NAME" 2>/dev/null || true)"
+  fi
+fi
+
+# Warn only when PATH still runs a different file we did not replace
+# (typically Kubernetes Helm after --force, or an unwritable shadow).
+if [[ -n "$path_bin" && "$replaced_path_winner" != "1" ]] && ! [[ "$path_bin" -ef "$installed_bin" ]]; then
   echo ""
   echo "Warning: a different $HELM_BIN_NAME is earlier on PATH."
   echo "  installed:     $installed_bin"
@@ -246,8 +298,9 @@ if [[ "${HELM_UPDATE_ONLY:-}" != "1" ]]; then
   else
     echo ""
     echo "Next steps:"
-    echo "  helm setup            guided setup (connect, context hooks, first scan)"
-    echo "  helm daemon start     start running agent work on this machine"
+    echo "  helm wrap claude      point Claude Code at the local Helm proxy"
+    echo "  helm wrap codex       point Codex at the local Helm proxy"
+    echo "  helm setup            connect, wrap, context hooks, first scan"
     echo ""
   fi
 fi

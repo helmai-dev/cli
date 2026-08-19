@@ -381,6 +381,14 @@ function detectInstallSourceFromBinaryPath(): InstallSource {
       return "npm";
     }
 
+    if (
+      binPath.includes("/opt/homebrew/") ||
+      binPath.includes("/Cellar/") ||
+      binPath.includes("/linuxbrew/")
+    ) {
+      return "brew";
+    }
+
     // Standalone binary (e.g. ~/.local/bin/helm, /usr/local/bin/helm)
     // is characteristic of curl-based install
     if (binPath && !binPath.includes("node_modules")) {
@@ -410,7 +418,7 @@ export function getUpdateCommandForSource(source: InstallSource): string {
     case "bun":
       return "bun add -g @helmai/cli@latest";
     case "brew":
-      return "brew upgrade helm";
+      return "brew upgrade helmai-dev/cli/helm";
     case "paru":
       return "paru -Syu helm-cli";
     default:
@@ -429,7 +437,7 @@ export function getUninstallCommandForSource(source: InstallSource): string {
     case "bun":
       return "bun remove -g @helmai/cli";
     case "brew":
-      return "brew uninstall helm";
+      return "brew uninstall helmai-dev/cli/helm";
     case "paru":
       return "paru -R helm-cli";
     default:
