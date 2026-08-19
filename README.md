@@ -1,33 +1,47 @@
-# Helm Daemon
+# Helm
 
-Run Helm agents on this machine, controlled from Helm.
-
-Install this on any always-on machine — a desktop at home, an office
-workstation, a home server — and it becomes a run target for your Helm
-team: agent sessions started from the Helm desktop app (or the web) are
-queued to this machine's daemon, executed here with Claude Code or Codex,
-and streamed back live.
+Helm sits between coding agents and model providers on this laptop.
+`helm wrap claude` or `helm wrap codex` starts a loopback proxy and
+points that agent at it. Prompts stay on this machine. Helm Web gets
+usage and fingerprint fields only.
 
 Helm Web ([tryhelm.ai](https://tryhelm.ai)) owns the account, team, and
-persisted usage. This CLI is the local layer: it links to that account,
-reads transcripts on this machine, and runs queued agent work.
+persisted usage. This CLI is the local layer: the live intercept, the
+link to that account, transcript reads on this machine, and queued
+agent work.
 
 ## Installation
 
-Standalone binary (macOS, Linux, Windows/WSL — no Node required):
+One step. macOS, Linux, Windows/WSL — no Node required:
 
 ```bash
 curl -fsSL https://tryhelm.ai/install | bash
 ```
 
-The script copies to `/usr/local/bin` by default. If another `helm` is
-earlier on PATH (Homebrew on macOS, an older npm global), the install
-still succeeds and prints which binary `helm --version` will run. Re-run
-with `--dir` pointing at a directory that wins, or move the install
-directory earlier in PATH. A root-owned curl install is removed with
-`sudo rm /usr/local/bin/helm`.
+That binary includes `helm proxy` and `helm wrap`. Stay in the same
+terminal:
 
-Or via a package manager (requires Node.js 18+):
+```bash
+helm wrap claude   # or: helm wrap codex
+```
+
+Restart the agent. Undo with `helm unwrap claude` or `helm unwrap
+codex`. This is laptop intercept for Claude Code and Codex. It does
+not sit on Cursor cloud VMs.
+
+If PATH already runs our CLI (Homebrew on macOS, an older npm global),
+the installer replaces that binary so `helm wrap` is the install you
+just ran. Kubernetes Helm is never overwritten. A root-owned curl
+install is removed with `sudo rm /usr/local/bin/helm`.
+
+Homebrew tap (same binary, same `proxy` / `wrap`):
+
+```bash
+brew tap helmai-dev/cli https://github.com/helmai-dev/cli
+brew install helmai-dev/cli/helm
+```
+
+Or via npm (requires Node.js 18+):
 
 ```bash
 npm install -g @helmai/cli
@@ -35,29 +49,32 @@ npm install -g @helmai/cli
 
 Also works with `pnpm add -g @helmai/cli` and `bun add -g @helmai/cli`.
 
-**Requirements:** the agent CLIs you want this machine to offer
-(`claude` and/or `codex` on PATH).
+**Requirements:** Claude Code and/or Codex on PATH for `helm wrap`.
 
 ## Getting started
 
-Create a Helm Web account first (or sign in if you already have one):
+After install, wrap is enough to sit on the laptop request path. A
+Helm Web account is optional for wrap and required to sync usage.
 
 - Register: https://tryhelm.ai/auth/register
 - Sign in: https://tryhelm.ai/auth/login
 
-Then link this CLI to that account. `helm connect` starts the existing
-device-code flow: it opens `/auth/device`, you approve while signed in,
-and a Sanctum token is stored under `~/.helm` (chmod 600). The token is
-never printed.
+`helm connect` starts the existing device-code flow: it opens
+`/auth/device`, you approve while signed in, and a Sanctum token is
+stored under `~/.helm` (chmod 600). The token is never printed.
 
 ```bash
+# Point Claude Code or Codex at the local proxy. Prompts stay here.
+helm wrap claude
+helm wrap codex
+
 # Local spend report from transcripts on this machine. No account required.
 helm audit
 
 # Team rollup from Helm Web after helm connect. People who have scanned.
 helm audit --team <team-id>
 
-# Interactive setup: link the account, install coding-agent integrations, and scan usage.
+# Interactive setup: wrap laptop agents, then link / hooks / scan.
 helm setup
 
 # Or link this machine on its own
