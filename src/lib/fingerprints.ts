@@ -16,8 +16,6 @@ export type RelativePathHint = string & { readonly [HINT]: "path" };
 
 export type ProjectHint = string & { readonly [HINT]: "project" };
 
-export type SessionKey = string & { readonly [HINT]: "session_key" };
-
 export const SESSION_KEY_MAX_CHARS = 64;
 
 export interface WorkFingerprint {
@@ -26,7 +24,7 @@ export interface WorkFingerprint {
   readonly path_hint: RelativePathHint | null;
   readonly tool_name: string | null;
   readonly occurred_at: string;
-  readonly session_key?: SessionKey;
+  readonly session_key?: string;
 }
 
 export interface WorkFingerprintsBody {
@@ -37,7 +35,7 @@ export interface ToolEventFacts {
   readonly toolName: string;
   readonly pathCandidate: WorkPathCandidate | null;
   readonly occurredAt: string;
-  readonly sessionKey?: SessionKey | null;
+  readonly sessionKey?: string | null;
 }
 
 export interface AmbientProjectContext {
@@ -102,24 +100,19 @@ function mintProjectHint(value: string): ProjectHint {
   return value as ProjectHint;
 }
 
-function mintSessionKey(value: string): SessionKey | null {
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > SESSION_KEY_MAX_CHARS) {
-    return null;
-  }
-  return trimmed as SessionKey;
+export function sessionKeyFromObserveSession(sessionId: string): string {
+  return crypto.createHash("sha256").update(sessionId).digest("hex");
 }
 
-export function sessionKeyFromObserveSession(sessionId: string): SessionKey | null {
-  const trimmed = sessionId.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return mintSessionKey(crypto.createHash("sha256").update(trimmed).digest("hex"));
+export function mintProxySessionKey(): string {
+  return crypto.randomBytes(16).toString("hex");
 }
 
-export function mintProxySessionKey(): SessionKey {
-  return crypto.randomBytes(16).toString("hex") as SessionKey;
+function usableSessionKey(value: string | null | undefined): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > SESSION_KEY_MAX_CHARS) {
+    return undefined;
+  }
+  return value;
 }
 
 export function pathCandidateFromToolInput(toolInput: unknown): WorkPathCandidate | null {
@@ -266,14 +259,14 @@ export function buildWorkFingerprint(
   if (!project_hint) {
     return null;
   }
-  const session_key = facts.sessionKey ? mintSessionKey(facts.sessionKey) : null;
+  const session_key = usableSessionKey(facts.sessionKey);
   return {
     provider,
     project_hint,
     path_hint: relativePathHint(facts.pathCandidate, context.cwd),
     tool_name: toolNameHint(facts.toolName),
     occurred_at: facts.occurredAt,
-    ...(session_key ? { session_key } : {}),
+    ...(session_key !== undefined ? { session_key } : {}),
   };
 }
 
