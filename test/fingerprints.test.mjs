@@ -1,10 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { createHash } from "node:crypto";
+
 import {
   pathCandidateFromToolInput,
   buildWorkFingerprint,
+  mintProxySessionKey,
   reportWorkFingerprint,
+  SESSION_KEY_MAX_CHARS,
+  sessionKeyFromObserveSession,
   teammateNoticeFromResponse,
 } from "../dist/lib/fingerprints.js";
 import {
@@ -27,6 +32,17 @@ function factsFromInput(toolInput, toolName = "Read") {
     pathCandidate: pathCandidateFromToolInput(toolInput),
     occurredAt: OCCURRED_AT,
   };
+}
+
+function observeSessionKey(sessionId) {
+  return createHash("sha256").update(sessionId).digest("hex");
+}
+
+function assertNoForbiddenUploadFields(value) {
+  const serialized = JSON.stringify(value);
+  for (const key of ["prompt", "inputHash", "outputHash", "excerpt", "inputExcerpt", "outputExcerpt"]) {
+    assert.equal(serialized.includes(`"${key}"`), false, key);
+  }
 }
 
 function claudeContext(cwd = PROJECT_CWD) {
@@ -92,6 +108,71 @@ test("claude payload has exactly the five contract fields", () => {
     "tool_name",
     "occurred_at",
   ]);
+  assert.equal(Object.hasOwn(fingerprint, "session_key"), false);
+});
+
+test("buildWorkFingerprint copies a minted session_key and omits an empty one", () => {
+  const withKey = buildWorkFingerprint(
+    claudeContext(),
+    {
+      ...factsFromInput({ file_path: AUTH_FILE }),
+      sessionKey: sessionKeyFromObserveSession("agent-session"),
+    },
+    HOME_DIR,
+  );
+  assert.equal(withKey.session_key, observeSessionKey("agent-session"));
+  assert.equal(withKey.session_key.length, SESSION_KEY_MAX_CHARS);
+
+  const omitted = [
+    buildWorkFingerprint(claudeContext(), { ...factsFromInput({ file_path: AUTH_FILE }), sessionKey: "" }, HOME_DIR),
+    buildWorkFingerprint(claudeContext(), { ...factsFromInput({ file_path: AUTH_FILE }), sessionKey: null }, HOME_DIR),
+    buildWorkFingerprint(
+      claudeContext(),
+      { ...factsFromInput({ file_path: AUTH_FILE }), sessionKey: "x".repeat(65) },
+      HOME_DIR,
+    ),
+  ];
+  for (const fingerprint of omitted) {
+    assert.equal(Object.hasOwn(fingerprint, "session_key"), false);
+    assert.deepEqual(Object.keys(fingerprint), [
+      "provider",
+      "project_hint",
+      "path_hint",
+      "tool_name",
+      "occurred_at",
+    ]);
+  }
+});
+
+test("observe session_key is a stable hash of the session id, never the prompt", async () => {
+  const facts = factsFromInput({ file_path: AUTH_FILE });
+  const first = trackingEnv();
+  const second = trackingEnv();
+  const other = trackingEnv();
+
+  await reportWorkFingerprint("session-1", facts, first.env);
+  await reportWorkFingerprint("session-1", facts, second.env);
+  await reportWorkFingerprint("session-2", facts, other.env);
+
+  const key1 = first.calls.bodies[0].fingerprints[0].session_key;
+  const key2 = second.calls.bodies[0].fingerprints[0].session_key;
+  const keyOther = other.calls.bodies[0].fingerprints[0].session_key;
+  assert.equal(key1, observeSessionKey("session-1"));
+  assert.equal(key1, key2);
+  assert.equal(key1, sessionKeyFromObserveSession("session-1"));
+  assert.notEqual(key1, keyOther);
+  assert.equal(keyOther, observeSessionKey("session-2"));
+  assert.notEqual(key1, "session-1");
+  assert.equal(key1.includes("please fix auth"), false);
+  assert.equal(JSON.stringify(first.calls.bodies[0]).includes("please fix auth"), false);
+  assertNoForbiddenUploadFields(first.calls.bodies[0]);
+});
+
+test("mintProxySessionKey is hex within the web max and is not a prompt", () => {
+  const key = mintProxySessionKey();
+  assert.match(key, /^[0-9a-f]{32}$/);
+  assert.ok(key.length <= SESSION_KEY_MAX_CHARS);
+  assert.notEqual(key, mintProxySessionKey());
 });
 
 test("codex ambient provider maps to codex on the wire", () => {
@@ -173,9 +254,12 @@ test("wire body never contains prompt text, file contents, diffs, or absolute pa
     "path_hint",
     "tool_name",
     "occurred_at",
+    "session_key",
   ]);
   assert.equal(body.fingerprints[0].path_hint, "src/auth.ts");
   assert.equal(body.fingerprints[0].tool_name, "Write");
+  assert.equal(body.fingerprints[0].session_key, observeSessionKey("session-1"));
+  assertNoForbiddenUploadFields(body);
 });
 
 test("Bash command and WebSearch query never become a path hint", () => {

@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import { readAmbientTurn } from "./ambient-state.js";
@@ -15,12 +16,15 @@ export type RelativePathHint = string & { readonly [HINT]: "path" };
 
 export type ProjectHint = string & { readonly [HINT]: "project" };
 
+export const SESSION_KEY_MAX_CHARS = 64;
+
 export interface WorkFingerprint {
   readonly provider: FingerprintProvider;
   readonly project_hint: ProjectHint;
   readonly path_hint: RelativePathHint | null;
   readonly tool_name: string | null;
   readonly occurred_at: string;
+  readonly session_key?: string;
 }
 
 export interface WorkFingerprintsBody {
@@ -31,6 +35,7 @@ export interface ToolEventFacts {
   readonly toolName: string;
   readonly pathCandidate: WorkPathCandidate | null;
   readonly occurredAt: string;
+  readonly sessionKey?: string | null;
 }
 
 export interface AmbientProjectContext {
@@ -93,6 +98,21 @@ function mintRelativePathHint(value: string): RelativePathHint {
 
 function mintProjectHint(value: string): ProjectHint {
   return value as ProjectHint;
+}
+
+export function sessionKeyFromObserveSession(sessionId: string): string {
+  return crypto.createHash("sha256").update(sessionId).digest("hex");
+}
+
+export function mintProxySessionKey(): string {
+  return crypto.randomBytes(16).toString("hex");
+}
+
+function usableSessionKey(value: string | null | undefined): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > SESSION_KEY_MAX_CHARS) {
+    return undefined;
+  }
+  return value;
 }
 
 export function pathCandidateFromToolInput(toolInput: unknown): WorkPathCandidate | null {
@@ -239,12 +259,14 @@ export function buildWorkFingerprint(
   if (!project_hint) {
     return null;
   }
+  const session_key = usableSessionKey(facts.sessionKey);
   return {
     provider,
     project_hint,
     path_hint: relativePathHint(facts.pathCandidate, context.cwd),
     tool_name: toolNameHint(facts.toolName),
     occurred_at: facts.occurredAt,
+    ...(session_key !== undefined ? { session_key } : {}),
   };
 }
 
@@ -259,7 +281,10 @@ export async function reportWorkFingerprint(
     if (!context) {
       return null;
     }
-    const fingerprint = buildWorkFingerprint(context, facts);
+    const fingerprint = buildWorkFingerprint(context, {
+      ...facts,
+      sessionKey: sessionKeyFromObserveSession(sessionId),
+    });
     if (!fingerprint) {
       return null;
     }
