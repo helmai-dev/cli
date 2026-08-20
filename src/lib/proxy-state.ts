@@ -43,6 +43,10 @@ export function getWrapStatePath(agent: WrapAgent): string {
   return envFile(`wrap-${agent}.json`);
 }
 
+export function getProxyWorkCachePath(): string {
+  return envFile("proxy-work.json");
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }

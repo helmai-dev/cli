@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,16 +19,25 @@ import {
   buildLiveUsageRecord,
   extractJsonModel,
   formatTeammateNote,
+  HELM_WRAP_LINE,
+  helmReuseLine,
   isLoopbackBind,
   liveUsageToUpload,
   pathFactsFromRequestBody,
   routeProxiedProvider,
+  toolResultsFromRequestBody,
   usageFromProviderPayload,
   usageFromSseStream,
   usageProviderFor,
 } from "../dist/lib/proxy-inspect.js";
 import { listenProxy } from "../dist/lib/proxy-server.js";
 import { reportProxiedRequest } from "../dist/lib/proxy-report.js";
+import {
+  lookupWork,
+  parseWorkCache,
+  readWorkCache,
+  WORK_CACHE_KIND,
+} from "../dist/lib/proxy-work-cache.js";
 
 const SECRET = "SECRET_PROMPT_DO_NOT_UPLOAD";
 const PROJECT_CWD = "/Users/team/billing";
@@ -353,6 +364,7 @@ test("pass-through happy path forwards auth and body, records usage, never uploa
       linked: true,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
+      workCachePath: tempWorkCachePath(),
       sendUsage: async (body) => {
         helmPosts.push({ kind: "usage", body });
         return { accepted: 1 };
@@ -444,6 +456,7 @@ test("one proxied request stamps the same session_key on every fingerprint and n
       linked: true,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
+      workCachePath: tempWorkCachePath(),
       sendUsage: async () => ({ accepted: 1 }),
       sendFingerprints: async (body) => {
         helmPosts.push({ kind: "fingerprints", body });
@@ -518,6 +531,7 @@ test("unlinked proxy still completes the provider call", async () => {
       homeDir: HOME_DIR,
       log: () => {},
       linked: false,
+      workCachePath: tempWorkCachePath(),
       sendUsage: async (body) => {
         helmPosts.push(body);
         return { accepted: 1 };
@@ -568,6 +582,7 @@ test("live others can ride along as an on-device system note", async () => {
       now: () => NOW,
       log: () => {},
       linked: true,
+      workCachePath: tempWorkCachePath(),
       fetchLiveOthers: async () => [
         { name: "Alex", path_hint: "src/Foo.php", occurred_at: "2026-08-18T16:27:00.000Z" },
       ],
@@ -612,6 +627,7 @@ test("SSE responses are flushed to the client as chunks arrive", async () => {
       homeDir: HOME_DIR,
       log: () => {},
       linked: true,
+      workCachePath: tempWorkCachePath(),
       sendUsage: async (body) => {
         usagePosts.push(body);
         return { accepted: 1 };
@@ -679,6 +695,7 @@ test("401 from the provider does not mint usage or fingerprints", async () => {
       homeDir: HOME_DIR,
       log: () => {},
       linked: true,
+      workCachePath: tempWorkCachePath(),
       sendUsage: async (body) => {
         helmPosts.push(body);
         return { accepted: 1 };
@@ -720,4 +737,340 @@ test("helm proxy --help names the loopback server", () => {
   const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist/index.js");
   const help = execFileSync(process.execPath, [cli, "proxy", "--help"], { encoding: "utf8" });
   assert.match(help, /127\.0\.0\.1|loopback|provider/i);
+  assert.match(help, /reuse/i);
+});
+
+const TOOL_RESULT = "<?php class Foo {}";
+
+function toolWorkBody(filePath = "/Users/team/billing/src/Foo.php") {
+  return {
+    model: "claude-sonnet-4-20250514",
+    messages: [
+      { role: "user", content: SECRET },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: filePath } },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "toolu_1", content: TOOL_RESULT },
+        ],
+      },
+    ],
+  };
+}
+
+function tempWorkCachePath() {
+  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "helm-work-")), "proxy-work.json");
+}
+
+test("tool results come from tool_result blocks, never user prompt text", () => {
+  const results = toolResultsFromRequestBody(toolWorkBody());
+  assert.equal(results.length, 1);
+  assert.equal(results[0].toolName, "Read");
+  assert.equal(results[0].pathCandidate, "/Users/team/billing/src/Foo.php");
+  assert.equal(results[0].content, TOOL_RESULT);
+  assert.equal(results[0].content.includes(SECRET), false);
+});
+
+test("lookup requires same project, overlapping paths, same tool, and a payload", () => {
+  const record = {
+    project_hint: "billing",
+    path_hints: ["src/Foo.php"],
+    tool_names: ["Read"],
+    session_key: "abc",
+    cost_usd: 0.0123,
+    input_tokens: 11,
+    output_tokens: 7,
+    occurred_at: NOW.toISOString(),
+    payload: { kind: "tool_results", results: [{ tool_name: "Read", path_hint: "src/Foo.php", content: TOOL_RESULT }] },
+  };
+  const cache = { kind: WORK_CACHE_KIND, records: [record], reuses: [] };
+  const hit = lookupWork({
+    cache,
+    key: { project_hint: "billing", path_hints: ["src/Foo.php"], tool_names: ["Read"] },
+    now: NOW,
+  });
+  assert.equal(hit.kind, "reuse");
+  assert.equal(hit.record.cost_usd, 0.0123);
+
+  assert.equal(
+    lookupWork({
+      cache,
+      key: { project_hint: "billing", path_hints: ["src/Bar.php"], tool_names: ["Read"] },
+      now: NOW,
+    }).kind,
+    "forward",
+  );
+  assert.equal(
+    lookupWork({
+      cache: { kind: WORK_CACHE_KIND, records: [{ ...record, payload: null }], reuses: [] },
+      key: { project_hint: "billing", path_hints: ["src/Foo.php"], tool_names: ["Read"] },
+      now: NOW,
+    }).reason,
+    "no_payload",
+  );
+});
+
+test("harness wrap line is honest and reuse line uses only stored cost", () => {
+  assert.equal(HELM_WRAP_LINE, "Helm is wrapping this request.");
+  assert.equal(HELM_WRAP_LINE.includes("sav"), false);
+  assert.equal(HELM_WRAP_LINE.includes("rout"), false);
+  assert.equal(helmReuseLine(0.0123), "HELM REUSED PRIOR WORK. Did not send that tool work to the provider. Stored original cost $0.0123.");
+  assert.equal(helmReuseLine(null), "HELM REUSED PRIOR WORK. Did not send that tool work to the provider.");
+  assert.equal(helmReuseLine(null).includes("$"), false);
+});
+
+test("first proxied request stores a work record and injects the wrap line", async () => {
+  const cachePath = tempWorkCachePath();
+  const logs = [];
+  const providerHits = [];
+  const helmPosts = [];
+  const provider = await listenMock((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      providerHits.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "msg_store",
+        model: "claude-sonnet-4-20250514",
+        usage: { input_tokens: 11, output_tokens: 7, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        content: [{ type: "text", text: "ok" }],
+      }));
+    });
+  });
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0 },
+    {
+      anthropicUpstream: provider.url,
+      openaiUpstream: provider.url,
+      cwd: PROJECT_CWD,
+      homeDir: HOME_DIR,
+      now: () => NOW,
+      log: (line) => logs.push(line),
+      linked: true,
+      deviceUlid: "01DEVICE",
+      fetchLiveOthers: async () => [],
+      workCachePath: cachePath,
+      sendUsage: async (body) => {
+        helmPosts.push({ kind: "usage", body });
+        return { accepted: 1 };
+      },
+      sendFingerprints: async (body) => {
+        helmPosts.push({ kind: "fingerprints", body });
+      },
+    },
+  );
+
+  try {
+    const response = await fetch(`${proxy.url}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "sk-ant-user-token",
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(toolWorkBody()),
+    });
+    assert.equal(response.status, 200);
+    await proxy.reported;
+
+    assert.equal(providerHits.length, 1);
+    assert.ok(logs.includes(HELM_WRAP_LINE));
+    assert.equal(logs.some((line) => line.includes("REUSED PRIOR WORK")), false);
+    const systemTexts = providerHits[0].system.map((block) => block.text);
+    assert.ok(systemTexts.includes(HELM_WRAP_LINE));
+    assert.equal(systemTexts.join("\n").includes("sav"), false);
+
+    const cache = readWorkCache(cachePath);
+    assert.equal(cache.records.length, 1);
+    assert.equal(cache.records[0].project_hint, "billing");
+    assert.deepEqual(cache.records[0].path_hints, ["src/Foo.php"]);
+    assert.deepEqual(cache.records[0].tool_names, ["Read"]);
+    assert.equal(typeof cache.records[0].session_key, "string");
+    assert.equal(typeof cache.records[0].cost_usd, "number");
+    assert.equal(cache.records[0].input_tokens, 11);
+    assert.equal(cache.records[0].output_tokens, 7);
+    assert.equal(cache.records[0].payload.kind, "tool_results");
+    assert.equal(cache.records[0].payload.results[0].content, TOOL_RESULT);
+    const cacheText = fs.readFileSync(cachePath, "utf8");
+    assert.equal(cacheText.includes(SECRET), false);
+    assert.equal(cacheText.includes("\"prompt\""), false);
+    assert.equal(JSON.stringify(helmPosts).includes(SECRET), false);
+  } finally {
+    await proxy.close();
+    await provider.close();
+  }
+});
+
+test("second matching request reuses stored tool work and does not call the provider", async () => {
+  const cachePath = tempWorkCachePath();
+  const logs = [];
+  const providerHits = [];
+  const helmPosts = [];
+  const provider = await listenMock((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      providerHits.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "msg_reuse",
+        model: "claude-sonnet-4-20250514",
+        usage: { input_tokens: 11, output_tokens: 7, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        content: [{ type: "text", text: "ok" }],
+      }));
+    });
+  });
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0 },
+    {
+      anthropicUpstream: provider.url,
+      openaiUpstream: provider.url,
+      cwd: PROJECT_CWD,
+      homeDir: HOME_DIR,
+      now: () => NOW,
+      log: (line) => logs.push(line),
+      linked: true,
+      deviceUlid: "01DEVICE",
+      fetchLiveOthers: async () => [],
+      workCachePath: cachePath,
+      sendUsage: async (body) => {
+        helmPosts.push({ kind: "usage", body });
+        return { accepted: 1 };
+      },
+      sendFingerprints: async (body) => {
+        helmPosts.push({ kind: "fingerprints", body });
+      },
+    },
+  );
+
+  try {
+    const headers = {
+      "content-type": "application/json",
+      "x-api-key": "sk-ant-user-token",
+      "anthropic-version": "2023-06-01",
+    };
+    const first = await fetch(`${proxy.url}/v1/messages`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(toolWorkBody()),
+    });
+    assert.equal(first.status, 200);
+    await proxy.reported;
+    const stored = readWorkCache(cachePath).records[0];
+    assert.ok(stored);
+    const louder = helmReuseLine(stored.cost_usd);
+
+    const second = await fetch(`${proxy.url}/v1/messages`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(toolWorkBody()),
+    });
+    assert.equal(second.status, 200);
+    const reused = await second.json();
+    await proxy.reported;
+
+    assert.equal(providerHits.length, 1);
+    assert.equal(reused.id, "helm_reuse");
+    assert.equal(reused.usage.input_tokens, 0);
+    assert.ok(reused.content[0].text.includes(TOOL_RESULT));
+    assert.ok(reused.content[0].text.includes(louder));
+    assert.ok(reused.content[0].text.includes(HELM_WRAP_LINE));
+    assert.equal(reused.content[0].text.includes(SECRET), false);
+    assert.ok(logs.includes(HELM_WRAP_LINE));
+    assert.ok(logs.includes(louder));
+    assert.equal(logs.includes("model routing"), false);
+
+    const cache = readWorkCache(cachePath);
+    assert.equal(cache.reuses.length, 1);
+    assert.equal(cache.reuses[0].avoided_usd, stored.cost_usd);
+    assert.equal(fs.readFileSync(cachePath, "utf8").includes(SECRET), false);
+    const fingerprintPosts = helmPosts.filter((post) => post.kind === "fingerprints");
+    assert.ok(fingerprintPosts.length >= 2);
+    assert.equal(JSON.stringify(helmPosts).includes(SECRET), false);
+    assert.equal(JSON.stringify(helmPosts).includes("\"prompt\""), false);
+  } finally {
+    await proxy.close();
+    await provider.close();
+  }
+});
+
+test("miss still forwards when paths differ or payload is missing", async () => {
+  const cachePath = tempWorkCachePath();
+  const providerHits = [];
+  const logs = [];
+  const provider = await listenMock((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      providerHits.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        usage: { input_tokens: 2, output_tokens: 1 },
+        content: [{ type: "text", text: "ok" }],
+      }));
+    });
+  });
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0 },
+    {
+      anthropicUpstream: provider.url,
+      openaiUpstream: provider.url,
+      cwd: PROJECT_CWD,
+      homeDir: HOME_DIR,
+      now: () => NOW,
+      log: (line) => logs.push(line),
+      linked: false,
+      fetchLiveOthers: async () => [],
+      workCachePath: cachePath,
+    },
+  );
+
+  try {
+    const headers = { "content-type": "application/json", "x-api-key": "sk-ant-user" };
+    await fetch(`${proxy.url}/v1/messages`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(toolWorkBody("/Users/team/billing/src/Foo.php")),
+    });
+    await proxy.reported;
+    await fetch(`${proxy.url}/v1/messages`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(toolWorkBody("/Users/team/billing/src/Bar.php")),
+    });
+    await proxy.reported;
+    assert.equal(providerHits.length, 2);
+    assert.ok(logs.includes(HELM_WRAP_LINE));
+    assert.equal(logs.some((line) => line.includes("REUSED PRIOR WORK")), false);
+    assert.equal(readWorkCache(cachePath).reuses.length, 0);
+  } finally {
+    await proxy.close();
+    await provider.close();
+  }
+});
+
+test("parseWorkCache ignores prompt-shaped fields", () => {
+  const parsed = parseWorkCache({
+    kind: WORK_CACHE_KIND,
+    records: [{
+      project_hint: "billing",
+      path_hints: ["src/Foo.php"],
+      tool_names: ["Read"],
+      session_key: "abc",
+      cost_usd: 1,
+      input_tokens: 1,
+      output_tokens: 1,
+      occurred_at: NOW.toISOString(),
+      prompt: SECRET,
+      payload: { kind: "tool_results", results: [{ tool_name: "Read", path_hint: "src/Foo.php", content: TOOL_RESULT }] },
+    }],
+  });
+  assert.equal(JSON.stringify(parsed).includes(SECRET), false);
+  assert.equal(Object.hasOwn(parsed.records[0], "prompt"), false);
 });
