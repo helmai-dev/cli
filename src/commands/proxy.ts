@@ -135,13 +135,23 @@ export async function startProxyDaemon(options: {
 export async function ensureRunningProxy(options: {
   host?: string;
   port?: number;
-} = {}): Promise<{ host: string; port: number; url: string }> {
+} = {}): Promise<{ host: string; port: number; url: string; wrapToken: string | null }> {
   const existing = readProxyState();
   if (existing && (await isProxyHealthy(proxyUrl(existing)))) {
-    return { host: existing.host, port: existing.port, url: proxyUrl(existing) };
+    return {
+      host: existing.host,
+      port: existing.port,
+      url: proxyUrl(existing),
+      wrapToken: existing.wrap_token,
+    };
   }
   const started = await startProxyDaemon(options);
-  return { host: started.host, port: started.port, url: proxyUrl(started) };
+  return {
+    host: started.host,
+    port: started.port,
+    url: proxyUrl(started),
+    wrapToken: started.wrap_token,
+  };
 }
 
 export async function proxyCommand(options: {
@@ -179,6 +189,7 @@ export async function proxyCommand(options: {
         host: info.host,
         port: info.port,
         started_at: new Date().toISOString(),
+        wrap_token: info.wrapToken,
       });
       console.log(chalk.green(`\n  ✓ Helm proxy listening on ${info.url}`));
       console.log(chalk.gray("    Pass-through to Anthropic Messages and OpenAI-compatible chat/completions."));
@@ -224,6 +235,7 @@ export async function runProxyChildFromEnv(): Promise<void> {
         host: info.host,
         port: info.port,
         started_at: new Date().toISOString(),
+        wrap_token: info.wrapToken,
       });
     },
   });

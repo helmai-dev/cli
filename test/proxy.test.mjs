@@ -16,6 +16,7 @@ import {
 } from "../dist/lib/api-web.js";
 import {
   appendInterceptNote,
+  applyWrapBind,
   buildLiveUsageRecord,
   extractJsonModel,
   formatTeammateNote,
@@ -23,12 +24,16 @@ import {
   helmReuseLine,
   isLoopbackBind,
   liveUsageToUpload,
+  mintWrapToken,
   pathFactsFromRequestBody,
+  requestWrapBound,
   routeProxiedProvider,
+  stripWrapBindPath,
   toolResultsFromRequestBody,
   usageFromProviderPayload,
   usageFromSseStream,
   usageProviderFor,
+  WRAP_BIND_HEADER,
 } from "../dist/lib/proxy-inspect.js";
 import { listenProxy } from "../dist/lib/proxy-server.js";
 import { reportProxiedRequest } from "../dist/lib/proxy-report.js";
@@ -776,6 +781,33 @@ test("tool results come from tool_result blocks, never user prompt text", () => 
   assert.equal(results[0].content.includes(SECRET), false);
 });
 
+test("wrap bind is a proxy token in the URL wrap already writes", () => {
+  const token = "0123456789abcdef0123456789abcdef";
+  assert.equal(mintWrapToken().length, 32);
+  assert.equal(applyWrapBind("http://127.0.0.1:8787", token), `http://127.0.0.1:8787/wrap/${token}`);
+  assert.equal(applyWrapBind("http://127.0.0.1:8787/v1", token), `http://127.0.0.1:8787/wrap/${token}/v1`);
+  assert.deepEqual(stripWrapBindPath(`/wrap/${token}/v1/messages`), {
+    token,
+    pathname: "/v1/messages",
+  });
+  assert.deepEqual(stripWrapBindPath("/v1/messages"), { token: null, pathname: "/v1/messages" });
+  assert.equal(
+    requestWrapBound({ expected: token, pathname: `/wrap/${token}/v1/messages` }),
+    true,
+  );
+  assert.equal(
+    requestWrapBound({ expected: token, pathname: "/v1/messages", headerToken: token }),
+    true,
+  );
+  assert.equal(requestWrapBound({ expected: token, pathname: "/v1/messages" }), false);
+  assert.equal(
+    requestWrapBound({ expected: token, pathname: "/v1/messages", headerToken: "ff".repeat(16) }),
+    false,
+  );
+  assert.equal(requestWrapBound({ expected: null, pathname: `/wrap/${token}/v1/messages` }), false);
+  assert.equal(WRAP_BIND_HEADER, "x-helm-wrap-token");
+});
+
 test("lookup requires same project, overlapping paths, same tool, and a payload", () => {
   const record = {
     project_hint: "billing",
@@ -916,7 +948,10 @@ test("second matching request reuses stored tool work and does not call the prov
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
     req.on("end", () => {
-      providerHits.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      providerHits.push({
+        url: req.url,
+        body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+      });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({
         id: "msg_reuse",
@@ -955,7 +990,8 @@ test("second matching request reuses stored tool work and does not call the prov
       "x-api-key": "sk-ant-user-token",
       "anthropic-version": "2023-06-01",
     };
-    const first = await fetch(`${proxy.url}/v1/messages`, {
+    const wrapUrl = `${proxy.url}/wrap/${proxy.wrapToken}/v1/messages`;
+    const first = await fetch(wrapUrl, {
       method: "POST",
       headers,
       body: JSON.stringify(toolWorkBody()),
@@ -966,7 +1002,7 @@ test("second matching request reuses stored tool work and does not call the prov
     assert.ok(stored);
     const louder = helmReuseLine(stored.cost_usd);
 
-    const second = await fetch(`${proxy.url}/v1/messages`, {
+    const second = await fetch(wrapUrl, {
       method: "POST",
       headers,
       body: JSON.stringify(toolWorkBody()),
@@ -976,6 +1012,8 @@ test("second matching request reuses stored tool work and does not call the prov
     await proxy.reported;
 
     assert.equal(providerHits.length, 1);
+    assert.equal(providerHits[0].url, "/v1/messages");
+    assert.equal(JSON.stringify(providerHits[0].body).includes(proxy.wrapToken), false);
     assert.equal(reused.id, "helm_reuse");
     assert.equal(reused.usage.input_tokens, 0);
     assert.ok(reused.content[0].text.includes(TOOL_RESULT));
@@ -994,6 +1032,76 @@ test("second matching request reuses stored tool work and does not call the prov
     assert.ok(fingerprintPosts.length >= 2);
     assert.equal(JSON.stringify(helmPosts).includes(SECRET), false);
     assert.equal(JSON.stringify(helmPosts).includes("\"prompt\""), false);
+  } finally {
+    await proxy.close();
+    await provider.close();
+  }
+});
+
+test("matching project/path/tool without the wrap bind forwards and does not return cached tool bytes", async () => {
+  const cachePath = tempWorkCachePath();
+  const logs = [];
+  const providerHits = [];
+  const provider = await listenMock((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      providerHits.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "msg_forward",
+        model: "claude-sonnet-4-20250514",
+        usage: { input_tokens: 11, output_tokens: 7, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        content: [{ type: "text", text: "ok" }],
+      }));
+    });
+  });
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0 },
+    {
+      anthropicUpstream: provider.url,
+      openaiUpstream: provider.url,
+      cwd: PROJECT_CWD,
+      homeDir: HOME_DIR,
+      now: () => NOW,
+      log: (line) => logs.push(line),
+      linked: false,
+      fetchLiveOthers: async () => [],
+      workCachePath: cachePath,
+    },
+  );
+
+  try {
+    const headers = {
+      "content-type": "application/json",
+      "x-api-key": "sk-ant-user-token",
+      "anthropic-version": "2023-06-01",
+    };
+    const first = await fetch(`${proxy.url}/wrap/${proxy.wrapToken}/v1/messages`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(toolWorkBody()),
+    });
+    assert.equal(first.status, 200);
+    await proxy.reported;
+    assert.equal(readWorkCache(cachePath).records.length, 1);
+
+    const second = await fetch(`${proxy.url}/v1/messages`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(toolWorkBody()),
+    });
+    assert.equal(second.status, 200);
+    const forwarded = await second.json();
+    await proxy.reported;
+
+    assert.equal(providerHits.length, 2);
+    assert.equal(forwarded.id, "msg_forward");
+    assert.equal(JSON.stringify(forwarded).includes(TOOL_RESULT), false);
+    assert.ok(logs.includes(HELM_WRAP_LINE));
+    assert.equal(logs.some((line) => line.includes("REUSED PRIOR WORK")), false);
+    assert.equal(readWorkCache(cachePath).reuses.length, 0);
+    assert.equal(fs.readFileSync(cachePath, "utf8").includes(SECRET), false);
   } finally {
     await proxy.close();
     await provider.close();
