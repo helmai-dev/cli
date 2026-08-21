@@ -13,6 +13,7 @@ import {
   parseCount,
   shouldUploadAudit,
 } from "../dist/commands/audit.js";
+import { summarizeWorkReuses, WORK_CACHE_KIND } from "../dist/lib/proxy-work-cache.js";
 
 function stripAnsi(text) {
   return text.replace(/\x1B\[[0-9;]*m/g, "");
@@ -580,6 +581,44 @@ test("audit --help names diagnose keys as observed Diagnose", () => {
   assert.doesNotMatch(help, /14%/);
   assert.doesNotMatch(help, /saved tokens/i);
   assert.doesNotMatch(help, /we saved/i);
+});
+
+test("summarizeWorkReuses uses stored dollars, counts null cost, and stays quiet on empty", () => {
+  assert.equal(summarizeWorkReuses({ kind: WORK_CACHE_KIND, records: [], reuses: [] }), null);
+  assert.deepEqual(
+    summarizeWorkReuses({
+      kind: WORK_CACHE_KIND,
+      records: [],
+      reuses: [
+        {
+          reused_at: "2026-08-21T05:00:00.000Z",
+          project_hint: "billing",
+          path_hints: ["src/Foo.php"],
+          tool_names: ["Read"],
+          avoided_usd: 0.0123,
+          original_occurred_at: "2026-08-21T04:00:00.000Z",
+        },
+      ],
+    }),
+    { count: 1, avoided_usd: 0.0123 },
+  );
+  assert.deepEqual(
+    summarizeWorkReuses({
+      kind: WORK_CACHE_KIND,
+      records: [],
+      reuses: [
+        {
+          reused_at: "2026-08-21T05:00:00.000Z",
+          project_hint: "billing",
+          path_hints: ["src/Foo.php"],
+          tool_names: ["Read"],
+          avoided_usd: null,
+          original_occurred_at: "2026-08-21T04:00:00.000Z",
+        },
+      ],
+    }),
+    { count: 1, avoided_usd: null },
+  );
 });
 
 const ABSENT_INPUTS = { source: "absent", team_count: null, team_users: null };
