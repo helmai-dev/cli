@@ -2,12 +2,14 @@
  * Honest spend-audit document. Local path wraps ScanSummary. Team path
  * wraps the Helm Web TeamUsageRollup. Derived cache-read share is
  * observed. Realized provider-cache dollars are priced only from local
- * events. Optional self-reported team size becomes an unshared-replay
+ * events. Local wrap reuse is the stored WorkReuse summary from this
+ * machine. Optional self-reported team size becomes an unshared-replay
  * scenario on the local path, not identified savings. Landing-page
  * savings fields stay null.
  */
 
 import { providerCacheSavingsUsd, type ScanSummary } from "./claude-scan.js";
+import type { WorkReuseSummary } from "./proxy-work-cache.js";
 
 export interface AuditSnapshotDerived {
   cache_read_share: number;
@@ -147,6 +149,7 @@ interface AuditSnapshotBase {
 export interface LocalAuditSnapshot extends AuditSnapshotBase {
   source: "local_transcripts";
   observed: ScanSummary;
+  local_reuse?: WorkReuseSummary;
 }
 
 export interface TeamAuditSnapshot extends AuditSnapshotBase {
@@ -187,6 +190,7 @@ export function auditSnapshotFromScan(
   summary: ScanSummary,
   windowDays: number,
   inputs: AuditTeamInputs = ABSENT_INPUTS,
+  localReuse: WorkReuseSummary | null = null,
 ): LocalAuditSnapshot {
   const promptTokens =
     summary.totals.input + summary.totals.cacheWrite + summary.totals.cacheRead;
@@ -220,6 +224,7 @@ export function auditSnapshotFromScan(
     inputs,
     scenario,
     not_computed: { ...NOT_COMPUTED },
+    ...(localReuse != null && localReuse.count > 0 ? { local_reuse: localReuse } : {}),
   };
 }
 
