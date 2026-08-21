@@ -4,11 +4,13 @@ import { hasLinkedAccount } from "./account-link.js";
 import {
   fetchLiveFingerprintOthers,
   sendUsageEvents,
+  sendUsageReuses,
   sendWorkFingerprints,
   type LiveOverlapPerson,
+  type UsageReuseUpload,
 } from "./api-web.js";
 import { usageCostUsd } from "./claude-scan.js";
-import { loadCredentials, loadMachineIdentity } from "./config.js";
+import { getActiveEnvironment, loadCredentials, loadMachineIdentity } from "./config.js";
 import {
   buildWorkFingerprint,
   mintProxySessionKey,
@@ -39,7 +41,7 @@ import {
   type LiveUsageRecord,
   type ProxiedProvider,
 } from "./proxy-inspect.js";
-import { reportProxiedRequest } from "./proxy-report.js";
+import { reportProxiedRequest, usageReuseFromStored } from "./proxy-report.js";
 import {
   defaultWorkCachePath,
   lookupWork,
@@ -88,6 +90,8 @@ export interface ProxyHooks {
   }) => Promise<LiveOverlapPerson[]>;
   sendUsage?: typeof sendUsageEvents;
   sendFingerprints?: typeof sendWorkFingerprints;
+  sendReuses?: typeof sendUsageReuses;
+  environment?: string;
   log?: (line: string) => void;
   workCachePath?: string;
   wrapToken?: string | null;
@@ -312,11 +316,20 @@ async function handleProxyRequest(
       notice: `${HELM_WRAP_LINE}\n${louder}`,
     });
     writeJson(res, 200, body);
+    let reuses: readonly UsageReuseUpload[] | undefined;
     try {
-      writeWorkCache(
-        cachePath,
-        recordReuse({ cache: readWorkCache(cachePath), record: lookup.record, now }),
-      );
+      const next = recordReuse({ cache: readWorkCache(cachePath), record: lookup.record, now });
+      writeWorkCache(cachePath, next);
+      const storedReuse = next.reuses[0];
+      if (storedReuse) {
+        reuses = [
+          usageReuseFromStored({
+            reuse: storedReuse,
+            sessionKey: lookup.record.session_key,
+            environment: hooks.environment ?? getActiveEnvironment(),
+          }),
+        ];
+      }
     } catch {
     }
     track.report = reportAfterResponse({
@@ -333,6 +346,7 @@ async function handleProxyRequest(
       upstreamStatus: 200,
       storeCache: false,
       workKey,
+      reuses,
     });
     return;
   }
@@ -466,6 +480,7 @@ async function reportAfterResponse(input: {
   workKey: WorkKey | null;
   parsed?: unknown;
   cachePath?: string;
+  reuses?: readonly UsageReuseUpload[];
 }): Promise<void> {
   if (input.upstreamStatus < 200 || input.upstreamStatus >= 300) {
     return;
@@ -547,8 +562,10 @@ async function reportAfterResponse(input: {
     deviceUlid: input.hooks.deviceUlid ?? loadMachineIdentity()?.ulid ?? null,
     usage: usageRecord,
     fingerprints,
+    reuses: input.reuses,
     sendUsage: input.hooks.sendUsage ?? sendUsageEvents,
     sendFingerprints: input.hooks.sendFingerprints ?? sendWorkFingerprints,
+    sendReuses: input.hooks.sendReuses ?? sendUsageReuses,
   });
 }
 

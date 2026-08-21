@@ -10,8 +10,10 @@ import { fileURLToPath } from "node:url";
 import { pathCandidateFromToolInput } from "../dist/lib/fingerprints.js";
 import {
   LIVE_FINGERPRINTS_ENDPOINT,
+  USAGE_REUSES_ENDPOINT,
   fetchLiveFingerprintOthers,
   liveOverlapFromEnvelope,
+  sendUsageReuses,
   sendWorkFingerprints,
 } from "../dist/lib/api-web.js";
 import {
@@ -36,7 +38,7 @@ import {
   WRAP_BIND_HEADER,
 } from "../dist/lib/proxy-inspect.js";
 import { listenProxy } from "../dist/lib/proxy-server.js";
-import { reportProxiedRequest } from "../dist/lib/proxy-report.js";
+import { reportProxiedRequest, usageReuseFromStored } from "../dist/lib/proxy-report.js";
 import {
   lookupWork,
   parseWorkCache,
@@ -296,6 +298,110 @@ test("fetchLiveFingerprintOthers GETs /usage/fingerprints/live", async () => {
   assert.match(String(calls[0].endpoint), /project_hint=billing/);
 });
 
+const STORED_REUSE = {
+  reused_at: "2026-08-21T05:10:00.123Z",
+  project_hint: "Helm Web",
+  path_hints: ["app/Support/TeamUsageRollup.php"],
+  tool_names: ["Read"],
+  avoided_usd: 1.25,
+  original_occurred_at: "2026-08-21T04:05:00+00:00",
+};
+
+const REUSE_SESSION_KEY = "ses_01K3ZB4YJQWERTYUIOPASDFGHJ";
+
+function assertReuseUploadHasNoSecrets(value) {
+  const serialized = JSON.stringify(value);
+  assert.equal(serialized.includes(SECRET), false);
+  assert.equal(serialized.includes("\"payload\""), false);
+  assert.equal(serialized.includes("\"content\""), false);
+  assert.equal(serialized.includes("\"prompt\""), false);
+  assert.equal(serialized.includes("wrap_token"), false);
+  assert.equal(serialized.includes("x-helm-wrap-token"), false);
+}
+
+test("usageReuseFromStored maps WorkReuse to the web#33 body", () => {
+  const upload = usageReuseFromStored({
+    reuse: STORED_REUSE,
+    sessionKey: REUSE_SESSION_KEY,
+    environment: "default",
+  });
+  assert.deepEqual(upload, {
+    project_hint: "Helm Web",
+    path_hints: ["app/Support/TeamUsageRollup.php"],
+    tool_names: ["Read"],
+    session_key: REUSE_SESSION_KEY,
+    avoided_usd: 1.25,
+    occurred_at: "2026-08-21T05:10:00.123Z",
+    original_occurred_at: "2026-08-21T04:05:00+00:00",
+    environment: "default",
+  });
+  assert.deepEqual(Object.keys(upload).sort(), [
+    "avoided_usd",
+    "environment",
+    "occurred_at",
+    "original_occurred_at",
+    "path_hints",
+    "project_hint",
+    "session_key",
+    "tool_names",
+  ]);
+  assertReuseUploadHasNoSecrets(upload);
+});
+
+test("usageReuseFromStored never copies payload, content, or prompt", () => {
+  const upload = usageReuseFromStored({
+    reuse: {
+      ...STORED_REUSE,
+      payload: { kind: "tool_results", results: [{ content: SECRET }] },
+      content: SECRET,
+      prompt: SECRET,
+    },
+    sessionKey: REUSE_SESSION_KEY,
+    environment: "default",
+  });
+  assert.equal(Object.hasOwn(upload, "payload"), false);
+  assert.equal(Object.hasOwn(upload, "content"), false);
+  assert.equal(Object.hasOwn(upload, "prompt"), false);
+  assertReuseUploadHasNoSecrets(upload);
+});
+
+test("null avoided_usd is sent as null and is not invented", () => {
+  const upload = usageReuseFromStored({
+    reuse: { ...STORED_REUSE, avoided_usd: null },
+    sessionKey: REUSE_SESSION_KEY,
+    environment: "default",
+  });
+  assert.equal(upload.avoided_usd, null);
+  assert.match(JSON.stringify(upload), /"avoided_usd":null/);
+  assert.equal(JSON.stringify(upload).includes("$"), false);
+  assert.equal(JSON.stringify(upload).includes("1.25"), false);
+});
+
+test("sendUsageReuses POSTs /usage/reuses and nothing else", async () => {
+  const body = {
+    device_ulid: "01J3ZB4YJQWERTYUIOPASDFGHJ",
+    reuses: [
+      usageReuseFromStored({
+        reuse: STORED_REUSE,
+        sessionKey: REUSE_SESSION_KEY,
+        environment: "default",
+      }),
+    ],
+  };
+  const calls = [];
+  const response = await sendUsageReuses(body, async (endpoint, options) => {
+    calls.push({ endpoint, options });
+    return { accepted: 1 };
+  });
+  assert.equal(response.accepted, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].endpoint, USAGE_REUSES_ENDPOINT);
+  assert.equal(calls[0].options?.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].options?.body), body);
+  assert.equal(calls[0].options?.signal instanceof AbortSignal, true);
+  assertReuseUploadHasNoSecrets(JSON.parse(calls[0].options?.body));
+});
+
 test("unlinked or failed Helm Web posts fail open", async () => {
   const usage = buildLiveUsageRecord({
     provider: "claude",
@@ -305,16 +411,27 @@ test("unlinked or failed Helm Web posts fail open", async () => {
     day: "2026-08-18",
     costUsd: 0,
   });
+  const reuses = [
+    usageReuseFromStored({
+      reuse: STORED_REUSE,
+      sessionKey: REUSE_SESSION_KEY,
+      environment: "default",
+    }),
+  ];
 
   await reportProxiedRequest({
     linked: false,
     deviceUlid: null,
     usage,
     fingerprints: null,
+    reuses,
     sendUsage: async () => {
       throw new Error("should not send while unlinked");
     },
     sendFingerprints: async () => {
+      throw new Error("should not send while unlinked");
+    },
+    sendReuses: async () => {
       throw new Error("should not send while unlinked");
     },
   });
@@ -324,10 +441,14 @@ test("unlinked or failed Helm Web posts fail open", async () => {
     deviceUlid: "01TEST",
     usage,
     fingerprints: null,
+    reuses,
     sendUsage: async () => {
       throw new Error("web down");
     },
     sendFingerprints: async () => {
+      throw new Error("web down");
+    },
+    sendReuses: async () => {
       throw new Error("web down");
     },
   });
@@ -377,6 +498,10 @@ test("pass-through happy path forwards auth and body, records usage, never uploa
       sendFingerprints: async (body) => {
         helmPosts.push({ kind: "fingerprints", body });
       },
+      sendReuses: async (body) => {
+        helmPosts.push({ kind: "reuses", body });
+        return { accepted: 1 };
+      },
     },
   );
 
@@ -413,6 +538,7 @@ test("pass-through happy path forwards auth and body, records usage, never uploa
 
     await proxy.reported;
     assert.ok(helmPosts.some((post) => post.kind === "usage"));
+    assert.equal(helmPosts.some((post) => post.kind === "reuses"), false);
     const serialized = JSON.stringify(helmPosts);
     assert.equal(serialized.includes(SECRET), false);
     assert.equal(serialized.includes("sk-ant-user-token"), false);
@@ -895,6 +1021,11 @@ test("first proxied request stores a work record and injects the wrap line", asy
       sendFingerprints: async (body) => {
         helmPosts.push({ kind: "fingerprints", body });
       },
+      sendReuses: async (body) => {
+        helmPosts.push({ kind: "reuses", body });
+        return { accepted: 1 };
+      },
+      environment: "default",
     },
   );
 
@@ -933,6 +1064,7 @@ test("first proxied request stores a work record and injects the wrap line", asy
     assert.equal(cacheText.includes(SECRET), false);
     assert.equal(cacheText.includes("\"prompt\""), false);
     assert.equal(JSON.stringify(helmPosts).includes(SECRET), false);
+    assert.equal(helmPosts.some((post) => post.kind === "reuses"), false);
   } finally {
     await proxy.close();
     await provider.close();
@@ -981,6 +1113,11 @@ test("second matching request reuses stored tool work and does not call the prov
       sendFingerprints: async (body) => {
         helmPosts.push({ kind: "fingerprints", body });
       },
+      sendReuses: async (body) => {
+        helmPosts.push({ kind: "reuses", body });
+        return { accepted: 1 };
+      },
+      environment: "default",
     },
   );
 
@@ -1030,8 +1167,98 @@ test("second matching request reuses stored tool work and does not call the prov
     assert.equal(fs.readFileSync(cachePath, "utf8").includes(SECRET), false);
     const fingerprintPosts = helmPosts.filter((post) => post.kind === "fingerprints");
     assert.ok(fingerprintPosts.length >= 2);
+    const reusePosts = helmPosts.filter((post) => post.kind === "reuses");
+    assert.equal(reusePosts.length, 1);
+    assert.equal(reusePosts[0].body.device_ulid, "01DEVICE");
+    assert.equal(reusePosts[0].body.reuses.length, 1);
+    assert.deepEqual(reusePosts[0].body.reuses[0], {
+      project_hint: stored.project_hint,
+      path_hints: stored.path_hints,
+      tool_names: stored.tool_names,
+      session_key: stored.session_key,
+      avoided_usd: stored.cost_usd,
+      occurred_at: cache.reuses[0].reused_at,
+      original_occurred_at: stored.occurred_at,
+      environment: "default",
+    });
     assert.equal(JSON.stringify(helmPosts).includes(SECRET), false);
     assert.equal(JSON.stringify(helmPosts).includes("\"prompt\""), false);
+    assertReuseUploadHasNoSecrets(reusePosts[0].body);
+    assert.equal(JSON.stringify(reusePosts[0].body).includes(TOOL_RESULT), false);
+    assert.equal(JSON.stringify(reusePosts[0].body).includes(proxy.wrapToken), false);
+  } finally {
+    await proxy.close();
+    await provider.close();
+  }
+});
+
+test("reuse POST fails open and still writes the local cache", async () => {
+  const cachePath = tempWorkCachePath();
+  const providerHits = [];
+  const provider = await listenMock((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      providerHits.push(req.url);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "msg_fail_open",
+        model: "claude-sonnet-4-20250514",
+        usage: { input_tokens: 11, output_tokens: 7, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        content: [{ type: "text", text: "ok" }],
+      }));
+    });
+  });
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0 },
+    {
+      anthropicUpstream: provider.url,
+      openaiUpstream: provider.url,
+      cwd: PROJECT_CWD,
+      homeDir: HOME_DIR,
+      now: () => NOW,
+      log: () => {},
+      linked: true,
+      deviceUlid: "01DEVICE",
+      fetchLiveOthers: async () => [],
+      workCachePath: cachePath,
+      sendUsage: async () => ({ accepted: 1 }),
+      sendFingerprints: async () => {},
+      sendReuses: async () => {
+        throw new Error("web down");
+      },
+      environment: "default",
+    },
+  );
+
+  try {
+    const headers = {
+      "content-type": "application/json",
+      "x-api-key": "sk-ant-user-token",
+      "anthropic-version": "2023-06-01",
+    };
+    const wrapUrl = `${proxy.url}/wrap/${proxy.wrapToken}/v1/messages`;
+    const first = await fetch(wrapUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(toolWorkBody()),
+    });
+    assert.equal(first.status, 200);
+    await proxy.reported;
+
+    const second = await fetch(wrapUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(toolWorkBody()),
+    });
+    assert.equal(second.status, 200);
+    const reused = await second.json();
+    await proxy.reported;
+
+    assert.equal(providerHits.length, 1);
+    assert.equal(reused.id, "helm_reuse");
+    assert.equal(readWorkCache(cachePath).reuses.length, 1);
+    assert.equal(fs.readFileSync(cachePath, "utf8").includes(SECRET), false);
   } finally {
     await proxy.close();
     await provider.close();
