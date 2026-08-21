@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as path from "node:path";
 import {
   MAX_OTHER_NAME_CHARS,
@@ -40,6 +41,12 @@ export interface LiveUsageRecord {
 export interface InspectedToolUse {
   toolName: string;
   pathCandidate: WorkPathCandidate | null;
+}
+
+export interface InspectedToolResult {
+  toolName: string;
+  pathCandidate: WorkPathCandidate | null;
+  content: string;
 }
 
 export function usageProviderFor(provider: ProxiedProvider): UsageProvider {
@@ -159,6 +166,122 @@ export function pathFactsFromRequestBody(body: unknown): InspectedToolUse[] {
   return out;
 }
 
+function textFromToolResultContent(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed === "" ? null : trimmed;
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const parts: string[] = [];
+  for (const part of value) {
+    if (!isPlainRecord(part)) {
+      continue;
+    }
+    if (part.type === "text" && typeof part.text === "string" && part.text.trim() !== "") {
+      parts.push(part.text);
+    }
+  }
+  return parts.length === 0 ? null : parts.join("\n");
+}
+
+function collectToolUseRefs(body: unknown): Map<string, InspectedToolUse> {
+  const refs = new Map<string, InspectedToolUse>();
+  if (!isPlainRecord(body)) {
+    return refs;
+  }
+  const visit = (content: unknown): void => {
+    if (!Array.isArray(content)) {
+      return;
+    }
+    for (const part of content) {
+      if (!isPlainRecord(part)) {
+        continue;
+      }
+      if (part.type !== "tool_use" && part.type !== "function_call") {
+        continue;
+      }
+      if (typeof part.id !== "string" || part.id === "") {
+        continue;
+      }
+      refs.set(part.id, factsFromToolInput(part.name, part.input ?? parseArgumentsObject(part.arguments)));
+    }
+  };
+  if (Array.isArray(body.messages)) {
+    for (const message of body.messages) {
+      if (!isPlainRecord(message)) {
+        continue;
+      }
+      visit(message.content);
+      if (!Array.isArray(message.tool_calls)) {
+        continue;
+      }
+      for (const call of message.tool_calls) {
+        if (!isPlainRecord(call) || typeof call.id !== "string" || call.id === "") {
+          continue;
+        }
+        const fn = isPlainRecord(call.function) ? call.function : call;
+        refs.set(call.id, factsFromToolInput(fn.name ?? call.name, parseArgumentsObject(fn.arguments)));
+      }
+    }
+  }
+  visit(body.input);
+  return refs;
+}
+
+export function toolResultsFromRequestBody(body: unknown): InspectedToolResult[] {
+  if (!isPlainRecord(body)) {
+    return [];
+  }
+  const refs = collectToolUseRefs(body);
+  const out: InspectedToolResult[] = [];
+  const push = (toolName: string, pathCandidate: WorkPathCandidate | null, content: string): void => {
+    out.push({ toolName, pathCandidate, content });
+  };
+  const visit = (content: unknown): void => {
+    if (!Array.isArray(content)) {
+      return;
+    }
+    for (const part of content) {
+      if (!isPlainRecord(part) || part.type !== "tool_result") {
+        continue;
+      }
+      const text = textFromToolResultContent(part.content);
+      if (text === null) {
+        continue;
+      }
+      const id = typeof part.tool_use_id === "string" ? part.tool_use_id : "";
+      const ref = id !== "" ? refs.get(id) : undefined;
+      push(
+        ref?.toolName ?? toolNameFrom(part.name),
+        ref?.pathCandidate ?? pathCandidateFromToolInput(part),
+        text,
+      );
+    }
+  };
+  if (Array.isArray(body.messages)) {
+    for (const message of body.messages) {
+      if (!isPlainRecord(message)) {
+        continue;
+      }
+      visit(message.content);
+      if (message.role !== "tool") {
+        continue;
+      }
+      const text = textFromToolResultContent(message.content);
+      if (text === null) {
+        continue;
+      }
+      const id = typeof message.tool_call_id === "string" ? message.tool_call_id : "";
+      const ref = id !== "" ? refs.get(id) : undefined;
+      push(ref?.toolName ?? "unknown", ref?.pathCandidate ?? null, text);
+    }
+  }
+  visit(body.input);
+  return out;
+}
+
 function usageFromUnknown(provider: ProxiedProvider, payload: unknown): ProviderUsage | null {
   if (!isPlainRecord(payload)) {
     return null;
@@ -241,6 +364,16 @@ export function usageFromSseStream(provider: ProxiedProvider, text: string): Pro
     }
   }
   return latest;
+}
+
+export const HELM_WRAP_LINE = "Helm is wrapping this request.";
+
+export function helmReuseLine(costUsd: number | null): string {
+  const head = "HELM REUSED PRIOR WORK. Did not send that tool work to the provider.";
+  if (costUsd === null) {
+    return head;
+  }
+  return `${head} Stored original cost $${costUsd}.`;
 }
 
 export function formatTeammateNote(
@@ -364,4 +497,64 @@ export function claudeProxyUrl(host: string, port: number): string {
 
 export function codexProxyUrl(host: string, port: number): string {
   return `http://${host}:${port}/v1`;
+}
+
+export const WRAP_BIND_HEADER = "x-helm-wrap-token";
+const WRAP_BIND_PATH_PREFIX = "/wrap/";
+
+export function mintWrapToken(): string {
+  return crypto.randomBytes(16).toString("hex");
+}
+
+export function normalizeWrapToken(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return /^[0-9a-f]{32}$/i.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+
+function wrapTokensEqual(left: string, right: string): boolean {
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+export function applyWrapBind(baseUrl: string, token: string): string {
+  const normalized = normalizeWrapToken(token);
+  if (normalized === null) {
+    return baseUrl;
+  }
+  const url = new URL(baseUrl);
+  const rest = url.pathname === "/" ? "" : url.pathname.replace(/\/+$/, "");
+  const host = url.port ? `${url.hostname}:${url.port}` : url.hostname;
+  return `http://${host}${WRAP_BIND_PATH_PREFIX}${normalized}${rest}`;
+}
+
+export function stripWrapBindPath(pathname: string): { token: string | null; pathname: string } {
+  if (!pathname.startsWith(WRAP_BIND_PATH_PREFIX)) {
+    return { token: null, pathname };
+  }
+  const rest = pathname.slice(WRAP_BIND_PATH_PREFIX.length);
+  const slash = rest.indexOf("/");
+  const raw = slash === -1 ? rest : rest.slice(0, slash);
+  const token = normalizeWrapToken(raw);
+  if (token === null) {
+    return { token: null, pathname };
+  }
+  const providerPath = slash === -1 ? "/" : rest.slice(slash);
+  return { token, pathname: providerPath === "" ? "/" : providerPath };
+}
+
+export function requestWrapBound(input: {
+  expected: string | null | undefined;
+  pathname: string;
+  headerToken?: string | null;
+}): boolean {
+  const expected = normalizeWrapToken(input.expected);
+  if (expected === null) {
+    return false;
+  }
+  const presented = [stripWrapBindPath(input.pathname).token, normalizeWrapToken(input.headerToken)];
+  return presented.some((token) => token !== null && wrapTokensEqual(token, expected));
 }

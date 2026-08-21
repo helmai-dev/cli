@@ -198,7 +198,7 @@ program
 const proxy = program
   .command("proxy")
   .description(
-    "Loopback model proxy: pass Anthropic Messages and OpenAI-compatible chat through to the real providers, and record bounded usage on this machine",
+    "Loopback model proxy: pass Anthropic Messages and OpenAI-compatible chat through to the real providers, record bounded usage, and reuse recent local tool work when the same wrap, project, paths, and tool match",
   )
   .option("--host <host>", "loopback bind address", "127.0.0.1")
   .option("--port <n>", "preferred port (uses a free port if this one is taken)", "8787")

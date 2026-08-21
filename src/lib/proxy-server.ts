@@ -22,16 +22,36 @@ import {
   DEFAULT_PROXY_PORT,
   extractJsonModel,
   formatTeammateNote,
+  HELM_WRAP_LINE,
+  helmReuseLine,
   isLoopbackBind,
+  mintWrapToken,
+  normalizeWrapToken,
   pathFactsFromRequestBody,
+  requestWrapBound,
   routeProxiedProvider,
+  stripWrapBindPath,
+  toolResultsFromRequestBody,
   usageFromProviderPayload,
   usageFromSseStream,
   usageProviderFor,
+  WRAP_BIND_HEADER,
   type LiveUsageRecord,
   type ProxiedProvider,
 } from "./proxy-inspect.js";
 import { reportProxiedRequest } from "./proxy-report.js";
+import {
+  defaultWorkCachePath,
+  lookupWork,
+  payloadFromToolResults,
+  readWorkCache,
+  recordReuse,
+  reuseResponseBody,
+  storeWork,
+  workKeyFromFacts,
+  writeWorkCache,
+  type WorkKey,
+} from "./proxy-work-cache.js";
 
 const HOP_BY_HOP = new Set([
   "connection",
@@ -69,6 +89,8 @@ export interface ProxyHooks {
   sendUsage?: typeof sendUsageEvents;
   sendFingerprints?: typeof sendWorkFingerprints;
   log?: (line: string) => void;
+  workCachePath?: string;
+  wrapToken?: string | null;
 }
 
 export interface RunningProxy {
@@ -76,6 +98,7 @@ export interface RunningProxy {
   host: string;
   port: number;
   url: string;
+  wrapToken: string;
   reported: Promise<void>;
   close: () => Promise<void>;
 }
@@ -227,6 +250,12 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
+function headerWrapToken(req: IncomingMessage): string | null {
+  const raw = req.headers[WRAP_BIND_HEADER];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return normalizeWrapToken(value);
+}
+
 async function handleProxyRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -241,8 +270,9 @@ async function handleProxyRequest(
 
   const raw = await readRequestBody(req);
   const parsed = parseJsonBody(raw);
+  const bindPath = stripWrapBindPath(url.pathname);
   const provider = routeProxiedProvider({
-    pathname: url.pathname,
+    pathname: bindPath.pathname,
     headerNames: headerNames(req),
   });
   if (provider === null) {
@@ -256,19 +286,76 @@ async function handleProxyRequest(
   const projectHint = projectHintFromCwd(cwd, homeDir) ?? "";
   const facts = pathFactsFromRequestBody(parsed);
   const pathHint = lastPathHint(facts, cwd, homeDir);
+  const model = extractJsonModel(parsed !== null ? parsed : null);
+  const cachePath = hooks.workCachePath ?? defaultWorkCachePath();
+  const workKey = workKeyFromFacts({
+    facts,
+    cwd,
+    homeDir,
+    occurredAt: now.toISOString(),
+  });
+  const lookup = lookupWork({ cache: readWorkCache(cachePath), key: workKey, now });
+  logHarness(hooks, HELM_WRAP_LINE);
+  const wrapBound = requestWrapBound({
+    expected: hooks.wrapToken,
+    pathname: url.pathname,
+    headerToken: headerWrapToken(req),
+  });
+
+  if (lookup.kind === "reuse" && wrapBound) {
+    const louder = helmReuseLine(lookup.record.cost_usd);
+    logHarness(hooks, louder);
+    const body = reuseResponseBody({
+      provider,
+      model,
+      payload: lookup.record.payload,
+      notice: `${HELM_WRAP_LINE}\n${louder}`,
+    });
+    writeJson(res, 200, body);
+    try {
+      writeWorkCache(
+        cachePath,
+        recordReuse({ cache: readWorkCache(cachePath), record: lookup.record, now }),
+      );
+    } catch {
+    }
+    track.report = reportAfterResponse({
+      hooks,
+      provider,
+      model,
+      projectHint,
+      pathHint,
+      facts,
+      cwd,
+      homeDir,
+      now,
+      usage: null,
+      upstreamStatus: 200,
+      storeCache: false,
+      workKey,
+    });
+    return;
+  }
 
   let outbound: Buffer = raw;
   const others = await resolveOthers(hooks, { project_hint: projectHint, path_hint: pathHint });
   const note = formatTeammateNote(others, now);
-  if (note && parsed !== null) {
-    outbound = Buffer.from(JSON.stringify(appendInterceptNote(provider, parsed, note)), "utf8");
+  if (parsed !== null) {
+    let next = appendInterceptNote(provider, parsed, HELM_WRAP_LINE);
+    if (note) {
+      next = appendInterceptNote(provider, next, note);
+    }
+    outbound = Buffer.from(JSON.stringify(next), "utf8");
   }
 
   const upstreamBase =
     provider === "anthropic"
       ? (hooks.anthropicUpstream ?? "https://api.anthropic.com")
       : (hooks.openaiUpstream ?? "https://api.openai.com");
-  const target = new URL(url.pathname + url.search, upstreamBase.endsWith("/") ? upstreamBase : `${upstreamBase}/`);
+  const target = new URL(
+    bindPath.pathname + url.search,
+    upstreamBase.endsWith("/") ? upstreamBase : `${upstreamBase}/`,
+  );
 
   let upstream: Response;
   try {
@@ -301,12 +388,12 @@ async function handleProxyRequest(
   const usage = isEventStream
     ? usageFromSseStream(provider, responseBytes.toString("utf8"))
     : usageFromProviderPayload(provider, parseJsonBody(responseBytes));
-  const model = extractJsonModel(parsed !== null ? parsed : parseJsonBody(responseBytes));
-  logLine(hooks, provider, model, projectHint, pathHint, usage);
+  const resolvedModel = model !== "unknown" ? model : extractJsonModel(parseJsonBody(responseBytes));
+  logLine(hooks, provider, resolvedModel, projectHint, pathHint, usage);
   track.report = reportAfterResponse({
     hooks,
     provider,
-    model,
+    model: resolvedModel,
     projectHint,
     pathHint,
     facts,
@@ -315,6 +402,10 @@ async function handleProxyRequest(
     now,
     usage,
     upstreamStatus: upstream.status,
+    storeCache: true,
+    workKey,
+    parsed,
+    cachePath,
   });
 }
 
@@ -331,6 +422,10 @@ async function resolveOthers(
   } catch {
     return [];
   }
+}
+
+function logHarness(hooks: ProxyHooks, line: string): void {
+  (hooks.log ?? console.error)(line);
 }
 
 function logLine(
@@ -367,6 +462,10 @@ async function reportAfterResponse(input: {
   now: Date;
   usage: ReturnType<typeof usageFromProviderPayload>;
   upstreamStatus: number;
+  storeCache: boolean;
+  workKey: WorkKey | null;
+  parsed?: unknown;
+  cachePath?: string;
 }): Promise<void> {
   if (input.upstreamStatus < 200 || input.upstreamStatus >= 300) {
     return;
@@ -391,6 +490,34 @@ async function reportAfterResponse(input: {
 
   const fingerprintProvider = usageProviderFor(input.provider) === "claude" ? "claude-compatible" : "codex";
   const sessionKey = mintProxySessionKey();
+  if (input.storeCache && input.workKey && input.cachePath) {
+    try {
+      const payload = payloadFromToolResults({
+        results: toolResultsFromRequestBody(input.parsed),
+        cwd: input.cwd,
+        homeDir: input.homeDir,
+        occurredAt: input.now.toISOString(),
+      });
+      writeWorkCache(
+        input.cachePath,
+        storeWork({
+          cache: readWorkCache(input.cachePath),
+          record: {
+            project_hint: input.workKey.project_hint,
+            path_hints: input.workKey.path_hints,
+            tool_names: input.workKey.tool_names,
+            session_key: sessionKey,
+            cost_usd: usageRecord ? usageRecord.cost_usd : null,
+            input_tokens: input.usage ? input.usage.input_tokens : null,
+            output_tokens: input.usage ? input.usage.output_tokens : null,
+            occurred_at: input.now.toISOString(),
+            payload,
+          },
+        }),
+      );
+    } catch {
+    }
+  }
   const fingerprints: WorkFingerprintsBody | null = (() => {
     const built = [];
     for (const fact of input.facts) {
@@ -471,7 +598,8 @@ export async function listenProxy(
   }
   const preferred = options.port ?? DEFAULT_PROXY_PORT;
   const track = { report: Promise.resolve() };
-  const server = createProxyServer(hooks, track);
+  const wrapToken = normalizeWrapToken(hooks.wrapToken) ?? mintWrapToken();
+  const server = createProxyServer({ ...hooks, wrapToken }, track);
   let port: number;
   try {
     port = await listenOn(server, host, preferred);
@@ -486,6 +614,7 @@ export async function listenProxy(
     host,
     port,
     url: `http://${host}:${port}`,
+    wrapToken,
     get reported() {
       return track.report;
     },
@@ -499,13 +628,18 @@ export async function listenProxy(
 export async function runProxyProcess(options: {
   host?: string;
   port?: number;
-  onListening?: (info: { host: string; port: number; url: string }) => void;
+  onListening?: (info: { host: string; port: number; url: string; wrapToken: string }) => void;
 }): Promise<RunningProxy> {
   const running = await listenProxy({
     host: options.host ?? process.env.HELM_PROXY_HOST ?? DEFAULT_PROXY_HOST,
     port: options.port ?? (process.env.HELM_PROXY_PORT ? Number(process.env.HELM_PROXY_PORT) : DEFAULT_PROXY_PORT),
   });
-  options.onListening?.({ host: running.host, port: running.port, url: running.url });
+  options.onListening?.({
+    host: running.host,
+    port: running.port,
+    url: running.url,
+    wrapToken: running.wrapToken,
+  });
   return running;
 }
 
