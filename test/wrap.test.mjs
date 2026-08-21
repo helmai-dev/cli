@@ -20,6 +20,8 @@ import {
   wrapAgent,
 } from "../dist/commands/wrap.js";
 
+const WRAP_TOKEN = "0123456789abcdef0123456789abcdef";
+
 function memoryRuntime(seed = {}) {
   const state = {
     claude: { ...(seed.claude ?? {}) },
@@ -33,7 +35,12 @@ function memoryRuntime(seed = {}) {
     state,
     runtime: {
       async ensureProxy() {
-        return { host: "127.0.0.1", port: 8787, url: "http://127.0.0.1:8787" };
+        return {
+          host: "127.0.0.1",
+          port: 8787,
+          url: "http://127.0.0.1:8787",
+          wrapToken: WRAP_TOKEN,
+        };
       },
       readClaudeSettings() {
         return structuredClone(state.claude);
@@ -115,8 +122,8 @@ test("wrap then unwrap restores agent settings through the command helpers", asy
   });
 
   const wrapped = await wrapAgent("claude", runtime);
-  assert.equal(wrapped.proxyUrl, "http://127.0.0.1:8787");
-  assert.equal(state.claude.env.ANTHROPIC_BASE_URL, "http://127.0.0.1:8787");
+  assert.equal(wrapped.proxyUrl, `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}`);
+  assert.equal(state.claude.env.ANTHROPIC_BASE_URL, `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}`);
 
   const unwrapped = await unwrapAgent("claude", runtime);
   assert.equal(unwrapped.restored, true);
@@ -124,9 +131,26 @@ test("wrap then unwrap restores agent settings through the command helpers", asy
   assert.equal(state.wraps.claude, undefined);
 
   await wrapAgent("codex", runtime);
-  assert.equal(openaiBaseUrlFromToml(state.codex), "http://127.0.0.1:8787/v1");
+  assert.equal(openaiBaseUrlFromToml(state.codex), `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}/v1`);
   await unwrapAgent("codex", runtime);
   assert.equal(openaiBaseUrlFromToml(state.codex), "https://api.openai.com/v1");
+});
+
+test("wrap twice keeps the same bind URL", async () => {
+  const { runtime } = memoryRuntime();
+  const first = await wrapAgent("claude", runtime);
+  const second = await wrapAgent("claude", runtime);
+  assert.equal(second.alreadyWrapped, true);
+  assert.equal(second.proxyUrl, first.proxyUrl);
+  assert.equal(second.proxyUrl, `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}`);
+});
+
+test("wrap without a proxy token keeps the bare proxy URL", async () => {
+  const { state, runtime } = memoryRuntime();
+  runtime.ensureProxy = async () => ({ host: "127.0.0.1", port: 8787, url: "http://127.0.0.1:8787" });
+  const wrapped = await wrapAgent("claude", runtime);
+  assert.equal(wrapped.proxyUrl, "http://127.0.0.1:8787");
+  assert.equal(state.claude.env.ANTHROPIC_BASE_URL, "http://127.0.0.1:8787");
 });
 
 test("unwrap is a no-op when the agent was never wrapped", async () => {

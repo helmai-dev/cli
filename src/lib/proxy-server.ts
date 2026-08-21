@@ -25,12 +25,17 @@ import {
   HELM_WRAP_LINE,
   helmReuseLine,
   isLoopbackBind,
+  mintWrapToken,
+  normalizeWrapToken,
   pathFactsFromRequestBody,
+  requestWrapBound,
   routeProxiedProvider,
+  stripWrapBindPath,
   toolResultsFromRequestBody,
   usageFromProviderPayload,
   usageFromSseStream,
   usageProviderFor,
+  WRAP_BIND_HEADER,
   type LiveUsageRecord,
   type ProxiedProvider,
 } from "./proxy-inspect.js";
@@ -85,6 +90,7 @@ export interface ProxyHooks {
   sendFingerprints?: typeof sendWorkFingerprints;
   log?: (line: string) => void;
   workCachePath?: string;
+  wrapToken?: string | null;
 }
 
 export interface RunningProxy {
@@ -92,6 +98,7 @@ export interface RunningProxy {
   host: string;
   port: number;
   url: string;
+  wrapToken: string;
   reported: Promise<void>;
   close: () => Promise<void>;
 }
@@ -243,6 +250,12 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
+function headerWrapToken(req: IncomingMessage): string | null {
+  const raw = req.headers[WRAP_BIND_HEADER];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return normalizeWrapToken(value);
+}
+
 async function handleProxyRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -257,8 +270,9 @@ async function handleProxyRequest(
 
   const raw = await readRequestBody(req);
   const parsed = parseJsonBody(raw);
+  const bindPath = stripWrapBindPath(url.pathname);
   const provider = routeProxiedProvider({
-    pathname: url.pathname,
+    pathname: bindPath.pathname,
     headerNames: headerNames(req),
   });
   if (provider === null) {
@@ -282,8 +296,13 @@ async function handleProxyRequest(
   });
   const lookup = lookupWork({ cache: readWorkCache(cachePath), key: workKey, now });
   logHarness(hooks, HELM_WRAP_LINE);
+  const wrapBound = requestWrapBound({
+    expected: hooks.wrapToken,
+    pathname: url.pathname,
+    headerToken: headerWrapToken(req),
+  });
 
-  if (lookup.kind === "reuse") {
+  if (lookup.kind === "reuse" && wrapBound) {
     const louder = helmReuseLine(lookup.record.cost_usd);
     logHarness(hooks, louder);
     const body = reuseResponseBody({
@@ -333,7 +352,10 @@ async function handleProxyRequest(
     provider === "anthropic"
       ? (hooks.anthropicUpstream ?? "https://api.anthropic.com")
       : (hooks.openaiUpstream ?? "https://api.openai.com");
-  const target = new URL(url.pathname + url.search, upstreamBase.endsWith("/") ? upstreamBase : `${upstreamBase}/`);
+  const target = new URL(
+    bindPath.pathname + url.search,
+    upstreamBase.endsWith("/") ? upstreamBase : `${upstreamBase}/`,
+  );
 
   let upstream: Response;
   try {
@@ -576,7 +598,8 @@ export async function listenProxy(
   }
   const preferred = options.port ?? DEFAULT_PROXY_PORT;
   const track = { report: Promise.resolve() };
-  const server = createProxyServer(hooks, track);
+  const wrapToken = normalizeWrapToken(hooks.wrapToken) ?? mintWrapToken();
+  const server = createProxyServer({ ...hooks, wrapToken }, track);
   let port: number;
   try {
     port = await listenOn(server, host, preferred);
@@ -591,6 +614,7 @@ export async function listenProxy(
     host,
     port,
     url: `http://${host}:${port}`,
+    wrapToken,
     get reported() {
       return track.report;
     },
@@ -604,13 +628,18 @@ export async function listenProxy(
 export async function runProxyProcess(options: {
   host?: string;
   port?: number;
-  onListening?: (info: { host: string; port: number; url: string }) => void;
+  onListening?: (info: { host: string; port: number; url: string; wrapToken: string }) => void;
 }): Promise<RunningProxy> {
   const running = await listenProxy({
     host: options.host ?? process.env.HELM_PROXY_HOST ?? DEFAULT_PROXY_HOST,
     port: options.port ?? (process.env.HELM_PROXY_PORT ? Number(process.env.HELM_PROXY_PORT) : DEFAULT_PROXY_PORT),
   });
-  options.onListening?.({ host: running.host, port: running.port, url: running.url });
+  options.onListening?.({
+    host: running.host,
+    port: running.port,
+    url: running.url,
+    wrapToken: running.wrapToken,
+  });
   return running;
 }
 

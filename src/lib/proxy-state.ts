@@ -9,6 +9,7 @@ export interface ProxyListenState {
   host: string;
   port: number;
   started_at: string;
+  wrap_token: string | null;
 }
 
 export interface WrapRecord {
@@ -62,11 +63,16 @@ export function readProxyState(): ProxyListenState | null {
     ) {
       return null;
     }
+    const wrapToken =
+      typeof raw.wrap_token === "string" && /^[0-9a-f]{32}$/i.test(raw.wrap_token)
+        ? raw.wrap_token.toLowerCase()
+        : null;
     return {
       pid: raw.pid,
       host: raw.host,
       port: raw.port,
       started_at: typeof raw.started_at === "string" ? raw.started_at : "",
+      wrap_token: wrapToken,
     };
   } catch {
     return null;

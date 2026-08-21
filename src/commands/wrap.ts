@@ -12,6 +12,7 @@ import {
   restoreClaudeProxyEnv,
 } from "../lib/claude-proxy-env.js";
 import {
+  applyWrapBind,
   claudeProxyUrl,
   codexProxyUrl,
 } from "../lib/proxy-inspect.js";
@@ -30,7 +31,7 @@ import { ensureRunningProxy } from "./proxy.js";
 export type { WrapAgent };
 
 export interface WrapRuntime {
-  ensureProxy: () => Promise<{ host: string; port: number; url: string }>;
+  ensureProxy: () => Promise<{ host: string; port: number; url: string; wrapToken?: string | null }>;
   readClaudeSettings: () => ClaudeSettings;
   writeClaudeSettings: (settings: ClaudeSettings) => void;
   readCodexConfig: () => string | null;
@@ -94,14 +95,15 @@ function liveRuntime(): WrapRuntime {
   };
 }
 
-function proxyUrlFor(agent: WrapAgent, host: string, port: number): string {
-  return agent === "claude" ? claudeProxyUrl(host, port) : codexProxyUrl(host, port);
+function proxyUrlFor(agent: WrapAgent, host: string, port: number, wrapToken?: string | null): string {
+  const base = agent === "claude" ? claudeProxyUrl(host, port) : codexProxyUrl(host, port);
+  return wrapToken ? applyWrapBind(base, wrapToken) : base;
 }
 
 export async function wrapAgent(agent: WrapAgent, runtime: WrapRuntime): Promise<WrapResult> {
   const existing = runtime.readWrap(agent);
   const proxy = await runtime.ensureProxy();
-  const proxyUrl = proxyUrlFor(agent, proxy.host, proxy.port);
+  const proxyUrl = proxyUrlFor(agent, proxy.host, proxy.port, proxy.wrapToken);
   if (existing) {
     return { agent, proxyUrl: existing.proxy_url, alreadyWrapped: true };
   }

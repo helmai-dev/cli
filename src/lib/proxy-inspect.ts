@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as path from "node:path";
 import {
   MAX_OTHER_NAME_CHARS,
@@ -496,4 +497,64 @@ export function claudeProxyUrl(host: string, port: number): string {
 
 export function codexProxyUrl(host: string, port: number): string {
   return `http://${host}:${port}/v1`;
+}
+
+export const WRAP_BIND_HEADER = "x-helm-wrap-token";
+const WRAP_BIND_PATH_PREFIX = "/wrap/";
+
+export function mintWrapToken(): string {
+  return crypto.randomBytes(16).toString("hex");
+}
+
+export function normalizeWrapToken(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return /^[0-9a-f]{32}$/i.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+
+function wrapTokensEqual(left: string, right: string): boolean {
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+export function applyWrapBind(baseUrl: string, token: string): string {
+  const normalized = normalizeWrapToken(token);
+  if (normalized === null) {
+    return baseUrl;
+  }
+  const url = new URL(baseUrl);
+  const rest = url.pathname === "/" ? "" : url.pathname.replace(/\/+$/, "");
+  const host = url.port ? `${url.hostname}:${url.port}` : url.hostname;
+  return `http://${host}${WRAP_BIND_PATH_PREFIX}${normalized}${rest}`;
+}
+
+export function stripWrapBindPath(pathname: string): { token: string | null; pathname: string } {
+  if (!pathname.startsWith(WRAP_BIND_PATH_PREFIX)) {
+    return { token: null, pathname };
+  }
+  const rest = pathname.slice(WRAP_BIND_PATH_PREFIX.length);
+  const slash = rest.indexOf("/");
+  const raw = slash === -1 ? rest : rest.slice(0, slash);
+  const token = normalizeWrapToken(raw);
+  if (token === null) {
+    return { token: null, pathname };
+  }
+  const providerPath = slash === -1 ? "/" : rest.slice(slash);
+  return { token, pathname: providerPath === "" ? "/" : providerPath };
+}
+
+export function requestWrapBound(input: {
+  expected: string | null | undefined;
+  pathname: string;
+  headerToken?: string | null;
+}): boolean {
+  const expected = normalizeWrapToken(input.expected);
+  if (expected === null) {
+    return false;
+  }
+  const presented = [stripWrapBindPath(input.pathname).token, normalizeWrapToken(input.headerToken)];
+  return presented.some((token) => token !== null && wrapTokensEqual(token, expected));
 }
