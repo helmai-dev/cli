@@ -173,8 +173,10 @@ points that agent at it. Claude Code honors `ANTHROPIC_BASE_URL` in
 `~/.claude/settings.json`. Codex honors the OpenAI-compatible `base_url` in
 `~/.codex/config.toml`. `helm unwrap` restores the previous value. The
 proxy forwards the client's own provider tokens; Helm does not need those
-keys. On each request it can see the prompt locally, then POST only the
-existing usage and fingerprint fields. Prompt text never goes to Helm Web.
+keys. On each request it can see the prompt locally, then POST usage events,
+fingerprints, and on a wrap reuse the metadata in `POST /api/usage/reuses`.
+Prompt text and tool-result bytes never go to Helm Web. A 422, 5xx, or
+offline Helm Web must not break wrap or the local cache.
 Identified savings stay null. `helm wrap` only accepts `claude` and `codex`.
 
 This is shared-work reuse, not model routing and not prompt caching. After a

@@ -640,6 +640,43 @@ export async function sendUsageEvents(body: UsageEventsBody): Promise<{ accepted
   });
 }
 
+export interface UsageReuseUpload {
+  readonly project_hint: string;
+  readonly path_hints: readonly string[];
+  readonly tool_names: readonly string[];
+  readonly session_key: string | null;
+  readonly avoided_usd: number | null;
+  readonly occurred_at: string;
+  readonly original_occurred_at: string;
+  readonly environment: string;
+}
+
+export interface UsageReusesBody {
+  readonly device_ulid: string | null;
+  readonly reuses: readonly [UsageReuseUpload, ...UsageReuseUpload[]];
+}
+
+export const USAGE_REUSES_ENDPOINT = "/usage/reuses";
+
+export const USAGE_REUSE_TIMEOUT_MS = 1200;
+
+export async function sendUsageReuses(
+  body: UsageReusesBody,
+  requester: WebRequester = request,
+): Promise<{ accepted: number }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), USAGE_REUSE_TIMEOUT_MS);
+  try {
+    return await requester<{ accepted: number }>(USAGE_REUSES_ENDPOINT, {
+      method: "POST",
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export type WebRequester = <T>(
   endpoint: string,
   options?: RequestInit,
