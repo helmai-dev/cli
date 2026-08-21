@@ -42,6 +42,12 @@ export interface InspectedToolUse {
   pathCandidate: WorkPathCandidate | null;
 }
 
+export interface InspectedToolResult {
+  toolName: string;
+  pathCandidate: WorkPathCandidate | null;
+  content: string;
+}
+
 export function usageProviderFor(provider: ProxiedProvider): UsageProvider {
   return provider === "anthropic" ? "claude" : "codex";
 }
@@ -159,6 +165,122 @@ export function pathFactsFromRequestBody(body: unknown): InspectedToolUse[] {
   return out;
 }
 
+function textFromToolResultContent(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed === "" ? null : trimmed;
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const parts: string[] = [];
+  for (const part of value) {
+    if (!isPlainRecord(part)) {
+      continue;
+    }
+    if (part.type === "text" && typeof part.text === "string" && part.text.trim() !== "") {
+      parts.push(part.text);
+    }
+  }
+  return parts.length === 0 ? null : parts.join("\n");
+}
+
+function collectToolUseRefs(body: unknown): Map<string, InspectedToolUse> {
+  const refs = new Map<string, InspectedToolUse>();
+  if (!isPlainRecord(body)) {
+    return refs;
+  }
+  const visit = (content: unknown): void => {
+    if (!Array.isArray(content)) {
+      return;
+    }
+    for (const part of content) {
+      if (!isPlainRecord(part)) {
+        continue;
+      }
+      if (part.type !== "tool_use" && part.type !== "function_call") {
+        continue;
+      }
+      if (typeof part.id !== "string" || part.id === "") {
+        continue;
+      }
+      refs.set(part.id, factsFromToolInput(part.name, part.input ?? parseArgumentsObject(part.arguments)));
+    }
+  };
+  if (Array.isArray(body.messages)) {
+    for (const message of body.messages) {
+      if (!isPlainRecord(message)) {
+        continue;
+      }
+      visit(message.content);
+      if (!Array.isArray(message.tool_calls)) {
+        continue;
+      }
+      for (const call of message.tool_calls) {
+        if (!isPlainRecord(call) || typeof call.id !== "string" || call.id === "") {
+          continue;
+        }
+        const fn = isPlainRecord(call.function) ? call.function : call;
+        refs.set(call.id, factsFromToolInput(fn.name ?? call.name, parseArgumentsObject(fn.arguments)));
+      }
+    }
+  }
+  visit(body.input);
+  return refs;
+}
+
+export function toolResultsFromRequestBody(body: unknown): InspectedToolResult[] {
+  if (!isPlainRecord(body)) {
+    return [];
+  }
+  const refs = collectToolUseRefs(body);
+  const out: InspectedToolResult[] = [];
+  const push = (toolName: string, pathCandidate: WorkPathCandidate | null, content: string): void => {
+    out.push({ toolName, pathCandidate, content });
+  };
+  const visit = (content: unknown): void => {
+    if (!Array.isArray(content)) {
+      return;
+    }
+    for (const part of content) {
+      if (!isPlainRecord(part) || part.type !== "tool_result") {
+        continue;
+      }
+      const text = textFromToolResultContent(part.content);
+      if (text === null) {
+        continue;
+      }
+      const id = typeof part.tool_use_id === "string" ? part.tool_use_id : "";
+      const ref = id !== "" ? refs.get(id) : undefined;
+      push(
+        ref?.toolName ?? toolNameFrom(part.name),
+        ref?.pathCandidate ?? pathCandidateFromToolInput(part),
+        text,
+      );
+    }
+  };
+  if (Array.isArray(body.messages)) {
+    for (const message of body.messages) {
+      if (!isPlainRecord(message)) {
+        continue;
+      }
+      visit(message.content);
+      if (message.role !== "tool") {
+        continue;
+      }
+      const text = textFromToolResultContent(message.content);
+      if (text === null) {
+        continue;
+      }
+      const id = typeof message.tool_call_id === "string" ? message.tool_call_id : "";
+      const ref = id !== "" ? refs.get(id) : undefined;
+      push(ref?.toolName ?? "unknown", ref?.pathCandidate ?? null, text);
+    }
+  }
+  visit(body.input);
+  return out;
+}
+
 function usageFromUnknown(provider: ProxiedProvider, payload: unknown): ProviderUsage | null {
   if (!isPlainRecord(payload)) {
     return null;
@@ -241,6 +363,16 @@ export function usageFromSseStream(provider: ProxiedProvider, text: string): Pro
     }
   }
   return latest;
+}
+
+export const HELM_WRAP_LINE = "Helm is wrapping this request.";
+
+export function helmReuseLine(costUsd: number | null): string {
+  const head = "HELM REUSED PRIOR WORK. Did not send that tool work to the provider.";
+  if (costUsd === null) {
+    return head;
+  }
+  return `${head} Stored original cost $${costUsd}.`;
 }
 
 export function formatTeammateNote(
