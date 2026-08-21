@@ -63,7 +63,7 @@ program
 program
   .command("audit")
   .description(
-    "Print observed AI spend from local transcripts, or from a Helm Web team rollup with --team. Local path does not require an account. Does not compute identified savings.",
+    "Print observed AI spend from local transcripts, or from a Helm Web team rollup with --team. Local path does not require an account. Stored wrap reuse from this machine's proxy-work.json prints when reuses exist. Dollars print only when avoided_usd was stored. Does not compute identified savings.",
   )
   .option("--days <n>", "How many days back to scan or roll up (default 30)")
   .option("--no-upload", "Skip syncing even if this CLI is already linked. No-op with --team")

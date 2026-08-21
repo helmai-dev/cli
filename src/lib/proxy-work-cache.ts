@@ -305,6 +305,29 @@ export function storeWork(input: {
   };
 }
 
+export interface WorkReuseSummary {
+  readonly count: number;
+  readonly avoided_usd: number | null;
+}
+
+/** Count stored reuses. Dollars are the sum of avoided_usd that already exist.
+ * Null when no reuse stored a cost. Does not invent a rate. */
+export function summarizeWorkReuses(cache: WorkCacheFile): WorkReuseSummary | null {
+  if (cache.reuses.length === 0) {
+    return null;
+  }
+  let avoided: number | null = null;
+  for (const reuse of cache.reuses) {
+    if (reuse.avoided_usd != null) {
+      avoided = (avoided ?? 0) + reuse.avoided_usd;
+    }
+  }
+  if (avoided != null) {
+    avoided = Math.round(avoided * 10000) / 10000;
+  }
+  return { count: cache.reuses.length, avoided_usd: avoided };
+}
+
 export function recordReuse(input: {
   cache: WorkCacheFile;
   record: WorkRecord;

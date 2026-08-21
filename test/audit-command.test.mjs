@@ -581,3 +581,101 @@ test("audit --help names diagnose keys as observed Diagnose", () => {
   assert.doesNotMatch(help, /saved tokens/i);
   assert.doesNotMatch(help, /we saved/i);
 });
+
+const ABSENT_INPUTS = { source: "absent", team_count: null, team_users: null };
+
+function localSummaryWithSpend() {
+  const summary = emptySummary();
+  summary.events = [usageEvent()];
+  summary.totalCostUsd = 12.34;
+  summary.totals = { input: 100, output: 50, cacheWrite: 100, cacheRead: 1e6, sessions: 2 };
+  summary.byProject = [{ project: "helm-cli", costUsd: 12.34, sessions: 2 }];
+  return summary;
+}
+
+test("local audit prints stored wrap reuse dollars from one cache hit", () => {
+  const snapshot = auditSnapshotFromScan(localSummaryWithSpend(), 30, ABSENT_INPUTS, {
+    count: 1,
+    avoided_usd: 0.0123,
+  });
+  const text = stripAnsi(formatAuditHuman(snapshot));
+
+  assert.match(text, /Local wrap reuse/);
+  assert.match(text, /1 reuse/);
+  assert.match(text, /\$0\.0123/);
+  assert.equal(snapshot.local_reuse.count, 1);
+  assert.equal(snapshot.local_reuse.avoided_usd, 0.0123);
+  assert.equal(snapshot.not_computed.identified_savings_usd, null);
+  assert.doesNotMatch(text, /14%/);
+  assert.doesNotMatch(text, /we saved/i);
+  assert.doesNotMatch(text, /SECRET_PROMPT/);
+});
+
+test("local audit prints reuse count and leaves dollars blank when avoided_usd is null", () => {
+  const snapshot = auditSnapshotFromScan(localSummaryWithSpend(), 30, ABSENT_INPUTS, {
+    count: 1,
+    avoided_usd: null,
+  });
+  const text = stripAnsi(formatAuditHuman(snapshot));
+  const reuseBlock = text.split("Local wrap reuse")[1]?.split("Not computed")[0] ?? "";
+
+  assert.match(text, /Local wrap reuse/);
+  assert.match(reuseBlock, /1 reuse/);
+  assert.doesNotMatch(reuseBlock, /\$/);
+  assert.equal(snapshot.local_reuse.count, 1);
+  assert.equal(snapshot.local_reuse.avoided_usd, null);
+  assert.doesNotMatch(text, /14%/);
+  assert.doesNotMatch(text, /we saved/i);
+});
+
+test("local audit stays quiet when the wrap cache has no reuses", () => {
+  const snapshot = auditSnapshotFromScan(localSummaryWithSpend(), 30);
+  const text = stripAnsi(formatAuditHuman(snapshot));
+
+  assert.equal(Object.hasOwn(snapshot, "local_reuse"), false);
+  assert.doesNotMatch(text, /Local wrap reuse/);
+  assert.doesNotMatch(text, /\breuse\b/i);
+  assert.match(text, /identified_savings_usd\s+not computed/);
+  assert.doesNotMatch(text, /14%/);
+});
+
+test("empty local audit still prints stored wrap reuse when the cache has a hit", () => {
+  const snapshot = auditSnapshotFromScan(emptySummary(), 1, ABSENT_INPUTS, {
+    count: 1,
+    avoided_usd: 0.0123,
+  });
+  const text = stripAnsi(formatAuditHuman(snapshot));
+
+  assert.match(text, /No local Claude Code or Codex transcripts/);
+  assert.match(text, /Local wrap reuse/);
+  assert.match(text, /1 reuse/);
+  assert.match(text, /\$0\.0123/);
+  assert.doesNotMatch(text, /14%/);
+});
+
+test("json local audit includes stored wrap reuse and omits it when the cache is empty", () => {
+  const withReuse = JSON.parse(
+    formatAuditJson(
+      auditSnapshotFromScan(localSummaryWithSpend(), 14, ABSENT_INPUTS, {
+        count: 1,
+        avoided_usd: 0.0123,
+      }),
+    ),
+  );
+  assert.equal(withReuse.local_reuse.count, 1);
+  assert.equal(withReuse.local_reuse.avoided_usd, 0.0123);
+  assert.equal(withReuse.not_computed.identified_savings_usd, null);
+
+  const empty = JSON.parse(formatAuditJson(auditSnapshotFromScan(localSummaryWithSpend(), 14)));
+  assert.equal(Object.hasOwn(empty, "local_reuse"), false);
+});
+
+test("audit --help names local wrap reuse from proxy-work.json", () => {
+  const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist/index.js");
+  const help = execFileSync(process.execPath, [cli, "audit", "--help"], { encoding: "utf8" });
+
+  assert.match(help, /proxy-work\.json/);
+  assert.match(help, /wrap reuse/i);
+  assert.doesNotMatch(help, /14%/);
+  assert.doesNotMatch(help, /OpenRouter/i);
+});

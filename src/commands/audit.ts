@@ -1,8 +1,10 @@
 /**
- * `helm audit` — observed spend. Default path reads local transcripts and
+ * `helm audit`. Observed spend. Default path reads local transcripts and
  * does not need a Helm Web account. `--team` GETs the TeamUsageRollup
  * Helm Web /usage already shows and requires `helm connect`. Prints
- * realized provider-cache savings only on the local path. Optional
+ * realized provider-cache savings only on the local path. Local wrap
+ * reuse from this machine's proxy-work.json prints when reuses exist.
+ * Dollars print only when avoided_usd was stored. Optional
  * self-reported team size becomes an unshared-replay scenario on the
  * local path. Does not compute landing-page identified savings.
  */
@@ -24,6 +26,7 @@ import {
 import { runLocalScan } from "../lib/local-scan.js";
 import { getTeamUsage, sendUsageEvents } from "../lib/api-web.js";
 import { getApiUrl, loadCredentials, loadMachineIdentity } from "../lib/config.js";
+import { defaultWorkCachePath, readWorkCache, summarizeWorkReuses } from "../lib/proxy-work-cache.js";
 
 const UPLOAD_BATCH_SIZE = 500;
 const MAX_TEAM_USERS = 10000;
@@ -123,6 +126,7 @@ function formatLocalAuditHuman(snapshot: LocalAuditSnapshot): string {
     lines.push("  Observed spend is $0.00. Identified savings are not computed.");
     lines.push("  To request a sales audit, open https://tryhelm.ai");
     lines.push("");
+    appendLocalReuse(lines, snapshot);
     appendTeamSections(lines, snapshot);
     return lines.join("\n");
   }
@@ -144,6 +148,7 @@ function formatLocalAuditHuman(snapshot: LocalAuditSnapshot): string {
     `  Provider prompt cache already avoided ${usd(snapshot.derived.provider_cache_savings_usd)} versus billing those cache-read tokens at full input rates. This is not identified savings.`,
   );
   lines.push("");
+  appendLocalReuse(lines, snapshot);
   appendTeamSections(lines, snapshot);
   appendNotComputed(lines, snapshot);
   return lines.join("\n");
@@ -282,6 +287,25 @@ function appendNotComputed(lines: string[], snapshot: AuditSnapshot): void {
   lines.push("");
 }
 
+function storedUsd(n: number): string {
+  return `$${n}`;
+}
+
+function appendLocalReuse(lines: string[], snapshot: LocalAuditSnapshot): void {
+  const reuse = snapshot.local_reuse;
+  if (reuse == null || reuse.count < 1) {
+    return;
+  }
+  lines.push(chalk.bold("  Local wrap reuse"));
+  const count = reuse.count === 1 ? "1 reuse" : `${reuse.count} reuses`;
+  if (reuse.avoided_usd == null) {
+    lines.push(`    ${count}`);
+  } else {
+    lines.push(`    ${count}  ${storedUsd(reuse.avoided_usd)}`);
+  }
+  lines.push("");
+}
+
 function appendTeamSections(lines: string[], snapshot: LocalAuditSnapshot): void {
   const { inputs, scenario } = snapshot;
   if (inputs.team_users == null && inputs.team_count == null) {
@@ -363,7 +387,8 @@ export async function auditCommand(options: AuditCommandOptions): Promise<void> 
   if (inputs.source === "absent" && !options.json) {
     inputs = await promptAuditInputs();
   }
-  const snapshot = auditSnapshotFromScan(summary, days, inputs);
+  const reuse = summarizeWorkReuses(readWorkCache(defaultWorkCachePath()));
+  const snapshot = auditSnapshotFromScan(summary, days, inputs, reuse);
 
   if (!options.json) {
     console.log(formatAuditHuman(snapshot));
