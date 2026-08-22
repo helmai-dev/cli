@@ -78,37 +78,82 @@ export function checkForUpdate(): void {
     }
 }
 
+/**
+ * Latest published version. GitHub Releases is the source of truth — that is
+ * what install.sh consumes — so the check reads releases.json from the repo's
+ * latest release and falls back to npm for older installs.
+ */
 async function fetchLatestVersion(): Promise<void> {
+    const latest = (await fetchFromGitHub()) ?? (await fetchFromNpm());
+    if (!latest) return;
+
+    saveCache({
+        last_check_at: new Date().toISOString(),
+        latest_version: latest,
+    });
+
+    // Show the message now if there's an update
+    if (isNewerVersion(getOwnVersion(), latest)) {
+        process.stderr.write(
+            `[helm] Update available: ${getOwnVersion()} -> ${latest}. Run "helm update" to update.\n`,
+        );
+    }
+}
+
+async function fetchWithTimeout(
+    url: string,
+    accept: string,
+): Promise<{ ok: boolean; text: string }> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
-
     try {
-        const response = await fetch(
-            'https://registry.npmjs.org/@helmai/cli/latest',
-            {
-                signal: controller.signal,
-                headers: { Accept: 'application/json' },
-            },
-        );
-
-        if (!response.ok) return;
-
-        const data = (await response.json()) as { version?: string };
-        const latest = data.version;
-        if (!latest) return;
-
-        saveCache({
-            last_check_at: new Date().toISOString(),
-            latest_version: latest,
+        const response = await fetch(url, {
+            signal: controller.signal,
+            headers: { Accept: accept },
         });
-
-        // Show the message now if there's an update
-        if (isNewerVersion(getOwnVersion(), latest)) {
-            process.stderr.write(
-                `[helm] Update available: ${getOwnVersion()} -> ${latest}. Run "helm update" to update.\n`,
-            );
-        }
+        return { ok: response.ok, text: await response.text() };
     } finally {
         clearTimeout(timeout);
+    }
+}
+
+async function fetchFromGitHub(): Promise<string | null> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    try {
+        // releases/latest 302s to /releases/tag/vX.Y.Z. Manual redirect keeps
+        // this to one tiny request with no page download.
+        const response = await fetch('https://github.com/helmai-dev/cli/releases/latest', {
+            redirect: 'manual',
+            signal: controller.signal,
+            headers: { Accept: 'application/json' },
+        });
+        const candidates = [response.headers.get('location') ?? '', response.url ?? ''];
+        for (const candidate of candidates) {
+            const match = candidate.match(/releases\/tag\/v(\d+\.\d+\.\d+)/);
+            if (match?.[1]) {
+                return match[1];
+            }
+        }
+        return null;
+    } catch {
+        return null;
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+async function fetchFromNpm(): Promise<string | null> {
+    try {
+        const response = await fetchWithTimeout(
+            'https://registry.npmjs.org/@helmai/cli/latest',
+            'application/json',
+        );
+        if (!response.ok) return null;
+        const data = JSON.parse(response.text) as { version?: string };
+        const version = data.version;
+        return typeof version === 'string' && version !== '' ? version : null;
+    } catch {
+        return null;
     }
 }
