@@ -44,8 +44,11 @@ Find the waste in your AI bill. See it → quantify it → fix it.
 
 ## Honesty rules (fail the PR if broken)
 
-- Do not invent identified-savings or `shared_context_savings_usd`.
-- Prompts stay on-device. Do not upload prompt bodies.
+Updated 2026-08-21. The excerpt lock in `helm-web docs/slice-6-readable-excerpts.md` supersedes "prompts stay on-device": the wrap may store and POST bounded excerpts — the last user ask and tool-result bytes already on the request — so `/usage` can show the ask and teammates can reuse paid-for work. Still fail the PR for:
+
+- Full multi-turn transcripts, system/developer messages, provider API keys, or wrap tokens leaving the machine.
+- Invented identified-savings or `shared_context_savings_usd`. Savings come from stored prior `cost_usd` or token deltas observed at the intercept (labeled estimates), never a rate table.
+- Surfacing prompts as surveillance. Excerpts are receipt data.
 - `helm proxy` / `helm wrap` is the live intercept surface. Easy install must keep working (curl / Homebrew, no flow disruption).
 - Cursor cloud VMs do not wrap the model path.
 - CLI-only users are a first-class surface.
@@ -54,5 +57,6 @@ Find the waste in your AI bill. See it → quantify it → fix it.
 
 1. Does this help Observe (traffic into Helm), Diagnose (workload / overlap / model metadata), or Optimize?
 2. Does install stay one terminal step?
-3. Are we sending fingerprints / cost / model / path, not prompt bodies?
+3. Are we sending bounded excerpts / fingerprints / cost / model / path — never whole transcripts or credentials?
 4. Did we invent a savings dollar?
+5. Does every savings number trace to a stored measurement, paired with a shipped-work signal?

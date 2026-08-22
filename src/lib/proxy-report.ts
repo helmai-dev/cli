@@ -1,6 +1,7 @@
 import type {
   UsageEventsBody,
   UsageEventUpload,
+  UsageExcerptUploadBody,
   UsageReuseUpload,
   UsageReusesBody,
 } from "./api-web.js";
@@ -14,9 +15,11 @@ export interface ProxyReportDeps {
   usage: LiveUsageRecord | null;
   fingerprints: WorkFingerprintsBody | null;
   reuses?: readonly UsageReuseUpload[];
+  excerpt?: UsageExcerptUploadBody | null;
   sendUsage: (body: UsageEventsBody) => Promise<{ accepted: number }>;
   sendFingerprints: (body: WorkFingerprintsBody) => Promise<unknown>;
   sendReuses?: (body: UsageReusesBody) => Promise<{ accepted: number }>;
+  sendExcerpt?: (body: UsageExcerptUploadBody) => Promise<unknown>;
 }
 
 export function usageReuseFromStored(input: {
@@ -65,6 +68,12 @@ export async function reportProxiedRequest(input: ProxyReportDeps): Promise<void
         device_ulid: input.deviceUlid,
         reuses: [firstReuse, ...(input.reuses ?? []).slice(1)],
       });
+    } catch {
+    }
+  }
+  if (input.excerpt && input.sendExcerpt) {
+    try {
+      await input.sendExcerpt(input.excerpt);
     } catch {
     }
   }

@@ -677,6 +677,98 @@ export async function sendUsageReuses(
   }
 }
 
+// --- Team work excerpts (slice 6) ---
+
+/** One tool-result byte bundle the laptop already cached locally. */
+export interface UsageExcerptToolEntry {
+  readonly tool_name: string;
+  readonly path_hint: string | null;
+  readonly content: string;
+}
+
+/**
+ * Bounded excerpt upload per wrapped 2xx: last user ask plus tool-result
+ * bytes already on the request. Never whole transcripts, system messages,
+ * credentials, or wrap tokens (2026-08-21 excerpt lock).
+ */
+export interface UsageExcerptUploadBody {
+  readonly device_ulid: string | null;
+  readonly excerpt: {
+    readonly project_hint: string;
+    readonly path_hints: readonly string[];
+    readonly tool_names: readonly string[];
+    readonly session_key: string | null;
+    readonly prompt_excerpt: string | null;
+    readonly tool_excerpts: readonly UsageExcerptToolEntry[] | null;
+    readonly cost_usd: number | null;
+    readonly occurred_at: string;
+    readonly environment: string | null;
+  };
+}
+
+export const USAGE_EXCERPTS_ENDPOINT = "/usage/excerpts";
+
+export const USAGE_EXCERPTS_LOOKUP_ENDPOINT = "/usage/excerpts/lookup";
+
+export const USAGE_EXCERPT_TIMEOUT_MS = 1200;
+
+export interface TeamWorkExcerptCandidate {
+  readonly project_hint: string;
+  readonly path_hints: readonly string[];
+  readonly tool_names: readonly string[];
+  readonly session_key: string | null;
+  readonly prompt_excerpt: string | null;
+  readonly tool_excerpts: readonly UsageExcerptToolEntry[] | null;
+  readonly cost_usd: number | null;
+  readonly occurred_at: string;
+  readonly author_name: string | null;
+}
+
+export interface TeamWorkLookupQuery {
+  readonly project_hint: string;
+  readonly tool_names?: readonly string[];
+}
+
+export async function sendUsageExcerpt(
+  body: UsageExcerptUploadBody,
+  requester: WebRequester = request,
+): Promise<{ accepted: boolean }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), USAGE_EXCERPT_TIMEOUT_MS);
+  try {
+    return await requester<{ accepted: boolean }>(USAGE_EXCERPTS_ENDPOINT, {
+      method: "POST",
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function fetchTeamWorkExcerpts(
+  query: TeamWorkLookupQuery,
+): Promise<TeamWorkExcerptCandidate[]> {
+  const params = new URLSearchParams();
+  params.set("project_hint", query.project_hint);
+  if (query.tool_names) {
+    for (const tool of query.tool_names) {
+      params.append("tool_names[]", tool);
+    }
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), USAGE_EXCERPT_TIMEOUT_MS);
+  try {
+    const data = await request<{ excerpts: TeamWorkExcerptCandidate[] }>(
+      `${USAGE_EXCERPTS_LOOKUP_ENDPOINT}?${params.toString()}`,
+      { method: "GET", signal: controller.signal },
+    );
+    return Array.isArray(data.excerpts) ? data.excerpts : [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export type WebRequester = <T>(
   endpoint: string,
   options?: RequestInit,

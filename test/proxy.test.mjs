@@ -1409,3 +1409,296 @@ test("parseWorkCache ignores prompt-shaped fields", () => {
   assert.equal(JSON.stringify(parsed).includes(SECRET), false);
   assert.equal(Object.hasOwn(parsed.records[0], "prompt"), false);
 });
+
+test("wrapped 2xx POSTs a bounded excerpt to the team store when enabled", async () => {
+  const cachePath = tempWorkCachePath();
+  const provider = await listenMock((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "msg_excerpt",
+        model: "claude-sonnet-4-20250514",
+        usage: { input_tokens: 11, output_tokens: 7, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        content: [{ type: "text", text: "ok" }],
+      }));
+    });
+  });
+  const helmPosts = [];
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0, enableTeamStore: true },
+    {
+      anthropicUpstream: provider.url,
+      openaiUpstream: provider.url,
+      cwd: PROJECT_CWD,
+      homeDir: HOME_DIR,
+      now: () => NOW,
+      log: () => {},
+      linked: true,
+      deviceUlid: "01DEVICE",
+      fetchLiveOthers: async () => [],
+      fetchTeamWork: async () => [],
+      workCachePath: cachePath,
+      sendUsage: async () => ({ accepted: 1 }),
+      sendFingerprints: async () => {},
+      sendReuses: async () => ({ accepted: 1 }),
+      sendExcerpt: async (body) => {
+        helmPosts.push({ kind: "excerpt", body });
+        return { accepted: true };
+      },
+      environment: "default",
+    },
+  );
+
+  try {
+    const response = await fetch(`${proxy.url}/wrap/${proxy.wrapToken}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(toolWorkBody()),
+    });
+    assert.equal(response.status, 200);
+    await proxy.reported;
+
+    assert.equal(helmPosts.length, 1);
+    const excerptPost = helmPosts[0].body;
+    assert.equal(excerptPost.device_ulid, "01DEVICE");
+    const excerpt = excerptPost.excerpt;
+    assert.equal(excerpt.project_hint, "billing");
+    assert.ok(excerpt.path_hints.includes("src/Foo.php"));
+    assert.deepEqual(excerpt.tool_names, ["Read"]);
+    assert.ok(typeof excerpt.session_key === "string" && excerpt.session_key.length > 0);
+    // The ask is the most recent user text turn — the tool-result turn is
+    // already captured as tool bytes.
+    assert.equal(excerpt.prompt_excerpt, SECRET);
+    assert.equal(excerpt.cost_usd > 0, true);
+    assert.equal(excerpt.occurred_at, NOW.toISOString());
+    assert.equal(excerpt.environment, "default");
+    assert.deepEqual(excerpt.tool_excerpts, [
+      { tool_name: "Read", path_hint: "src/Foo.php", content: TOOL_RESULT },
+    ]);
+    const serialized = JSON.stringify(excerptPost);
+    assert.equal(serialized.includes(proxy.wrapToken), false);
+    assert.equal(serialized.includes("wrap_token"), false);
+    assert.equal(serialized.toLowerCase().includes("system"), false);
+    // The local cache still holds the work for same-laptop reuse.
+    assert.equal(readWorkCache(cachePath).records.length, 1);
+  } finally {
+    await proxy.close();
+    await provider.close();
+  }
+});
+
+test("team store stays fully offline unless enableTeamStore is set", async () => {
+  const providerHits = [];
+  const provider = await listenMock((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      providerHits.push(req.url);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "msg_offline",
+        model: "claude-sonnet-4-20250514",
+        usage: { input_tokens: 5, output_tokens: 3, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        content: [{ type: "text", text: "ok" }],
+      }));
+    });
+  });
+  const excerptAttempts = [];
+  let teamLookups = 0;
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0 },
+    {
+      anthropicUpstream: provider.url,
+      openaiUpstream: provider.url,
+      cwd: PROJECT_CWD,
+      homeDir: HOME_DIR,
+      now: () => NOW,
+      log: () => {},
+      linked: true,
+      deviceUlid: "01DEVICE",
+      fetchLiveOthers: async () => [],
+      fetchTeamWork: async () => {
+        teamLookups += 1;
+        return [];
+      },
+      workCachePath: tempWorkCachePath(),
+      sendUsage: async () => ({ accepted: 1 }),
+      sendFingerprints: async () => {},
+      sendReuses: async () => ({ accepted: 1 }),
+      sendExcerpt: async (body) => {
+        excerptAttempts.push(body);
+        return { accepted: true };
+      },
+    },
+  );
+
+  try {
+    const response = await fetch(`${proxy.url}/wrap/${proxy.wrapToken}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(toolWorkBody()),
+    });
+    assert.equal(response.status, 200);
+    await proxy.reported;
+    assert.equal(providerHits.length, 1);
+    assert.equal(teamLookups, 0);
+    assert.equal(excerptAttempts.length, 0);
+  } finally {
+    await proxy.close();
+    await provider.close();
+  }
+});
+
+test("a wrapped local miss serves teammate bytes from the team store", async () => {
+  const providerHits = [];
+  const provider = await listenMock((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      providerHits.push(req.url);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: "msg_never" }));
+    });
+  });
+  const TEAM_OCCURRED_AT = new Date(NOW.getTime() - 60 * 60 * 1000).toISOString();
+  const helmPosts = [];
+  const logs = [];
+  let lookupQuery = null;
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0, enableTeamStore: true },
+    {
+      anthropicUpstream: provider.url,
+      openaiUpstream: provider.url,
+      cwd: PROJECT_CWD,
+      homeDir: HOME_DIR,
+      now: () => NOW,
+      log: (line) => logs.push(line),
+      linked: true,
+      deviceUlid: "01DEVICE",
+      fetchLiveOthers: async () => [],
+      fetchTeamWork: async (query) => {
+        lookupQuery = query;
+        return [
+          {
+            project_hint: "billing",
+            path_hints: ["src/Foo.php"],
+            tool_names: ["Read"],
+            session_key: null,
+            prompt_excerpt: "teammate ask",
+            tool_excerpts: [{ tool_name: "Read", path_hint: "src/Foo.php", content: TOOL_RESULT }],
+            cost_usd: 0.02,
+            occurred_at: TEAM_OCCURRED_AT,
+            author_name: "Maya",
+          },
+        ];
+      },
+      workCachePath: tempWorkCachePath(),
+      sendUsage: async () => ({ accepted: 1 }),
+      sendFingerprints: async () => {},
+      sendReuses: async (body) => {
+        helmPosts.push({ kind: "reuses", body });
+        return { accepted: 1 };
+      },
+      sendExcerpt: async () => {
+        throw new Error("team hit must not store its own request as new work");
+      },
+      environment: "default",
+    },
+  );
+
+  try {
+    const response = await fetch(`${proxy.url}/wrap/${proxy.wrapToken}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(toolWorkBody()),
+    });
+    assert.equal(response.status, 200);
+    const reused = await response.json();
+    await proxy.reported;
+
+    assert.equal(providerHits.length, 0);
+    assert.equal(reused.id, "helm_reuse");
+    assert.ok(reused.content[0].text.includes(TOOL_RESULT));
+    assert.ok(reused.content[0].text.includes("(team)"));
+    assert.equal(lookupQuery.project_hint, "billing");
+
+    const reusePosts = helmPosts.filter((post) => post.kind === "reuses");
+    assert.equal(reusePosts.length, 1);
+    assert.equal(reusePosts[0].body.reuses[0].avoided_usd, 0.02);
+    assert.equal(reusePosts[0].body.reuses[0].original_occurred_at, TEAM_OCCURRED_AT);
+    assert.equal(JSON.stringify(reusePosts[0].body).includes(proxy.wrapToken), false);
+  } finally {
+    await proxy.close();
+    await provider.close();
+  }
+});
+
+test("stale or non-overlapping team work forwards to the provider", async () => {
+  const providerHits = [];
+  const provider = await listenMock((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      providerHits.push(req.url);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "msg_forward",
+        model: "claude-sonnet-4-20250514",
+        usage: { input_tokens: 9, output_tokens: 4, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        content: [{ type: "text", text: "fresh" }],
+      }));
+    });
+  });
+  const STALE = new Date(NOW.getTime() - 25 * 60 * 60 * 1000).toISOString();
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0, enableTeamStore: true },
+    {
+      anthropicUpstream: provider.url,
+      openaiUpstream: provider.url,
+      cwd: PROJECT_CWD,
+      homeDir: HOME_DIR,
+      now: () => NOW,
+      log: () => {},
+      linked: true,
+      deviceUlid: "01DEVICE",
+      fetchLiveOthers: async () => [],
+      fetchTeamWork: async () => [
+        {
+          project_hint: "billing",
+          path_hints: ["src/Other.php"],
+          tool_names: ["Read"],
+          session_key: null,
+          prompt_excerpt: null,
+          tool_excerpts: [{ tool_name: "Read", path_hint: "src/Other.php", content: "OLD BYTES" }],
+          cost_usd: 0.5,
+          occurred_at: STALE,
+          author_name: "Maya",
+        },
+      ],
+      workCachePath: tempWorkCachePath(),
+      sendUsage: async () => ({ accepted: 1 }),
+      sendFingerprints: async () => {},
+      sendReuses: async () => ({ accepted: 1 }),
+      sendExcerpt: async () => ({ accepted: true }),
+      environment: "default",
+    },
+  );
+
+  try {
+    const response = await fetch(`${proxy.url}/wrap/${proxy.wrapToken}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(toolWorkBody()),
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    await proxy.reported;
+    assert.equal(payload.id, "msg_forward");
+    assert.equal(providerHits.length, 1);
+  } finally {
+    await proxy.close();
+    await provider.close();
+  }
+});

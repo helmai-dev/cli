@@ -3,10 +3,14 @@ import * as os from "node:os";
 import { hasLinkedAccount } from "./account-link.js";
 import {
   fetchLiveFingerprintOthers,
+  fetchTeamWorkExcerpts,
   sendUsageEvents,
+  sendUsageExcerpt,
   sendUsageReuses,
   sendWorkFingerprints,
   type LiveOverlapPerson,
+  type TeamWorkExcerptCandidate,
+  type UsageExcerptUploadBody,
   type UsageReuseUpload,
 } from "./api-web.js";
 import { usageCostUsd } from "./claude-scan.js";
@@ -42,6 +46,12 @@ import {
   type ProxiedProvider,
 } from "./proxy-inspect.js";
 import { reportProxiedRequest, usageReuseFromStored } from "./proxy-report.js";
+import {
+  excerptUploadFromParts,
+  lastUserPromptFromRequestBody,
+  teamReuseLookup,
+  type TeamWorkFetcher,
+} from "./proxy-excerpt.js";
 import {
   defaultWorkCachePath,
   lookupWork,
@@ -91,6 +101,14 @@ export interface ProxyHooks {
   sendUsage?: typeof sendUsageEvents;
   sendFingerprints?: typeof sendWorkFingerprints;
   sendReuses?: typeof sendUsageReuses;
+  sendExcerpt?: typeof sendUsageExcerpt;
+  fetchTeamWork?: TeamWorkFetcher;
+  /**
+   * Slice-6 team store: excerpt POSTs after 2xx and teammate lookup on local
+   * miss. Opt-in so library consumers and tests stay fully offline; the
+   * `helm proxy` command turns this on.
+   */
+  enableTeamStore?: boolean;
   environment?: string;
   log?: (line: string) => void;
   workCachePath?: string;
@@ -299,6 +317,10 @@ async function handleProxyRequest(
     occurredAt: now.toISOString(),
   });
   const lookup = lookupWork({ cache: readWorkCache(cachePath), key: workKey, now });
+  // Capture the forward reason before narrowing: a local reuse that is not
+  // wrap-bound falls through to the provider path below.
+  const localForwardReason: "no_facts" | "no_hit" | "no_payload" | null =
+    lookup.kind === "forward" ? lookup.reason : null;
   logHarness(hooks, HELM_WRAP_LINE);
   const wrapBound = requestWrapBound({
     expected: hooks.wrapToken,
@@ -349,6 +371,70 @@ async function handleProxyRequest(
       reuses,
     });
     return;
+  }
+
+  // Local miss. Before paying the provider again, ask the team store for a
+  // teammate's stored work (slice 6). Wrap-bound and linked only; any failure
+  // forwards exactly as before.
+  if (
+    hooks.enableTeamStore === true &&
+    localForwardReason !== null &&
+    localForwardReason !== "no_facts" &&
+    workKey !== null &&
+    wrapBound &&
+    (hooks.linked ?? hasLinkedAccount(loadCredentials()))
+  ) {
+    const fetchTeamWork = hooks.fetchTeamWork ?? fetchTeamWorkExcerpts;
+    const teamLookup = await teamReuseLookup({ key: workKey, now, fetchTeamWork });
+    if (teamLookup.kind === "reuse") {
+      const teamRecord = teamLookup.record;
+      const louder = helmReuseLine(teamRecord.cost_usd);
+      logHarness(hooks, `${louder} (team)`);
+      const body = reuseResponseBody({
+        provider,
+        model,
+        payload: teamRecord.payload,
+        notice: `${HELM_WRAP_LINE}\n${louder} (team)`,
+      });
+      writeJson(res, 200, body);
+      let reuses: readonly UsageReuseUpload[] | undefined;
+      try {
+        const next = recordReuse({
+          cache: readWorkCache(cachePath),
+          record: teamRecord,
+          now,
+        });
+        writeWorkCache(cachePath, next);
+        const storedReuse = next.reuses[0];
+        if (storedReuse) {
+          reuses = [
+            usageReuseFromStored({
+              reuse: storedReuse,
+              sessionKey: teamRecord.session_key !== "" ? teamRecord.session_key : null,
+              environment: hooks.environment ?? getActiveEnvironment(),
+            }),
+          ];
+        }
+      } catch {
+      }
+      track.report = reportAfterResponse({
+        hooks,
+        provider,
+        model,
+        projectHint,
+        pathHint,
+        facts,
+        cwd,
+        homeDir,
+        now,
+        usage: null,
+        upstreamStatus: 200,
+        storeCache: false,
+        workKey,
+        reuses,
+      });
+      return;
+    }
   }
 
   let outbound: Buffer = raw;
@@ -505,6 +591,7 @@ async function reportAfterResponse(input: {
 
   const fingerprintProvider = usageProviderFor(input.provider) === "claude" ? "claude-compatible" : "codex";
   const sessionKey = mintProxySessionKey();
+  let excerpt: UsageExcerptUploadBody | null = null;
   if (input.storeCache && input.workKey && input.cachePath) {
     try {
       const payload = payloadFromToolResults({
@@ -530,6 +617,25 @@ async function reportAfterResponse(input: {
           },
         }),
       );
+      // Bounded excerpt for the team store. Prompt is the last user ask only;
+      // tool bytes are the same entries already cached locally.
+      if (
+        input.hooks.enableTeamStore === true &&
+        (input.hooks.linked ?? hasLinkedAccount(loadCredentials()))
+      ) {
+        excerpt = {
+          device_ulid: input.hooks.deviceUlid ?? loadMachineIdentity()?.ulid ?? null,
+          excerpt: excerptUploadFromParts({
+            workKey: input.workKey,
+            sessionKey,
+            prompt: lastUserPromptFromRequestBody(input.parsed),
+            payload,
+            costUsd: usageRecord ? usageRecord.cost_usd : null,
+            occurredAt: input.now,
+            environment: input.hooks.environment ?? getActiveEnvironment(),
+          }),
+        };
+      }
     } catch {
     }
   }
@@ -563,9 +669,11 @@ async function reportAfterResponse(input: {
     usage: usageRecord,
     fingerprints,
     reuses: input.reuses,
+    excerpt,
     sendUsage: input.hooks.sendUsage ?? sendUsageEvents,
     sendFingerprints: input.hooks.sendFingerprints ?? sendWorkFingerprints,
     sendReuses: input.hooks.sendReuses ?? sendUsageReuses,
+    sendExcerpt: input.hooks.sendExcerpt ?? sendUsageExcerpt,
   });
 }
 
@@ -606,7 +714,7 @@ function isAddrInUse(error: unknown): boolean {
 }
 
 export async function listenProxy(
-  options: { host?: string; port?: number } = {},
+  options: { host?: string; port?: number; enableTeamStore?: boolean } = {},
   hooks: ProxyHooks = {},
 ): Promise<RunningProxy> {
   const host = options.host ?? DEFAULT_PROXY_HOST;
@@ -616,7 +724,10 @@ export async function listenProxy(
   const preferred = options.port ?? DEFAULT_PROXY_PORT;
   const track = { report: Promise.resolve() };
   const wrapToken = normalizeWrapToken(hooks.wrapToken) ?? mintWrapToken();
-  const server = createProxyServer({ ...hooks, wrapToken }, track);
+  const server = createProxyServer(
+    { ...hooks, wrapToken, enableTeamStore: options.enableTeamStore ?? hooks.enableTeamStore },
+    track,
+  );
   let port: number;
   try {
     port = await listenOn(server, host, preferred);
@@ -647,10 +758,15 @@ export async function runProxyProcess(options: {
   port?: number;
   onListening?: (info: { host: string; port: number; url: string; wrapToken: string }) => void;
 }): Promise<RunningProxy> {
-  const running = await listenProxy({
-    host: options.host ?? process.env.HELM_PROXY_HOST ?? DEFAULT_PROXY_HOST,
-    port: options.port ?? (process.env.HELM_PROXY_PORT ? Number(process.env.HELM_PROXY_PORT) : DEFAULT_PROXY_PORT),
-  });
+  const running = await listenProxy(
+    {
+      host: options.host ?? process.env.HELM_PROXY_HOST ?? DEFAULT_PROXY_HOST,
+      port: options.port ?? (process.env.HELM_PROXY_PORT ? Number(process.env.HELM_PROXY_PORT) : DEFAULT_PROXY_PORT),
+      // The real proxy daemon opts into the slice-6 team store: excerpt
+      // uploads after 2xx and teammate lookup on local miss. Both fail open.
+      enableTeamStore: true,
+    },
+  );
   options.onListening?.({
     host: running.host,
     port: running.port,
