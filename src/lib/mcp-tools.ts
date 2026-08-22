@@ -3,6 +3,8 @@
  * when the CLI is unlinked; calls then tell the agent to run `helm connect`.
  */
 
+import * as os from "node:os";
+
 import { hasLinkedAccount } from "./account-link.js";
 import { WebApiError } from "./api-web.js";
 import { loadCredentials } from "./config.js";
@@ -10,10 +12,12 @@ import type { JsonRpcRequest, JsonRpcResponse } from "./mcp-stdio.js";
 import {
   callWebMcpTool,
   fetchLiveTeammates,
+  fetchTeamWorkExcerpts,
   liveMcpWebContext,
   sanitizeToolArguments,
   type McpToolResult,
 } from "./mcp-web.js";
+import { projectHintFromCwd } from "./fingerprints.js";
 import pkg from "../../package.json";
 
 export const HELM_MCP_PROTOCOL_VERSION = "2025-03-26";
@@ -35,7 +39,13 @@ export const WEB_MCP_TOOL_NAMES = [
 
 export const LIVE_TEAMMATES_TOOL_NAME = "list_live_teammates";
 
-export const HELM_MCP_TOOL_NAMES = [...WEB_MCP_TOOL_NAMES, LIVE_TEAMMATES_TOOL_NAME] as const;
+export const TEAM_WORK_TOOL_NAME = "retrieve_team_work";
+
+export const HELM_MCP_TOOL_NAMES = [
+  ...WEB_MCP_TOOL_NAMES,
+  LIVE_TEAMMATES_TOOL_NAME,
+  TEAM_WORK_TOOL_NAME,
+] as const;
 
 export interface McpToolDefinition {
   name: string;
@@ -63,6 +73,13 @@ export interface McpRuntime {
     projectHint?: string;
     pathHint?: string;
   }) => Promise<{ others: unknown[] }>;
+  fetchTeamWork?: (input: {
+    token: string;
+    apiUrl: string;
+    projectHint: string;
+    pathHint?: string;
+    toolName?: string;
+  }) => Promise<{ excerpts: unknown[] }>;
 }
 
 const PROJECT_ID = {
@@ -233,9 +250,32 @@ export const HELM_MCP_TOOLS: McpToolDefinition[] = [
       },
     },
   },
+  {
+    name: "retrieve_team_work",
+    description:
+      "Retrieve bounded excerpts of teammate AI work stored by Helm for this project: what they asked, which files and tools they used, and their tool results, so you can reuse paid-for work instead of redoing it. Returns at most 3 recent candidates with author names. Empty when no teammate work is stored yet. Never includes credentials or wrap tokens; savings dollars shown are only ones already measured.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_hint: {
+          type: "string",
+          description:
+            "Project folder name to look up. Omit to use the current working directory's project.",
+        },
+        path_hint: {
+          type: "string",
+          description: "Optional project-relative file or folder to narrow the lookup.",
+        },
+        tool_name: {
+          type: "string",
+          description: "Optional agent tool name (for example Read) to narrow the lookup.",
+        },
+      },
+    },
+  },
 ];
 
-export const HELM_MCP_INSTRUCTIONS = `Helm team tools for this machine. Discover projects with list_projects, then read the room with get_project_awareness and list_todos before acting. list_live_teammates shows path/project overlap with teammates. Prompt text stays on this machine.`;
+export const HELM_MCP_INSTRUCTIONS = `Helm team tools for this machine. Discover projects with list_projects, then read the room with get_project_awareness and list_todos before acting. list_live_teammates shows path/project overlap with teammates. retrieve_team_work returns bounded excerpts of teammate work on this project (their ask, files, and tool results) so you can reuse it instead of redoing it.`;
 
 export function advertisedMcpTools(): McpToolDefinition[] {
   return HELM_MCP_TOOLS;
@@ -259,6 +299,14 @@ export function liveMcpRuntime(): McpRuntime {
         token: input.token,
         projectHint: input.projectHint,
         pathHint: input.pathHint,
+      }),
+    fetchTeamWork: (input) =>
+      fetchTeamWorkExcerpts({
+        apiUrl: input.apiUrl,
+        token: input.token,
+        projectHint: input.projectHint,
+        pathHint: input.pathHint,
+        toolName: input.toolName,
       }),
   };
 }
@@ -339,6 +387,37 @@ async function callTool(params: unknown, runtime: McpRuntime): Promise<McpToolRe
         pathHint: typeof args.path_hint === "string" ? args.path_hint : undefined,
       });
       return { content: [{ type: "text", text: JSON.stringify(others) }] };
+    }
+    if (name === TEAM_WORK_TOOL_NAME) {
+      const fetchTeamWork = runtime.fetchTeamWork;
+      if (!fetchTeamWork) {
+        return errorResult("retrieve_team_work is not available in this Helm build.");
+      }
+      const explicitHint =
+        typeof args.project_hint === "string" && args.project_hint.trim() !== ""
+          ? args.project_hint.trim()
+          : null;
+      const projectHint =
+        explicitHint ?? projectHintFromCwd(process.cwd(), os.homedir()) ?? "";
+      if (projectHint === "") {
+        return errorResult(
+          "No project_hint given and this directory is not a mapped Helm project. Pass project_hint.",
+        );
+      }
+      const excerpts = await fetchTeamWork({
+        token,
+        apiUrl: runtime.apiUrl(),
+        projectHint,
+        pathHint:
+          typeof args.path_hint === "string" && args.path_hint.trim() !== ""
+            ? args.path_hint.trim()
+            : undefined,
+        toolName:
+          typeof args.tool_name === "string" && args.tool_name.trim() !== ""
+            ? args.tool_name.trim()
+            : undefined,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(excerpts) }] };
     }
     return await runtime.callWebTool({
       token,

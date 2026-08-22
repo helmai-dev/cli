@@ -206,6 +206,102 @@ export async function fetchLiveTeammates(
   return { others: othersFromPayload(parseJson(response.text)) };
 }
 
+export const TEAM_WORK_LOOKUP_PATH = "/api/usage/excerpts/lookup";
+
+export interface TeamWorkExcerpt {
+  readonly project_hint: string;
+  readonly path_hints: readonly string[];
+  readonly tool_names: readonly string[];
+  readonly prompt_excerpt: string | null;
+  readonly tool_excerpts:
+    | readonly { readonly tool_name: string; readonly path_hint: string | null; readonly content: string }[]
+    | null;
+  readonly cost_usd: number | null;
+  readonly occurred_at: string;
+  readonly author_name: string | null;
+}
+
+export function buildTeamWorkLookupRequest(input: {
+  apiUrl: string;
+  token: string;
+  projectHint: string;
+  pathHint?: string;
+  toolName?: string;
+}): WebRequest {
+  const url = new URL(`${trimSlash(input.apiUrl)}${TEAM_WORK_LOOKUP_PATH}`);
+  url.searchParams.set("project_hint", input.projectHint);
+  if (input.pathHint) {
+    url.searchParams.set("path_hints[]", input.pathHint);
+  }
+  if (input.toolName) {
+    url.searchParams.set("tool_names[]", input.toolName);
+  }
+  url.searchParams.set("limit", "3");
+  return {
+    method: "GET",
+    url: url.toString(),
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${input.token}`,
+    },
+    body: null,
+  };
+}
+
+function excerptsFromPayload(payload: unknown): TeamWorkExcerpt[] {
+  if (!isRecord(payload) || !Array.isArray(payload.excerpts)) {
+    return [];
+  }
+  return payload.excerpts.filter(isRecord).map((row) => ({
+    project_hint: typeof row.project_hint === "string" ? row.project_hint : "",
+    path_hints: Array.isArray(row.path_hints)
+      ? row.path_hints.filter((item): item is string => typeof item === "string")
+      : [],
+    tool_names: Array.isArray(row.tool_names)
+      ? row.tool_names.filter((item): item is string => typeof item === "string")
+      : [],
+    prompt_excerpt: typeof row.prompt_excerpt === "string" ? row.prompt_excerpt : null,
+    tool_excerpts: Array.isArray(row.tool_excerpts)
+      ? row.tool_excerpts.filter(isRecord).map((entry) => ({
+          tool_name: typeof entry.tool_name === "string" ? entry.tool_name : "",
+          path_hint: typeof entry.path_hint === "string" ? entry.path_hint : null,
+          content: typeof entry.content === "string" ? entry.content : "",
+        }))
+      : null,
+    cost_usd: typeof row.cost_usd === "number" && Number.isFinite(row.cost_usd) ? row.cost_usd : null,
+    occurred_at: typeof row.occurred_at === "string" ? row.occurred_at : "",
+    author_name: typeof row.author_name === "string" ? row.author_name : null,
+  }));
+}
+
+export async function fetchTeamWorkExcerpts(
+  input: {
+    apiUrl: string;
+    token: string;
+    projectHint: string;
+    pathHint?: string;
+    toolName?: string;
+  },
+  requester: WebRequester = fetchWebRequest,
+): Promise<{ excerpts: TeamWorkExcerpt[] }> {
+  const request = buildTeamWorkLookupRequest(input);
+  const response = await requester(request);
+  if (response.status === 401) {
+    throw new WebApiError("Not connected. Run `helm connect` first.", 401);
+  }
+  if (response.status === 404 || response.status === 405) {
+    // Older Helm web without the team store: fail open to empty.
+    return { excerpts: [] };
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw new WebApiError(
+      mcpHttpErrorMessage(response.text, response.status),
+      response.status,
+    );
+  }
+  return { excerpts: excerptsFromPayload(parseJson(response.text)) };
+}
+
 export function liveMcpWebContext(): { apiUrl: string; token: string | null } {
   const credentials = loadCredentials();
   const token =

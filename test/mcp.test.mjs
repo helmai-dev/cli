@@ -12,6 +12,7 @@ import {
   handleMcpRequest,
   HELM_MCP_TOOL_NAMES,
   LIVE_TEAMMATES_TOOL_NAME,
+  TEAM_WORK_TOOL_NAME,
   UNLINKED_MCP_MESSAGE,
   WEB_MCP_TOOL_NAMES,
 } from "../dist/lib/mcp-tools.js";
@@ -23,10 +24,13 @@ import {
 import {
   allHelmMcpHostsInstalled,
   assertMcpHostsWritable,
+  helmCodexMcpInstalled,
   helmMcpServerEntry,
   helmMcpServerInstalled,
   installHelmMcpHosts,
+  mergeHelmCodexMcpServer,
   mergeHelmMcpServer,
+  removeHelmCodexMcpServer,
   removeHelmMcpServer,
   uninstallHelmMcpHosts,
 } from "../dist/lib/mcp-hosts.js";
@@ -70,6 +74,26 @@ function recordingRuntime(overrides = {}) {
         }
         return { others: [{ name: "Sam", project_hint: "cli", path_hint: "src/lib/mcp-tools.ts" }] };
       },
+      async fetchTeamWork(input) {
+        calls.push({ kind: "team-work", ...input });
+        if (overrides.fetchTeamWork) {
+          return overrides.fetchTeamWork(input);
+        }
+        return {
+          excerpts: [
+            {
+              project_hint: "billing",
+              path_hints: ["src/Foo.php"],
+              tool_names: ["Read"],
+              prompt_excerpt: "teammate ask",
+              tool_excerpts: [{ tool_name: "Read", path_hint: "src/Foo.php", content: "bytes" }],
+              cost_usd: 0.02,
+              occurred_at: "2026-08-21T06:00:00+00:00",
+              author_name: "Maya",
+            },
+          ],
+        };
+      },
     },
   };
 }
@@ -92,9 +116,79 @@ test("advertised tools include web MCP tools and live teammates", () => {
     assert.equal(names.includes(name), true, name);
   }
   assert.equal(names.includes(LIVE_TEAMMATES_TOOL_NAME), true);
+  assert.equal(names.includes(TEAM_WORK_TOOL_NAME), true);
   assert.deepEqual(names, [...HELM_MCP_TOOL_NAMES]);
   assert.equal(names.includes("helm_wrap"), false);
   assert.equal(JSON.stringify(advertisedMcpTools()).includes("shared_context_savings_usd"), false);
+});
+
+test("retrieve_team_work forwards project and filter hints to the team lookup", async () => {
+  const { runtime, calls } = recordingRuntime();
+  const response = await handleMcpRequest(
+    {
+      jsonrpc: "2.0",
+      id: 7,
+      method: "tools/call",
+      params: {
+        name: TEAM_WORK_TOOL_NAME,
+        arguments: { project_hint: "billing", path_hint: "src/Foo.php", tool_name: "Read" },
+      },
+    },
+    runtime,
+  );
+  assert.equal(response.error, undefined);
+  const payload = JSON.parse(response.result.content[0].text);
+  assert.equal(payload.excerpts.length, 1);
+  assert.equal(payload.excerpts[0].author_name, "Maya");
+  const call = calls.find((entry) => entry.kind === "team-work");
+  assert.equal(call.projectHint, "billing");
+  assert.equal(call.pathHint, "src/Foo.php");
+  assert.equal(call.toolName, "Read");
+  assert.equal(call.token, TOKEN);
+});
+
+test("retrieve_team_work sanitizes arguments and reports a missing project hint", async () => {
+  const { runtime, calls } = recordingRuntime({ fetchTeamWork: async () => ({ excerpts: [] }) });
+
+  const sanitized = await handleMcpRequest(
+    {
+      jsonrpc: "2.0",
+      id: 7,
+      method: "tools/call",
+      params: {
+        name: TEAM_WORK_TOOL_NAME,
+        arguments: { project_hint: "billing", prompt: PROMPT_SECRET },
+      },
+    },
+    runtime,
+  );
+  assert.equal(sanitized.result.isError, undefined);
+  const call = calls.find((entry) => entry.kind === "team-work");
+  assert.equal(call.projectHint, "billing");
+  assert.equal(Object.hasOwn(call.arguments ?? {}, "prompt"), false);
+  assert.equal(JSON.stringify(sanitized.result).includes(PROMPT_SECRET), false);
+
+  // Omitted hint falls back to the current directory's project hint, the same
+  // minting rule the wrapping laptop used, so lookups line up across machines.
+  const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "billing-"));
+  const previousCwd = process.cwd();
+  process.chdir(workdir);
+  try {
+    const fallback = await handleMcpRequest(
+      {
+        jsonrpc: "2.0",
+        id: 9,
+        method: "tools/call",
+        params: { name: TEAM_WORK_TOOL_NAME, arguments: {} },
+      },
+      runtime,
+    );
+    assert.equal(fallback.result.isError, undefined);
+    const fallbackCall = calls.filter((entry) => entry.kind === "team-work").at(-1);
+    assert.equal(fallbackCall.projectHint, path.basename(workdir));
+  } finally {
+    process.chdir(previousCwd);
+  }
 });
 
 test("tools/list advertises tools when the CLI is unlinked", async () => {
@@ -266,6 +360,9 @@ test("install writes Claude and Cursor MCP configs without clobbering neighbors"
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "helm-mcp-hosts-"));
   const claudePath = path.join(root, ".claude.json");
   const cursorPath = path.join(root, ".cursor", "mcp.json");
+  const codexPath = path.join(root, ".codex", "config.toml");
+  const geminiPath = path.join(root, ".gemini", "settings.json");
+  const openCodePath = path.join(root, ".config", "opencode", "opencode.json");
   fs.writeFileSync(
     claudePath,
     JSON.stringify({
@@ -280,16 +377,45 @@ test("install writes Claude and Cursor MCP configs without clobbering neighbors"
       mcpServers: { docs: { command: "npx", args: ["-y", "docs-mcp"] } },
     }),
   );
+  fs.mkdirSync(path.dirname(codexPath), { recursive: true });
+  fs.writeFileSync(
+    codexPath,
+    [
+      "model = \"gpt-5-codex\"",
+      "",
+      "[mcp_servers.linear]",
+      "command = \"npx\"",
+      "args = [\"-y\", \"linear-mcp\"]",
+      "",
+    ].join("\n"),
+  );
+  fs.mkdirSync(path.dirname(geminiPath), { recursive: true });
+  fs.writeFileSync(
+    geminiPath,
+    JSON.stringify({ theme: "auto", mcpServers: { linear: { command: "npx" } } }),
+  );
+  fs.mkdirSync(path.dirname(openCodePath), { recursive: true });
+  fs.writeFileSync(
+    openCodePath,
+    JSON.stringify({
+      $schema: "https://opencode.ai/config.json",
+      mcp: { linear: { type: "local", command: ["npx", "-y", "linear-mcp"] } },
+    }),
+  );
 
+  const hostPaths = { claudePath, cursorPath, codexPath, geminiPath, openCodePath };
   const statuses = installHelmMcpHosts({
-    claudePath,
-    cursorPath,
+    ...hostPaths,
     entry: { command: "/opt/helm/helm", args: ["mcp"] },
   });
-  assert.equal(allHelmMcpHostsInstalled({ claudePath, cursorPath }), true);
+  assert.equal(allHelmMcpHostsInstalled(hostPaths), true);
   assert.deepEqual(
     statuses.map((row) => row.installed),
-    [true, true],
+    [true, true, true, true, true],
+  );
+  assert.deepEqual(
+    statuses.map((row) => row.name),
+    ["Claude MCP", "Cursor MCP", "Codex MCP", "Gemini MCP", "OpenCode MCP"],
   );
 
   const claude = JSON.parse(fs.readFileSync(claudePath, "utf8"));
@@ -300,12 +426,47 @@ test("install writes Claude and Cursor MCP configs without clobbering neighbors"
   assert.deepEqual(cursor.mcpServers.docs, { command: "npx", args: ["-y", "docs-mcp"] });
   assert.deepEqual(cursor.mcpServers.helm, { command: "/opt/helm/helm", args: ["mcp"] });
 
-  uninstallHelmMcpHosts({ claudePath, cursorPath });
+  // Codex TOML keeps every neighbor byte-for-byte except its own new section.
+  const codex = fs.readFileSync(codexPath, "utf8");
+  assert.ok(codex.startsWith("model = \"gpt-5-codex\""));
+  assert.ok(codex.includes("[mcp_servers.linear]"));
+  assert.ok(codex.includes("args = [\"-y\", \"linear-mcp\"]"));
+  assert.ok(codex.includes("[mcp_servers.helm]"));
+  assert.ok(/command = "\/opt\/helm\/helm"/.test(codex));
+  assert.ok(/args = \["mcp"\]/.test(codex));
+
+  const gemini = JSON.parse(fs.readFileSync(geminiPath, "utf8"));
+  assert.equal(gemini.theme, "auto");
+  assert.deepEqual(gemini.mcpServers.helm, { command: "/opt/helm/helm", args: ["mcp"] });
+  assert.deepEqual(gemini.mcpServers.linear, { command: "npx" });
+
+  const openCode = JSON.parse(fs.readFileSync(openCodePath, "utf8"));
+  assert.equal(openCode.$schema, "https://opencode.ai/config.json");
+  assert.deepEqual(openCode.mcp.helm, {
+    type: "local",
+    command: ["/opt/helm/helm", "mcp"],
+    enabled: true,
+  });
+  assert.deepEqual(openCode.mcp.linear, { type: "local", command: ["npx", "-y", "linear-mcp"] });
+
+  uninstallHelmMcpHosts(hostPaths);
+  assert.equal(allHelmMcpHostsInstalled(hostPaths), false);
+
   const claudeAfter = JSON.parse(fs.readFileSync(claudePath, "utf8"));
   const cursorAfter = JSON.parse(fs.readFileSync(cursorPath, "utf8"));
   assert.equal(claudeAfter.numStartups, 12);
   assert.deepEqual(claudeAfter.mcpServers, { linear: { command: "npx", args: ["-y", "linear-mcp"] } });
   assert.deepEqual(cursorAfter.mcpServers, { docs: { command: "npx", args: ["-y", "docs-mcp"] } });
+
+  const codexAfter = fs.readFileSync(codexPath, "utf8");
+  assert.ok(codexAfter.includes("[mcp_servers.linear]"));
+  assert.ok(!codexAfter.includes("[mcp_servers.helm]"));
+
+  const geminiAfter = JSON.parse(fs.readFileSync(geminiPath, "utf8"));
+  assert.deepEqual(geminiAfter.mcpServers, { linear: { command: "npx" } });
+
+  const openCodeAfter = JSON.parse(fs.readFileSync(openCodePath, "utf8"));
+  assert.deepEqual(Object.keys(openCodeAfter.mcp), ["linear"]);
 });
 
 test("MCP registration points at this helm binary and does not overwrite Kubernetes Helm", () => {
@@ -328,6 +489,9 @@ test("MCP registration points at this helm binary and does not overwrite Kuberne
   installHelmMcpHosts({
     claudePath,
     cursorPath,
+    codexPath: path.join(root, ".codex", "config.toml"),
+    geminiPath: path.join(root, ".gemini", "settings.json"),
+    openCodePath: path.join(root, ".config", "opencode", "opencode.json"),
     entry: helmMcpServerEntry(ourHelm, undefined),
   });
   assert.equal(fs.readFileSync(k8sHelm, "utf8"), k8sContents);
@@ -366,4 +530,43 @@ test("invalid MCP host JSON is refused before install", () => {
   );
   assert.equal(fs.readFileSync(claudePath, "utf8"), "{ not json");
   assert.deepEqual(JSON.parse(fs.readFileSync(cursorPath, "utf8")), { mcpServers: {} });
+});
+
+test("codex TOML section edit replaces stale entries and preserves neighbors", () => {
+  const existing = [
+    "model = \"gpt-5-codex\"",
+    "",
+    "[mcp_servers.helm]",
+    "command = \"/old/path/helm\"",
+    "args = [\"mcp\"]",
+    "",
+    "[profiles.fast]",
+    "model = \"gpt-5-mini\"",
+  ].join("\n");
+
+  const merged = mergeHelmCodexMcpServer(existing, { command: "/new/helm", args: ["mcp"] });
+  assert.equal(helmCodexMcpInstalled(merged), true);
+  assert.ok(merged.includes("/new/helm"));
+  assert.ok(!merged.includes("/old/path/helm"));
+  assert.ok(merged.includes("[profiles.fast]"));
+  // Our section moves to the end; the neighbor keeps its body.
+  assert.ok(merged.trimEnd().endsWith("model = \"gpt-5-mini\""));
+
+  const removed = removeHelmCodexMcpServer(merged);
+  assert.equal(removed.removed, true);
+  assert.equal(helmCodexMcpInstalled(removed.next), false);
+  assert.ok(removed.next.includes("[profiles.fast]"));
+
+  const absent = removeHelmCodexMcpServer("model = \"x\"\n");
+  assert.equal(absent.removed, false);
+  assert.equal(absent.next, "model = \"x\"\n");
+
+  const fromEmpty = mergeHelmCodexMcpServer("", { command: "/new/helm", args: ["mcp"] });
+  assert.equal(helmCodexMcpInstalled(fromEmpty), true);
+
+  const escaped = mergeHelmCodexMcpServer("", {
+    command: "C:\\Program Files\\helm\\helm.exe",
+    args: ["mcp"],
+  });
+  assert.ok(escaped.includes("\"C:\\\\Program Files\\\\helm\\\\helm.exe\""));
 });
