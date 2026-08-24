@@ -143,12 +143,15 @@ function candidateToRecord(candidate: TeamWorkExcerptCandidate): WorkRecord | nu
     path_hints: candidate.path_hints.filter((item): item is string => typeof item === "string"),
     tool_names: candidate.tool_names.filter((item): item is string => typeof item === "string"),
     session_key: typeof candidate.session_key === "string" ? candidate.session_key : "",
+    model: null,
     cost_usd:
       typeof candidate.cost_usd === "number" && Number.isFinite(candidate.cost_usd)
         ? candidate.cost_usd
         : null,
     input_tokens: null,
     output_tokens: null,
+    cache_write_tokens: null,
+    cache_read_tokens: null,
     occurred_at: new Date(occurredMs).toISOString(),
     payload: { kind: "tool_results", results },
   };

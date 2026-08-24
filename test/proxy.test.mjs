@@ -199,8 +199,10 @@ test("provider usage is copied, not invented, and shared_context_savings stays n
   assert.equal(record.shared_context_savings_usd, null);
   const upload = liveUsageToUpload(record);
   assert.equal("shared_context_savings_usd" in upload, false);
+  assert.equal("cost_usd" in upload, false);
   assert.equal(JSON.stringify(upload).includes("shared_context_savings"), false);
   assert.equal(JSON.stringify(upload).includes("0.14"), false);
+  assert.equal(JSON.stringify(upload).includes("0.0123"), false);
 });
 
 test("SSE usage is read from the stream without inventing tokens", () => {
@@ -319,9 +321,16 @@ function assertReuseUploadHasNoSecrets(value) {
   assert.equal(serialized.includes("x-helm-wrap-token"), false);
 }
 
-test("usageReuseFromStored maps WorkReuse to the web#33 body", () => {
+test("usageReuseFromStored maps WorkReuse to raw pairing evidence", () => {
   const upload = usageReuseFromStored({
     reuse: STORED_REUSE,
+    record: {
+      model: "claude-sonnet-4-20250514",
+      input_tokens: 11,
+      output_tokens: 7,
+      cache_write_tokens: 0,
+      cache_read_tokens: 0,
+    },
     sessionKey: REUSE_SESSION_KEY,
     environment: "default",
   });
@@ -330,21 +339,30 @@ test("usageReuseFromStored maps WorkReuse to the web#33 body", () => {
     path_hints: ["app/Support/TeamUsageRollup.php"],
     tool_names: ["Read"],
     session_key: REUSE_SESSION_KEY,
-    avoided_usd: 1.25,
+    model: "claude-sonnet-4-20250514",
+    input_tokens: 11,
+    output_tokens: 7,
+    cache_write_tokens: 0,
+    cache_read_tokens: 0,
     occurred_at: "2026-08-21T05:10:00.123Z",
     original_occurred_at: "2026-08-21T04:05:00+00:00",
     environment: "default",
   });
   assert.deepEqual(Object.keys(upload).sort(), [
-    "avoided_usd",
+    "cache_read_tokens",
+    "cache_write_tokens",
     "environment",
+    "input_tokens",
+    "model",
     "occurred_at",
     "original_occurred_at",
+    "output_tokens",
     "path_hints",
     "project_hint",
     "session_key",
     "tool_names",
   ]);
+  assert.equal(Object.hasOwn(upload, "avoided_usd"), false);
   assertReuseUploadHasNoSecrets(upload);
 });
 
@@ -365,14 +383,14 @@ test("usageReuseFromStored never copies payload, content, or prompt", () => {
   assertReuseUploadHasNoSecrets(upload);
 });
 
-test("null avoided_usd is sent as null and is not invented", () => {
+test("stored avoided_usd is omitted and is not invented on the wire", () => {
   const upload = usageReuseFromStored({
-    reuse: { ...STORED_REUSE, avoided_usd: null },
+    reuse: { ...STORED_REUSE, avoided_usd: 1.25 },
     sessionKey: REUSE_SESSION_KEY,
     environment: "default",
   });
-  assert.equal(upload.avoided_usd, null);
-  assert.match(JSON.stringify(upload), /"avoided_usd":null/);
+  assert.equal(Object.hasOwn(upload, "avoided_usd"), false);
+  assert.equal(JSON.stringify(upload).includes("avoided_usd"), false);
   assert.equal(JSON.stringify(upload).includes("$"), false);
   assert.equal(JSON.stringify(upload).includes("1.25"), false);
 });
@@ -547,9 +565,11 @@ test("pass-through happy path forwards auth and body, records usage, never uploa
     assert.equal(usagePost.body.events[0].provider, "claude");
     assert.equal(usagePost.body.events[0].model, "claude-sonnet-4-20250514");
     assert.equal(usagePost.body.events[0].project_hint, "billing");
+    assert.equal(usagePost.body.events[0].project_id, null);
     assert.equal(usagePost.body.events[0].input_tokens, 11);
     assert.equal(usagePost.body.events[0].output_tokens, 7);
     assert.equal(usagePost.body.events[0].shared_context_savings_usd, undefined);
+    assert.equal(Object.hasOwn(usagePost.body.events[0], "cost_usd"), false);
     const fingerprintPost = helmPosts.find((post) => post.kind === "fingerprints");
     assert.ok(fingerprintPost);
     for (const fingerprint of fingerprintPost.body.fingerprints) {
@@ -935,14 +955,17 @@ test("wrap bind is a proxy token in the URL wrap already writes", () => {
 });
 
 test("lookup requires same project, overlapping paths, same tool, and a payload", () => {
-  const record = {
+    const record = {
     project_hint: "billing",
     path_hints: ["src/Foo.php"],
     tool_names: ["Read"],
     session_key: "abc",
+    model: "claude-sonnet-4-20250514",
     cost_usd: 0.0123,
     input_tokens: 11,
     output_tokens: 7,
+    cache_write_tokens: 0,
+    cache_read_tokens: 0,
     occurred_at: NOW.toISOString(),
     payload: { kind: "tool_results", results: [{ tool_name: "Read", path_hint: "src/Foo.php", content: TOOL_RESULT }] },
   };
@@ -1056,8 +1079,11 @@ test("first proxied request stores a work record and injects the wrap line", asy
     assert.deepEqual(cache.records[0].tool_names, ["Read"]);
     assert.equal(typeof cache.records[0].session_key, "string");
     assert.equal(typeof cache.records[0].cost_usd, "number");
+    assert.equal(cache.records[0].model, "claude-sonnet-4-20250514");
     assert.equal(cache.records[0].input_tokens, 11);
     assert.equal(cache.records[0].output_tokens, 7);
+    assert.equal(cache.records[0].cache_write_tokens, 0);
+    assert.equal(cache.records[0].cache_read_tokens, 0);
     assert.equal(cache.records[0].payload.kind, "tool_results");
     assert.equal(cache.records[0].payload.results[0].content, TOOL_RESULT);
     const cacheText = fs.readFileSync(cachePath, "utf8");
@@ -1163,7 +1189,7 @@ test("second matching request reuses stored tool work and does not call the prov
 
     const cache = readWorkCache(cachePath);
     assert.equal(cache.reuses.length, 1);
-    assert.equal(cache.reuses[0].avoided_usd, stored.cost_usd);
+    assert.equal(cache.reuses[0].avoided_usd, null);
     assert.equal(fs.readFileSync(cachePath, "utf8").includes(SECRET), false);
     const fingerprintPosts = helmPosts.filter((post) => post.kind === "fingerprints");
     assert.ok(fingerprintPosts.length >= 2);
@@ -1176,11 +1202,16 @@ test("second matching request reuses stored tool work and does not call the prov
       path_hints: stored.path_hints,
       tool_names: stored.tool_names,
       session_key: stored.session_key,
-      avoided_usd: stored.cost_usd,
+      model: stored.model,
+      input_tokens: stored.input_tokens,
+      output_tokens: stored.output_tokens,
+      cache_write_tokens: stored.cache_write_tokens,
+      cache_read_tokens: stored.cache_read_tokens,
       occurred_at: cache.reuses[0].reused_at,
       original_occurred_at: stored.occurred_at,
       environment: "default",
     });
+    assert.equal(Object.hasOwn(reusePosts[0].body.reuses[0], "avoided_usd"), false);
     assert.equal(JSON.stringify(helmPosts).includes(SECRET), false);
     assert.equal(JSON.stringify(helmPosts).includes("\"prompt\""), false);
     assertReuseUploadHasNoSecrets(reusePosts[0].body);
@@ -1626,7 +1657,9 @@ test("a wrapped local miss serves teammate bytes from the team store", async () 
 
     const reusePosts = helmPosts.filter((post) => post.kind === "reuses");
     assert.equal(reusePosts.length, 1);
-    assert.equal(reusePosts[0].body.reuses[0].avoided_usd, 0.02);
+    assert.equal(Object.hasOwn(reusePosts[0].body.reuses[0], "avoided_usd"), false);
+    assert.equal(reusePosts[0].body.reuses[0].model, null);
+    assert.equal(reusePosts[0].body.reuses[0].input_tokens, null);
     assert.equal(reusePosts[0].body.reuses[0].original_occurred_at, TEAM_OCCURRED_AT);
     assert.equal(JSON.stringify(reusePosts[0].body).includes(proxy.wrapToken), false);
   } finally {

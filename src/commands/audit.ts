@@ -24,7 +24,7 @@ import {
   type TeamRollupObserved,
 } from "../lib/audit-snapshot.js";
 import { runLocalScan } from "../lib/local-scan.js";
-import { getTeamUsage, sendUsageEvents } from "../lib/api-web.js";
+import { getTeamUsage, sendUsageEvents, usageEventToUpload } from "../lib/api-web.js";
 import { getApiUrl, loadCredentials, loadMachineIdentity } from "../lib/config.js";
 import { defaultWorkCachePath, readWorkCache, summarizeWorkReuses } from "../lib/proxy-work-cache.js";
 
@@ -410,7 +410,7 @@ export async function auditCommand(options: AuditCommandOptions): Promise<void> 
         const response = await sendUsageEvents({
           source: "scan",
           device_ulid: machine?.ulid ?? null,
-          events: batch,
+          events: batch.map(usageEventToUpload),
         });
         accepted += response.accepted ?? batch.length;
       }
