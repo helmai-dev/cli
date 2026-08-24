@@ -411,7 +411,10 @@ async function handleProxyRequest(
           reuses = [
             usageReuseFromStored({
               reuse: storedReuse,
-              record: teamRecord,
+              record: {
+                ...teamRecord,
+                model: teamRecord.model ?? (model !== "unknown" ? model : null),
+              },
               sessionKey: teamRecord.session_key !== "" ? teamRecord.session_key : null,
               environment: hooks.environment ?? getActiveEnvironment(),
             }),
@@ -635,7 +638,7 @@ async function reportAfterResponse(input: {
             sessionKey,
             prompt: lastUserPromptFromRequestBody(input.parsed),
             payload,
-            costUsd: usageRecord ? usageRecord.cost_usd : null,
+            costUsd: null,
             occurredAt: input.now,
             environment: input.hooks.environment ?? getActiveEnvironment(),
           }),

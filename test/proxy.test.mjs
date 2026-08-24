@@ -311,6 +311,14 @@ const STORED_REUSE = {
 
 const REUSE_SESSION_KEY = "ses_01K3ZB4YJQWERTYUIOPASDFGHJ";
 
+const EMPTY_REUSE_RECORD = {
+  model: null,
+  input_tokens: null,
+  output_tokens: null,
+  cache_write_tokens: null,
+  cache_read_tokens: null,
+};
+
 function assertReuseUploadHasNoSecrets(value) {
   const serialized = JSON.stringify(value);
   assert.equal(serialized.includes(SECRET), false);
@@ -374,6 +382,7 @@ test("usageReuseFromStored never copies payload, content, or prompt", () => {
       content: SECRET,
       prompt: SECRET,
     },
+    record: EMPTY_REUSE_RECORD,
     sessionKey: REUSE_SESSION_KEY,
     environment: "default",
   });
@@ -386,6 +395,7 @@ test("usageReuseFromStored never copies payload, content, or prompt", () => {
 test("stored avoided_usd is omitted and is not invented on the wire", () => {
   const upload = usageReuseFromStored({
     reuse: { ...STORED_REUSE, avoided_usd: 1.25 },
+    record: EMPTY_REUSE_RECORD,
     sessionKey: REUSE_SESSION_KEY,
     environment: "default",
   });
@@ -401,6 +411,7 @@ test("sendUsageReuses POSTs /usage/reuses and nothing else", async () => {
     reuses: [
       usageReuseFromStored({
         reuse: STORED_REUSE,
+        record: EMPTY_REUSE_RECORD,
         sessionKey: REUSE_SESSION_KEY,
         environment: "default",
       }),
@@ -432,6 +443,7 @@ test("unlinked or failed Helm Web posts fail open", async () => {
   const reuses = [
     usageReuseFromStored({
       reuse: STORED_REUSE,
+      record: EMPTY_REUSE_RECORD,
       sessionKey: REUSE_SESSION_KEY,
       environment: "default",
     }),
@@ -1502,7 +1514,7 @@ test("wrapped 2xx POSTs a bounded excerpt to the team store when enabled", async
     // The ask is the most recent user text turn — the tool-result turn is
     // already captured as tool bytes.
     assert.equal(excerpt.prompt_excerpt, SECRET);
-    assert.equal(excerpt.cost_usd > 0, true);
+    assert.equal(excerpt.cost_usd, null);
     assert.equal(excerpt.occurred_at, NOW.toISOString());
     assert.equal(excerpt.environment, "default");
     assert.deepEqual(excerpt.tool_excerpts, [
@@ -1658,7 +1670,7 @@ test("a wrapped local miss serves teammate bytes from the team store", async () 
     const reusePosts = helmPosts.filter((post) => post.kind === "reuses");
     assert.equal(reusePosts.length, 1);
     assert.equal(Object.hasOwn(reusePosts[0].body.reuses[0], "avoided_usd"), false);
-    assert.equal(reusePosts[0].body.reuses[0].model, null);
+    assert.equal(reusePosts[0].body.reuses[0].model, "claude-sonnet-4-20250514");
     assert.equal(reusePosts[0].body.reuses[0].input_tokens, null);
     assert.equal(reusePosts[0].body.reuses[0].original_occurred_at, TEAM_OCCURRED_AT);
     assert.equal(JSON.stringify(reusePosts[0].body).includes(proxy.wrapToken), false);

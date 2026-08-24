@@ -24,7 +24,7 @@ export interface ProxyReportDeps {
 
 export function usageReuseFromStored(input: {
   reuse: WorkReuse;
-  record?: Pick<
+  record: Pick<
     WorkRecord,
     "model" | "input_tokens" | "output_tokens" | "cache_write_tokens" | "cache_read_tokens"
   >;
@@ -37,11 +37,11 @@ export function usageReuseFromStored(input: {
     path_hints: [...input.reuse.path_hints],
     tool_names: [...input.reuse.tool_names],
     session_key: input.sessionKey !== null && input.sessionKey !== "" ? input.sessionKey : null,
-    model: record?.model ?? null,
-    input_tokens: record?.input_tokens ?? null,
-    output_tokens: record?.output_tokens ?? null,
-    cache_write_tokens: record?.cache_write_tokens ?? null,
-    cache_read_tokens: record?.cache_read_tokens ?? null,
+    model: record.model,
+    input_tokens: record.input_tokens,
+    output_tokens: record.output_tokens,
+    cache_write_tokens: record.cache_write_tokens,
+    cache_read_tokens: record.cache_read_tokens,
     occurred_at: input.reuse.reused_at,
     original_occurred_at: input.reuse.original_occurred_at,
     environment: input.environment,
