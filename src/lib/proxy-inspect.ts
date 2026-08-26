@@ -8,7 +8,7 @@ import {
   type WorkPathCandidate,
 } from "./fingerprints.js";
 import type { LiveOverlapPerson } from "./api-web.js";
-import type { UsageEventUpload } from "./api-web.js";
+import { usageEventToUpload, type UsageEventUpload } from "./api-web.js";
 import { formatLiveOverlapNotice } from "./live-overlap.js";
 
 export type ProxiedProvider = "anthropic" | "openai";
@@ -472,7 +472,7 @@ export function buildLiveUsageRecord(input: {
 }
 
 export function liveUsageToUpload(record: LiveUsageRecord): UsageEventUpload {
-  return {
+  return usageEventToUpload({
     provider: record.provider,
     model: record.model,
     project_hint: record.project_hint,
@@ -484,8 +484,7 @@ export function liveUsageToUpload(record: LiveUsageRecord): UsageEventUpload {
     output_tokens: record.output_tokens,
     cache_write_tokens: record.cache_write_tokens,
     cache_read_tokens: record.cache_read_tokens,
-    cost_usd: record.cost_usd,
-  };
+  });
 }
 
 export const DEFAULT_PROXY_HOST = "127.0.0.1";

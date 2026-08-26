@@ -347,6 +347,7 @@ async function handleProxyRequest(
         reuses = [
           usageReuseFromStored({
             reuse: storedReuse,
+            record: lookup.record,
             sessionKey: lookup.record.session_key,
             environment: hooks.environment ?? getActiveEnvironment(),
           }),
@@ -410,6 +411,10 @@ async function handleProxyRequest(
           reuses = [
             usageReuseFromStored({
               reuse: storedReuse,
+              record: {
+                ...teamRecord,
+                model: teamRecord.model ?? (model !== "unknown" ? model : null),
+              },
               sessionKey: teamRecord.session_key !== "" ? teamRecord.session_key : null,
               environment: hooks.environment ?? getActiveEnvironment(),
             }),
@@ -609,9 +614,12 @@ async function reportAfterResponse(input: {
             path_hints: input.workKey.path_hints,
             tool_names: input.workKey.tool_names,
             session_key: sessionKey,
+            model: input.model !== "unknown" ? input.model : null,
             cost_usd: usageRecord ? usageRecord.cost_usd : null,
             input_tokens: input.usage ? input.usage.input_tokens : null,
             output_tokens: input.usage ? input.usage.output_tokens : null,
+            cache_write_tokens: input.usage ? input.usage.cache_write_tokens : null,
+            cache_read_tokens: input.usage ? input.usage.cache_read_tokens : null,
             occurred_at: input.now.toISOString(),
             payload,
           },
@@ -630,7 +638,7 @@ async function reportAfterResponse(input: {
             sessionKey,
             prompt: lastUserPromptFromRequestBody(input.parsed),
             payload,
-            costUsd: usageRecord ? usageRecord.cost_usd : null,
+            costUsd: null,
             occurredAt: input.now,
             environment: input.hooks.environment ?? getActiveEnvironment(),
           }),

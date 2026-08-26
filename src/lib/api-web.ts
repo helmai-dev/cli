@@ -623,8 +623,38 @@ export interface UsageEventUpload {
   output_tokens: number;
   cache_write_tokens: number;
   cache_read_tokens: number;
-  cost_usd: number;
+  /** Optional observed hint only. Omit so Helm Web prices the row. */
+  cost_usd?: number | null;
   metrics?: Record<string, number>;
+}
+
+/** Day-level scan/live row for POST /usage/events. Raw counts only. */
+export function usageEventToUpload(event: {
+  provider: string;
+  model: string;
+  project_hint: string;
+  project_id: string | null;
+  day: string;
+  sessions: number;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_write_tokens: number;
+  cache_read_tokens: number;
+}): UsageEventUpload {
+  return {
+    provider: event.provider,
+    model: event.model,
+    project_hint: event.project_hint,
+    project_id: event.project_id,
+    day: event.day,
+    sessions: event.sessions,
+    calls: event.calls,
+    input_tokens: event.input_tokens,
+    output_tokens: event.output_tokens,
+    cache_write_tokens: event.cache_write_tokens,
+    cache_read_tokens: event.cache_read_tokens,
+  };
 }
 
 export interface UsageEventsBody {
@@ -645,7 +675,11 @@ export interface UsageReuseUpload {
   readonly path_hints: readonly string[];
   readonly tool_names: readonly string[];
   readonly session_key: string | null;
-  readonly avoided_usd: number | null;
+  readonly model: string | null;
+  readonly input_tokens: number | null;
+  readonly output_tokens: number | null;
+  readonly cache_write_tokens: number | null;
+  readonly cache_read_tokens: number | null;
   readonly occurred_at: string;
   readonly original_occurred_at: string;
   readonly environment: string;

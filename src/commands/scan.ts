@@ -10,7 +10,7 @@
 import chalk from "chalk";
 import { type ScanSummary } from "../lib/claude-scan.js";
 import { decideScanAuth, hasLinkedAccount, refuseUnlinkedAccount } from "../lib/account-link.js";
-import { sendUsageEvents } from "../lib/api-web.js";
+import { sendUsageEvents, usageEventToUpload } from "../lib/api-web.js";
 import { getApiUrl, loadCredentials, loadMachineIdentity } from "../lib/config.js";
 import { runLocalScan } from "../lib/local-scan.js";
 
@@ -105,7 +105,7 @@ export async function scanCommand(options: ScanCommandOptions): Promise<void> {
         const response = await sendUsageEvents({
           source: "scan",
           device_ulid: machine?.ulid ?? null,
-          events: batch,
+          events: batch.map(usageEventToUpload),
         });
         upload.accepted += response.accepted ?? batch.length;
       }

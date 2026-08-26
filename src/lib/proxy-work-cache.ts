@@ -26,9 +26,12 @@ export interface WorkRecord {
   readonly path_hints: readonly string[];
   readonly tool_names: readonly string[];
   readonly session_key: string;
+  readonly model: string | null;
   readonly cost_usd: number | null;
   readonly input_tokens: number | null;
   readonly output_tokens: number | null;
+  readonly cache_write_tokens: number | null;
+  readonly cache_read_tokens: number | null;
   readonly occurred_at: string;
   readonly payload: ToolResultPayload | null;
 }
@@ -186,14 +189,29 @@ function parseRecord(value: unknown): WorkRecord | null {
     typeof value.output_tokens === "number" && Number.isFinite(value.output_tokens)
       ? Math.floor(value.output_tokens)
       : null;
+  const cache_write_tokens =
+    typeof value.cache_write_tokens === "number" && Number.isFinite(value.cache_write_tokens)
+      ? Math.floor(value.cache_write_tokens)
+      : null;
+  const cache_read_tokens =
+    typeof value.cache_read_tokens === "number" && Number.isFinite(value.cache_read_tokens)
+      ? Math.floor(value.cache_read_tokens)
+      : null;
+  const model =
+    typeof value.model === "string" && value.model !== "" && value.model !== "unknown"
+      ? value.model
+      : null;
   return {
     project_hint: value.project_hint,
     path_hints,
     tool_names,
     session_key: value.session_key,
+    model,
     cost_usd,
     input_tokens,
     output_tokens,
+    cache_write_tokens,
+    cache_read_tokens,
     occurred_at: value.occurred_at,
     payload: parsePayload(value.payload),
   };
@@ -338,7 +356,7 @@ export function recordReuse(input: {
     project_hint: input.record.project_hint,
     path_hints: input.record.path_hints,
     tool_names: input.record.tool_names,
-    avoided_usd: input.record.cost_usd,
+    avoided_usd: null,
     original_occurred_at: input.record.occurred_at,
   };
   return {
