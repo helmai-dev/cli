@@ -1515,6 +1515,12 @@ test("wrapped 2xx POSTs a bounded excerpt to the team store when enabled", async
     // already captured as tool bytes.
     assert.equal(excerpt.prompt_excerpt, SECRET);
     assert.equal(excerpt.cost_usd, null);
+    // Original-work counts ride along so a teammate's hit prices on web.
+    assert.equal(excerpt.model, "claude-sonnet-4-20250514");
+    assert.equal(excerpt.input_tokens, 11);
+    assert.equal(excerpt.output_tokens, 7);
+    assert.equal(excerpt.cache_write_tokens, 0);
+    assert.equal(excerpt.cache_read_tokens, 0);
     assert.equal(excerpt.occurred_at, NOW.toISOString());
     assert.equal(excerpt.environment, "default");
     assert.deepEqual(excerpt.tool_excerpts, [
@@ -1632,6 +1638,13 @@ test("a wrapped local miss serves teammate bytes from the team store", async () 
             prompt_excerpt: "teammate ask",
             tool_excerpts: [{ tool_name: "Read", path_hint: "src/Foo.php", content: TOOL_RESULT }],
             cost_usd: 0.02,
+            // Maya's original work billed on a different model than this
+            // request. The reuse row must carry her counts, not ours.
+            model: "claude-haiku-4-5",
+            input_tokens: 21,
+            output_tokens: 9,
+            cache_write_tokens: 0,
+            cache_read_tokens: 5,
             occurred_at: TEAM_OCCURRED_AT,
             author_name: "Maya",
           },
@@ -1670,8 +1683,11 @@ test("a wrapped local miss serves teammate bytes from the team store", async () 
     const reusePosts = helmPosts.filter((post) => post.kind === "reuses");
     assert.equal(reusePosts.length, 1);
     assert.equal(Object.hasOwn(reusePosts[0].body.reuses[0], "avoided_usd"), false);
-    assert.equal(reusePosts[0].body.reuses[0].model, "claude-sonnet-4-20250514");
-    assert.equal(reusePosts[0].body.reuses[0].input_tokens, null);
+    assert.equal(reusePosts[0].body.reuses[0].model, "claude-haiku-4-5");
+    assert.equal(reusePosts[0].body.reuses[0].input_tokens, 21);
+    assert.equal(reusePosts[0].body.reuses[0].output_tokens, 9);
+    assert.equal(reusePosts[0].body.reuses[0].cache_write_tokens, 0);
+    assert.equal(reusePosts[0].body.reuses[0].cache_read_tokens, 5);
     assert.equal(reusePosts[0].body.reuses[0].original_occurred_at, TEAM_OCCURRED_AT);
     assert.equal(JSON.stringify(reusePosts[0].body).includes(proxy.wrapToken), false);
   } finally {

@@ -735,6 +735,12 @@ export interface UsageExcerptUploadBody {
     readonly prompt_excerpt: string | null;
     readonly tool_excerpts: readonly UsageExcerptToolEntry[] | null;
     readonly cost_usd: number | null;
+    /** Original-work model and token buckets so team hits price on web. */
+    readonly model: string | null;
+    readonly input_tokens: number | null;
+    readonly output_tokens: number | null;
+    readonly cache_write_tokens: number | null;
+    readonly cache_read_tokens: number | null;
     readonly occurred_at: string;
     readonly environment: string | null;
   };
@@ -754,6 +760,12 @@ export interface TeamWorkExcerptCandidate {
   readonly prompt_excerpt: string | null;
   readonly tool_excerpts: readonly UsageExcerptToolEntry[] | null;
   readonly cost_usd: number | null;
+  /** Absent on rows stored by pre-1.3.13 CLIs. */
+  readonly model?: string | null;
+  readonly input_tokens?: number | null;
+  readonly output_tokens?: number | null;
+  readonly cache_write_tokens?: number | null;
+  readonly cache_read_tokens?: number | null;
   readonly occurred_at: string;
   readonly author_name: string | null;
 }

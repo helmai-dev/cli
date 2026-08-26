@@ -75,6 +75,12 @@ export interface ExcerptUploadParts {
   readonly prompt: string | null;
   readonly payload: ToolResultPayload | null;
   readonly costUsd: number | null;
+  /** Original-work model and token counts observed at this intercept. */
+  readonly model: string | null;
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly cacheWriteTokens: number | null;
+  readonly cacheReadTokens: number | null;
   readonly occurredAt: Date;
   readonly environment: string | null;
 }
@@ -101,6 +107,11 @@ export function excerptUploadFromParts(
     prompt_excerpt: input.prompt,
     tool_excerpts: toolEntriesFromPayload(input.payload),
     cost_usd: input.costUsd,
+    model: input.model,
+    input_tokens: input.inputTokens,
+    output_tokens: input.outputTokens,
+    cache_write_tokens: input.cacheWriteTokens,
+    cache_read_tokens: input.cacheReadTokens,
     occurred_at: input.occurredAt.toISOString(),
     environment: input.environment ?? null,
   };
@@ -143,18 +154,26 @@ function candidateToRecord(candidate: TeamWorkExcerptCandidate): WorkRecord | nu
     path_hints: candidate.path_hints.filter((item): item is string => typeof item === "string"),
     tool_names: candidate.tool_names.filter((item): item is string => typeof item === "string"),
     session_key: typeof candidate.session_key === "string" ? candidate.session_key : "",
-    model: null,
+    model:
+      typeof candidate.model === "string" && candidate.model !== "" ? candidate.model : null,
     cost_usd:
       typeof candidate.cost_usd === "number" && Number.isFinite(candidate.cost_usd)
         ? candidate.cost_usd
         : null,
-    input_tokens: null,
-    output_tokens: null,
-    cache_write_tokens: null,
-    cache_read_tokens: null,
+    input_tokens: tokenCount(candidate.input_tokens),
+    output_tokens: tokenCount(candidate.output_tokens),
+    cache_write_tokens: tokenCount(candidate.cache_write_tokens),
+    cache_read_tokens: tokenCount(candidate.cache_read_tokens),
     occurred_at: new Date(occurredMs).toISOString(),
     payload: { kind: "tool_results", results },
   };
+}
+
+/** Rows stored by pre-1.3.13 CLIs carry no counts; those stay null. */
+function tokenCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : null;
 }
 
 /**
