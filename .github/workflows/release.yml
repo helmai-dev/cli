@@ -29,12 +29,17 @@ jobs:
         id: ver
         run: echo "value=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
-      - name: Skip if already published
+      - name: Skip if already released
         id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if npm view "@helmai/cli@${{ steps.ver.outputs.value }}" version 2>/dev/null | grep -qF "${{ steps.ver.outputs.value }}"; then
+          # Guard on the GitHub release, not npm: npm publishing has been
+          # failing (stale at 1.3.0), so the npm check let same-version
+          # pushes rebuild an existing tag's assets in place.
+          if gh release view "v${{ steps.ver.outputs.value }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             echo "skip=true" >> $GITHUB_OUTPUT
-            echo "Version ${{ steps.ver.outputs.value }} already published — skipping."
+            echo "Release v${{ steps.ver.outputs.value }} already exists — skipping."
           else
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
