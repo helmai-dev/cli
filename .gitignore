@@ -3,4 +3,5 @@ dist/
 *.js.map
 
 .helm/
+.amp/portals/*
 .DS_Store
