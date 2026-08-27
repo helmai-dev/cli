@@ -126,7 +126,7 @@ export async function setupCommand(): Promise<void> {
     console.log(
       chalk.gray(
         "  Point Claude Code or Codex at Helm on this laptop, then connect and scan.\n" +
-          "  Each step asks first; nothing is silent. Prompts stay on this machine.\n",
+          "  Each step asks first; nothing is silent. Linked wraps send only bounded receipt excerpts.\n",
       ),
     );
 
@@ -222,7 +222,7 @@ export async function setupCommand(): Promise<void> {
     console.log(chalk.cyan.bold("  Setup complete."));
     console.log(
       chalk.gray(
-        "  `helm wrap claude` / `helm wrap codex` is the laptop intercept. Prompts stay here.",
+        "  `helm wrap claude` / `helm wrap codex` is the laptop intercept. Full transcripts stay here.",
       ),
     );
     console.log(`  Your team dashboard: ${chalk.underline(`${getApiUrl()}/usage`)}\n`);

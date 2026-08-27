@@ -1,9 +1,9 @@
 # Two-laptop demo rehearsal
 
-The sentence this demo proves, live: **"You spent $X and we found $Y you
-did not need to spend."** Every number on screen is server-priced from
-tokens observed at the wrap intercept. Nothing is seeded, nothing is a
-rate guess.
+This rehearsal proves the Observe and Diagnose path: live wrapped spend,
+bounded receipts, and overlapping work across two people. It does not claim
+avoidable dollars from path/tool overlap. Only a verified replay of an
+identical non-streaming request can bypass the provider and create a reuse row.
 
 Run this end-to-end at least once before demo day. Unit tests do not
 prove the demo; the built binary against production does.
@@ -46,7 +46,7 @@ Two physical machines beat one machine with two OS users — the story is
 | Signal | Window |
 |---|---|
 | Live teammate overlap notice | 120 minutes |
-| Local + team work reuse | 24 hours after the original work |
+| Verified local replay / team receipt retrieval | 24 hours after the original work |
 | Overlapping sessions / Duplicate bucket | rollup window (30 days), needs ≥2 shared path hints |
 | `/usage` rollup | 30 days |
 
@@ -97,58 +97,34 @@ least two of the same files** A touched:
 of A's files, not one. Both sessions need a `session_key` (any 1.3.10+
 wrap provides it).
 
-## Beat 3 — Local reuse dollars (Laptop A)
+## Beat 3 — Different asks do not auto-reuse (Laptop A)
 
 Within 24h of Beat 1, make A's agent redo the same tool work — same
 project, same file, same tool:
 
 > Read src/lib/config.ts again and list its exported functions.
 
-**Verify:**
+**Verify:** the provider handles the new ask normally. The response must not
+contain `HELM REUSED PRIOR WORK`. `/usage` may diagnose repeated context, but
+avoidable spend must not increase from this overlap alone.
 
-- The response carries the Helm line: `HELM REUSED PRIOR WORK` — the
-  provider was never called for the cached tool bytes.
-- `/usage` Repeated context now shows a dollar (server-priced from the
-  original request's tokens), and the headline flips to
-  **"You spent $X and we found $Y you did not need to spend."**
-- `helm audit` prints the local reuse count.
-
-**If it fails:** the hit rule is same wrap token + same project +
-overlapping paths + same tool + under 24h + stored tool bytes. A new
-`helm wrap` mints a new token — don't re-wrap between beats. Tool
-results over 64k chars are not cached.
-
-## Beat 4 — Team reuse (Laptop B): the money moment
+## Beat 4 — Team work is retrieval context, not an automatic bypass
 
 B never did A's work. Within 24h of Beat 1, ask B's agent for work that
 matches A's cached tool call:
 
 > Read src/lib/config.ts and explain how environments resolve.
 
-**Verify:**
-
-- B's response includes the reuse line suffixed **(team)** —
-  `HELM REUSED PRIOR WORK. Did not send that tool work to the
-  provider. (team)`. Maya's laptop skipped the provider using work
-  Dana already paid for. (The 120-minute live notice is what names
-  Dana; the reuse line marks the source as team.)
-- The reuse row carries Dana's original model + token counts (shipped
-  in 1.3.13), so `/usage` Repeated context grows by the server-priced
-  cost of Dana's original request — "found $Y" rises live on stage.
-
-**If it fails:** confirm both machines are linked to the same team, the
-project directory names match exactly, and Beat 1 happened under 24h
-ago. The excerpt lookup fails open — a miss silently forwards to the
-provider (the demo still works, just without the reuse line). If B hit
-locally instead of via team (from an earlier rehearsal), clear B's
-`proxy-work.json` and repeat.
+**Verify:** Helm can surface Dana's receipt through `retrieve_team_work`, while
+B's model request still reaches the provider. The response must not contain a
+team reuse line. This is observed overlap until a future workload identity and
+replayable team artifact prove equivalence.
 
 ## Closing screen
 
-End on `/usage`: total spend, the asks people actually made, avoidable
-spend with a real dollar, duplicate workloads with names, and the
-honest empty states ("not quantified yet") for the detectors we have
-not built. That honesty is part of the pitch.
+End on `/usage`: total spend, the asks people actually made, overlapping
+workloads with names, and honest empty states ("not quantified yet") for
+unverified savings. That honesty is part of the pitch.
 
 ## Stage-day insurance
 

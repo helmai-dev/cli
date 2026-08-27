@@ -1,26 +1,16 @@
 /**
  * Slice-6 team work excerpts (2026-08-21 excerpt lock). The wrap stores and
  * POSTs bounded excerpts — the last user ask plus tool-result bytes already
- * on the request — and, on a local miss, looks up a teammate's stored work.
- * Never whole transcripts, system/developer messages, credentials, or wrap
- * tokens. Every network step fails open.
+ * on the request. Agents can retrieve them through Helm's MCP tools. Never
+ * whole transcripts, system/developer messages, credentials, or wrap tokens.
  */
 
 import {
-  WORK_CACHE_WINDOW_MS,
-  WORK_CACHE_KIND,
-  lookupWork,
   type ToolResultEntry,
   type ToolResultPayload,
-  type WorkCacheFile,
   type WorkKey,
-  type WorkLookup,
-  type WorkRecord,
 } from "./proxy-work-cache.js";
-import type {
-  TeamWorkExcerptCandidate,
-  UsageExcerptUploadBody,
-} from "./api-web.js";
+import type { UsageExcerptUploadBody } from "./api-web.js";
 
 /** Prompt excerpt stays below the 64k tool cap so dashboards stay readable. */
 export const PROMPT_EXCERPT_MAX_CHARS = 32_000;
@@ -115,108 +105,4 @@ export function excerptUploadFromParts(
     occurred_at: input.occurredAt.toISOString(),
     environment: input.environment ?? null,
   };
-}
-
-export type TeamWorkFetcher = (query: {
-  project_hint: string;
-  tool_names?: readonly string[];
-}) => Promise<TeamWorkExcerptCandidate[]>;
-
-function candidateToRecord(candidate: TeamWorkExcerptCandidate): WorkRecord | null {
-  if (
-    typeof candidate?.project_hint !== "string" ||
-    candidate.project_hint === "" ||
-    !Array.isArray(candidate.path_hints) ||
-    !Array.isArray(candidate.tool_names)
-  ) {
-    return null;
-  }
-  const occurredMs = Date.parse(String(candidate.occurred_at));
-  if (!Number.isFinite(occurredMs)) {
-    return null;
-  }
-  const results =
-    Array.isArray(candidate.tool_excerpts) && candidate.tool_excerpts.length > 0
-      ? candidate.tool_excerpts.filter(
-          (entry): entry is ToolResultEntry =>
-            isPlainRecord(entry) &&
-            typeof entry.tool_name === "string" &&
-            entry.tool_name !== "" &&
-            typeof entry.content === "string" &&
-            entry.content !== "",
-        )
-      : [];
-  if (results.length === 0) {
-    return null;
-  }
-  return {
-    project_hint: candidate.project_hint,
-    path_hints: candidate.path_hints.filter((item): item is string => typeof item === "string"),
-    tool_names: candidate.tool_names.filter((item): item is string => typeof item === "string"),
-    session_key: typeof candidate.session_key === "string" ? candidate.session_key : "",
-    model:
-      typeof candidate.model === "string" && candidate.model !== "" ? candidate.model : null,
-    cost_usd:
-      typeof candidate.cost_usd === "number" && Number.isFinite(candidate.cost_usd)
-        ? candidate.cost_usd
-        : null,
-    input_tokens: tokenCount(candidate.input_tokens),
-    output_tokens: tokenCount(candidate.output_tokens),
-    cache_write_tokens: tokenCount(candidate.cache_write_tokens),
-    cache_read_tokens: tokenCount(candidate.cache_read_tokens),
-    occurred_at: new Date(occurredMs).toISOString(),
-    payload: { kind: "tool_results", results },
-  };
-}
-
-/** Rows stored by pre-1.3.13 CLIs carry no counts; those stay null. */
-function tokenCount(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? Math.floor(value)
-    : null;
-}
-
-/**
- * Apply the exact local hit rule to team candidates: same project, overlapping
- * path set, overlapping tool set, newest match inside the window, non-empty
- * tool bytes. Reuses `lookupWork` so local and team hits can never drift.
- */
-export async function teamReuseLookup(input: {
-  key: WorkKey;
-  now: Date;
-  windowMs?: number;
-  fetchTeamWork: TeamWorkFetcher;
-}): Promise<WorkLookup> {
-  if (input.key.project_hint === "" || input.key.tool_names.length === 0) {
-    return { kind: "forward", reason: "no_facts" };
-  }
-  let candidates: TeamWorkExcerptCandidate[];
-  try {
-    candidates = await input.fetchTeamWork({
-      project_hint: input.key.project_hint,
-      tool_names: input.key.tool_names,
-    });
-  } catch {
-    return { kind: "forward", reason: "no_hit" };
-  }
-  if (!Array.isArray(candidates) || candidates.length === 0) {
-    return { kind: "forward", reason: "no_hit" };
-  }
-  const records: WorkRecord[] = [];
-  for (const candidate of candidates) {
-    const record = candidateToRecord(candidate);
-    if (record !== null) {
-      records.push(record);
-    }
-  }
-  if (records.length === 0) {
-    return { kind: "forward", reason: "no_payload" };
-  }
-  const synthetic: WorkCacheFile = { kind: WORK_CACHE_KIND, records, reuses: [] };
-  return lookupWork({
-    cache: synthetic,
-    key: input.key,
-    now: input.now,
-    windowMs: input.windowMs ?? WORK_CACHE_WINDOW_MS,
-  });
 }

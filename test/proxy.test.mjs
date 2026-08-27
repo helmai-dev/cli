@@ -40,9 +40,11 @@ import {
 import { listenProxy } from "../dist/lib/proxy-server.js";
 import { reportProxiedRequest, usageReuseFromStored } from "../dist/lib/proxy-report.js";
 import {
+  hashWorkloadRequest,
   lookupWork,
   parseWorkCache,
   readWorkCache,
+  replayResponseBody,
   WORK_CACHE_KIND,
 } from "../dist/lib/proxy-work-cache.js";
 
@@ -900,16 +902,19 @@ test("helm proxy --help names the loopback server", () => {
   const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist/index.js");
   const help = execFileSync(process.execPath, [cli, "proxy", "--help"], { encoding: "utf8" });
   assert.match(help, /127\.0\.0\.1|loopback|provider/i);
-  assert.match(help, /reuse/i);
+  assert.match(help, /replay/i);
 });
 
 const TOOL_RESULT = "<?php class Foo {}";
 
-function toolWorkBody(filePath = "/Users/team/billing/src/Foo.php") {
+function toolWorkBody(
+  filePath = "/Users/team/billing/src/Foo.php",
+  prompt = SECRET,
+) {
   return {
     model: "claude-sonnet-4-20250514",
     messages: [
-      { role: "user", content: SECRET },
+      { role: "user", content: prompt },
       {
         role: "assistant",
         content: [
@@ -966,8 +971,9 @@ test("wrap bind is a proxy token in the URL wrap already writes", () => {
   assert.equal(WRAP_BIND_HEADER, "x-helm-wrap-token");
 });
 
-test("lookup requires same project, overlapping paths, same tool, and a payload", () => {
-    const record = {
+test("lookup requires the exact request hash and a replayable provider response", () => {
+  const requestHash = hashWorkloadRequest(Buffer.from(JSON.stringify(toolWorkBody())));
+  const record = {
     project_hint: "billing",
     path_hints: ["src/Foo.php"],
     tool_names: ["Read"],
@@ -980,11 +986,14 @@ test("lookup requires same project, overlapping paths, same tool, and a payload"
     cache_read_tokens: 0,
     occurred_at: NOW.toISOString(),
     payload: { kind: "tool_results", results: [{ tool_name: "Read", path_hint: "src/Foo.php", content: TOOL_RESULT }] },
+    request_hash: requestHash,
+    response: { id: "msg_cached", content: [{ type: "text", text: "cached answer" }] },
   };
   const cache = { kind: WORK_CACHE_KIND, records: [record], reuses: [] };
   const hit = lookupWork({
     cache,
     key: { project_hint: "billing", path_hints: ["src/Foo.php"], tool_names: ["Read"] },
+    requestHash,
     now: NOW,
   });
   assert.equal(hit.kind, "reuse");
@@ -994,18 +1003,52 @@ test("lookup requires same project, overlapping paths, same tool, and a payload"
     lookupWork({
       cache,
       key: { project_hint: "billing", path_hints: ["src/Bar.php"], tool_names: ["Read"] },
+      requestHash,
       now: NOW,
     }).kind,
     "forward",
   );
   assert.equal(
     lookupWork({
-      cache: { kind: WORK_CACHE_KIND, records: [{ ...record, payload: null }], reuses: [] },
+      cache,
       key: { project_hint: "billing", path_hints: ["src/Foo.php"], tool_names: ["Read"] },
+      requestHash: hashWorkloadRequest(Buffer.from(JSON.stringify(toolWorkBody(undefined, "different ask")))),
+      now: NOW,
+    }).kind,
+    "forward",
+  );
+  assert.equal(
+    lookupWork({
+      cache: { kind: WORK_CACHE_KIND, records: [{ ...record, response: null }], reuses: [] },
+      key: { project_hint: "billing", path_hints: ["src/Foo.php"], tool_names: ["Read"] },
+      requestHash,
       now: NOW,
     }).reason,
-    "no_payload",
+    "no_replay",
   );
+});
+
+test("request identity is scoped to the provider route and checkout", () => {
+  const raw = Buffer.from(JSON.stringify(toolWorkBody()));
+  const first = hashWorkloadRequest(raw, "anthropic\0/v1/messages\0/Users/team/billing");
+  assert.equal(first, hashWorkloadRequest(raw, "anthropic\0/v1/messages\0/Users/team/billing"));
+  assert.notEqual(first, hashWorkloadRequest(raw, "openai\0/v1/messages\0/Users/team/billing"));
+  assert.notEqual(first, hashWorkloadRequest(raw, "anthropic\0/v1/messages\0/Users/team/other"));
+});
+
+test("OpenAI replay preserves the prior answer and reports zero new usage", () => {
+  const replay = replayResponseBody({
+    provider: "openai",
+    response: {
+      id: "chatcmpl_original",
+      choices: [{ index: 0, message: { role: "assistant", content: "cached answer" } }],
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    },
+    notice: "verified replay",
+  });
+  assert.equal(replay.id, "helm_reuse");
+  assert.match(replay.choices[0].message.content, /verified replay\n\ncached answer/);
+  assert.deepEqual(replay.usage, { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 });
 });
 
 test("harness wrap line is honest and reuse line uses only stored cost", () => {
@@ -1109,7 +1152,7 @@ test("first proxied request stores a work record and injects the wrap line", asy
   }
 });
 
-test("second matching request reuses stored tool work and does not call the provider", async () => {
+test("an identical non-streaming request replays the prior provider response", async () => {
   const cachePath = tempWorkCachePath();
   const logs = [];
   const providerHits = [];
@@ -1191,7 +1234,8 @@ test("second matching request reuses stored tool work and does not call the prov
     assert.equal(JSON.stringify(providerHits[0].body).includes(proxy.wrapToken), false);
     assert.equal(reused.id, "helm_reuse");
     assert.equal(reused.usage.input_tokens, 0);
-    assert.ok(reused.content[0].text.includes(TOOL_RESULT));
+    assert.ok(reused.content.some((block) => block.text === "ok"));
+    assert.equal(reused.content.some((block) => block.text.includes(TOOL_RESULT)), false);
     assert.ok(reused.content[0].text.includes(louder));
     assert.ok(reused.content[0].text.includes(HELM_WRAP_LINE));
     assert.equal(reused.content[0].text.includes(SECRET), false);
@@ -1378,7 +1422,7 @@ test("matching project/path/tool without the wrap bind forwards and does not ret
   }
 });
 
-test("miss still forwards when paths differ or payload is missing", async () => {
+test("a different path or ask always forwards", async () => {
   const cachePath = tempWorkCachePath();
   const providerHits = [];
   const logs = [];
@@ -1423,7 +1467,13 @@ test("miss still forwards when paths differ or payload is missing", async () => 
       body: JSON.stringify(toolWorkBody("/Users/team/billing/src/Bar.php")),
     });
     await proxy.reported;
-    assert.equal(providerHits.length, 2);
+    await fetch(`${proxy.url}/v1/messages`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(toolWorkBody("/Users/team/billing/src/Foo.php", "Find security issues")),
+    });
+    await proxy.reported;
+    assert.equal(providerHits.length, 3);
     assert.ok(logs.includes(HELM_WRAP_LINE));
     assert.equal(logs.some((line) => line.includes("REUSED PRIOR WORK")), false);
     assert.equal(readWorkCache(cachePath).reuses.length, 0);
@@ -1481,7 +1531,6 @@ test("wrapped 2xx POSTs a bounded excerpt to the team store when enabled", async
       linked: true,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
-      fetchTeamWork: async () => [],
       workCachePath: cachePath,
       sendUsage: async () => ({ accepted: 1 }),
       sendFingerprints: async () => {},
@@ -1515,7 +1564,7 @@ test("wrapped 2xx POSTs a bounded excerpt to the team store when enabled", async
     // already captured as tool bytes.
     assert.equal(excerpt.prompt_excerpt, SECRET);
     assert.equal(excerpt.cost_usd, null);
-    // Original-work counts ride along so a teammate's hit prices on web.
+    // Original-work counts stay attached to the receipt for diagnosis.
     assert.equal(excerpt.model, "claude-sonnet-4-20250514");
     assert.equal(excerpt.input_tokens, 11);
     assert.equal(excerpt.output_tokens, 7);
@@ -1530,7 +1579,7 @@ test("wrapped 2xx POSTs a bounded excerpt to the team store when enabled", async
     assert.equal(serialized.includes(proxy.wrapToken), false);
     assert.equal(serialized.includes("wrap_token"), false);
     assert.equal(serialized.toLowerCase().includes("system"), false);
-    // The local cache still holds the work for same-laptop reuse.
+    // The local cache still holds the receipt for exact-request replay.
     assert.equal(readWorkCache(cachePath).records.length, 1);
   } finally {
     await proxy.close();
@@ -1538,7 +1587,7 @@ test("wrapped 2xx POSTs a bounded excerpt to the team store when enabled", async
   }
 });
 
-test("team store stays fully offline unless enableTeamStore is set", async () => {
+test("receipt uploads stay fully offline unless enableTeamStore is set", async () => {
   const providerHits = [];
   const provider = await listenMock((req, res) => {
     const chunks = [];
@@ -1555,7 +1604,6 @@ test("team store stays fully offline unless enableTeamStore is set", async () =>
     });
   });
   const excerptAttempts = [];
-  let teamLookups = 0;
   const proxy = await listenProxy(
     { host: "127.0.0.1", port: 0 },
     {
@@ -1568,10 +1616,6 @@ test("team store stays fully offline unless enableTeamStore is set", async () =>
       linked: true,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
-      fetchTeamWork: async () => {
-        teamLookups += 1;
-        return [];
-      },
       workCachePath: tempWorkCachePath(),
       sendUsage: async () => ({ accepted: 1 }),
       sendFingerprints: async () => {},
@@ -1592,7 +1636,6 @@ test("team store stays fully offline unless enableTeamStore is set", async () =>
     assert.equal(response.status, 200);
     await proxy.reported;
     assert.equal(providerHits.length, 1);
-    assert.equal(teamLookups, 0);
     assert.equal(excerptAttempts.length, 0);
   } finally {
     await proxy.close();
@@ -1600,7 +1643,7 @@ test("team store stays fully offline unless enableTeamStore is set", async () =>
   }
 });
 
-test("a wrapped local miss serves teammate bytes from the team store", async () => {
+test("team overlap never bypasses the provider without a replayable response", async () => {
   const providerHits = [];
   const provider = await listenMock((req, res) => {
     const chunks = [];
@@ -1611,10 +1654,8 @@ test("a wrapped local miss serves teammate bytes from the team store", async () 
       res.end(JSON.stringify({ id: "msg_never" }));
     });
   });
-  const TEAM_OCCURRED_AT = new Date(NOW.getTime() - 60 * 60 * 1000).toISOString();
   const helmPosts = [];
   const logs = [];
-  let lookupQuery = null;
   const proxy = await listenProxy(
     { host: "127.0.0.1", port: 0, enableTeamStore: true },
     {
@@ -1627,29 +1668,6 @@ test("a wrapped local miss serves teammate bytes from the team store", async () 
       linked: true,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
-      fetchTeamWork: async (query) => {
-        lookupQuery = query;
-        return [
-          {
-            project_hint: "billing",
-            path_hints: ["src/Foo.php"],
-            tool_names: ["Read"],
-            session_key: null,
-            prompt_excerpt: "teammate ask",
-            tool_excerpts: [{ tool_name: "Read", path_hint: "src/Foo.php", content: TOOL_RESULT }],
-            cost_usd: 0.02,
-            // Maya's original work billed on a different model than this
-            // request. The reuse row must carry her counts, not ours.
-            model: "claude-haiku-4-5",
-            input_tokens: 21,
-            output_tokens: 9,
-            cache_write_tokens: 0,
-            cache_read_tokens: 5,
-            occurred_at: TEAM_OCCURRED_AT,
-            author_name: "Maya",
-          },
-        ];
-      },
       workCachePath: tempWorkCachePath(),
       sendUsage: async () => ({ accepted: 1 }),
       sendFingerprints: async () => {},
@@ -1657,8 +1675,9 @@ test("a wrapped local miss serves teammate bytes from the team store", async () 
         helmPosts.push({ kind: "reuses", body });
         return { accepted: 1 };
       },
-      sendExcerpt: async () => {
-        throw new Error("team hit must not store its own request as new work");
+      sendExcerpt: async (body) => {
+        helmPosts.push({ kind: "excerpt", body });
+        return { accepted: true };
       },
       environment: "default",
     },
@@ -1671,93 +1690,16 @@ test("a wrapped local miss serves teammate bytes from the team store", async () 
       body: JSON.stringify(toolWorkBody()),
     });
     assert.equal(response.status, 200);
-    const reused = await response.json();
+    const forwarded = await response.json();
     await proxy.reported;
 
-    assert.equal(providerHits.length, 0);
-    assert.equal(reused.id, "helm_reuse");
-    assert.ok(reused.content[0].text.includes(TOOL_RESULT));
-    assert.ok(reused.content[0].text.includes("(team)"));
-    assert.equal(lookupQuery.project_hint, "billing");
+    assert.equal(providerHits.length, 1);
+    assert.equal(forwarded.id, "msg_never");
+    assert.equal(logs.some((line) => line.includes("REUSED PRIOR WORK")), false);
 
     const reusePosts = helmPosts.filter((post) => post.kind === "reuses");
-    assert.equal(reusePosts.length, 1);
-    assert.equal(Object.hasOwn(reusePosts[0].body.reuses[0], "avoided_usd"), false);
-    assert.equal(reusePosts[0].body.reuses[0].model, "claude-haiku-4-5");
-    assert.equal(reusePosts[0].body.reuses[0].input_tokens, 21);
-    assert.equal(reusePosts[0].body.reuses[0].output_tokens, 9);
-    assert.equal(reusePosts[0].body.reuses[0].cache_write_tokens, 0);
-    assert.equal(reusePosts[0].body.reuses[0].cache_read_tokens, 5);
-    assert.equal(reusePosts[0].body.reuses[0].original_occurred_at, TEAM_OCCURRED_AT);
-    assert.equal(JSON.stringify(reusePosts[0].body).includes(proxy.wrapToken), false);
-  } finally {
-    await proxy.close();
-    await provider.close();
-  }
-});
-
-test("stale or non-overlapping team work forwards to the provider", async () => {
-  const providerHits = [];
-  const provider = await listenMock((req, res) => {
-    const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => {
-      providerHits.push(req.url);
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({
-        id: "msg_forward",
-        model: "claude-sonnet-4-20250514",
-        usage: { input_tokens: 9, output_tokens: 4, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-        content: [{ type: "text", text: "fresh" }],
-      }));
-    });
-  });
-  const STALE = new Date(NOW.getTime() - 25 * 60 * 60 * 1000).toISOString();
-  const proxy = await listenProxy(
-    { host: "127.0.0.1", port: 0, enableTeamStore: true },
-    {
-      anthropicUpstream: provider.url,
-      openaiUpstream: provider.url,
-      cwd: PROJECT_CWD,
-      homeDir: HOME_DIR,
-      now: () => NOW,
-      log: () => {},
-      linked: true,
-      deviceUlid: "01DEVICE",
-      fetchLiveOthers: async () => [],
-      fetchTeamWork: async () => [
-        {
-          project_hint: "billing",
-          path_hints: ["src/Other.php"],
-          tool_names: ["Read"],
-          session_key: null,
-          prompt_excerpt: null,
-          tool_excerpts: [{ tool_name: "Read", path_hint: "src/Other.php", content: "OLD BYTES" }],
-          cost_usd: 0.5,
-          occurred_at: STALE,
-          author_name: "Maya",
-        },
-      ],
-      workCachePath: tempWorkCachePath(),
-      sendUsage: async () => ({ accepted: 1 }),
-      sendFingerprints: async () => {},
-      sendReuses: async () => ({ accepted: 1 }),
-      sendExcerpt: async () => ({ accepted: true }),
-      environment: "default",
-    },
-  );
-
-  try {
-    const response = await fetch(`${proxy.url}/wrap/${proxy.wrapToken}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(toolWorkBody()),
-    });
-    assert.equal(response.status, 200);
-    const payload = await response.json();
-    await proxy.reported;
-    assert.equal(payload.id, "msg_forward");
-    assert.equal(providerHits.length, 1);
+    assert.equal(reusePosts.length, 0);
+    assert.equal(helmPosts.filter((post) => post.kind === "excerpt").length, 1);
   } finally {
     await proxy.close();
     await provider.close();

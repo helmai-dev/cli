@@ -2,8 +2,9 @@
 
 Helm sits between coding agents and model providers on this laptop.
 `helm wrap claude` or `helm wrap codex` starts a loopback proxy and
-points that agent at it. Prompts stay on this machine. Helm Web gets
-usage and fingerprint fields only.
+points that agent at it. When linked, Helm Web gets usage, fingerprints,
+and bounded receipt excerpts: the last user ask and tool-result bytes
+already present on the request. Full transcripts never leave the machine.
 
 Helm Web ([tryhelm.ai](https://tryhelm.ai)) owns the account, team, and
 persisted usage. This CLI is the local layer: the live intercept, the
@@ -64,7 +65,7 @@ Helm Web account is optional for wrap and required to sync usage.
 stored under `~/.helm` (chmod 600). The token is never printed.
 
 ```bash
-# Point Claude Code or Codex at the local proxy. Prompts stay here.
+# Point Claude Code or Codex at the local proxy. Linked wraps send bounded receipts.
 helm wrap claude
 helm wrap codex
 
@@ -124,7 +125,7 @@ and their output streams back into the Helm canvas.
 | `helm mcp` | stdio MCP server that exposes Helm team tools (todos, notes, awareness, live teammates) to local coding agents |
 | `helm scan` | Report local Claude Code and Codex usage and sync it to the team dashboard (requires a linked account) |
 | `helm audit` | Observed API-equivalent spend from local transcripts, plus realized provider-cache savings. `--team <id>` prints the Helm Web team rollup after `helm connect`. `shared_projects` and `shared_paths` print as observed overlap when the rollup includes them. `avoidable_spend` and `diagnose_buckets` print as observed Diagnose when the rollup includes them. Optional `--users` / `--teams` add an unshared-replay ceiling on the local path. Does not compute identified savings. |
-| `helm proxy` | Loopback model proxy on 127.0.0.1 (port 8787 or a free port). Passes Anthropic Messages and OpenAI-compatible chat through with the client's own auth headers. Reuses recent local tool work when the same wrap, project, paths, and tool match. `--daemon` backgrounds it. |
+| `helm proxy` | Loopback model proxy on 127.0.0.1 (port 8787 or a free port). Passes Anthropic Messages and OpenAI-compatible chat through with the client's own auth headers. An identical non-streaming request may replay its prior provider response; path/tool overlap alone never bypasses the provider. `--daemon` backgrounds it. |
 | `helm wrap claude\|codex` | Start the proxy if needed and point that agent at it (`ANTHROPIC_BASE_URL` or Codex/OpenAI base URL). Undo with `helm unwrap`. Does not touch Kubernetes Helm. |
 | `helm unwrap claude\|codex` | Restore the agent's previous provider URL |
 | `helm map <project-id> [path]` | Register a local checkout for a project |
@@ -175,33 +176,35 @@ points that agent at it. Claude Code honors `ANTHROPIC_BASE_URL` in
 proxy forwards the client's own provider tokens; Helm does not need those
 keys. On each request it can see the prompt locally, then POST usage events,
 fingerprints, and on a wrap reuse the metadata in `POST /api/usage/reuses`.
-Prompt text and tool-result bytes never go to Helm Web. A 422, 5xx, or
-offline Helm Web must not break wrap or the local cache.
+When linked, it may also POST the bounded last user ask and tool-result bytes
+already on the request as receipt excerpts. It never sends full transcripts,
+system/developer messages, provider credentials, or wrap tokens. A 422, 5xx,
+or offline Helm Web must not break wrap or the local cache.
 Identified savings stay null. `helm wrap` only accepts `claude` and `codex`.
 
-This is shared-work reuse, not model routing and not prompt caching. After a
+This is workload receipt and verified replay, not model routing or prompt
+caching. After a
 successful proxied request, the proxy stores a local work record in
 `~/.helm/environments/<env>/proxy-work.json` (project, path hints, tools,
-session key, stored cost and tokens, and tool results already present on
-that request). Prompts are not written there. Before the next forward, a
-hit is the same wrap bind, the same project, an overlapping path set, the
-same tool, and an age under 24 hours. The wrap bind is a token minted when
-the proxy starts. Wrap writes it into the agent URL. A request that only
-matches project, path, and tool still forwards. On a hit with stored tool
-results, the proxy reuses those bytes, skips the provider for that tool
-work, and attributes avoided dollars only as the stored `cost_usd` of the
-original request. A miss or a record with no payload still forwards. Other laptops and prompt-shaped
-completions are not reused yet. Team-wide byte reuse needs a later web
-blob store. Every wrapped request injects `Helm is wrapping this request.`
-into the harness. A reuse also prints a louder line that Helm reused prior
-work and did not send that tool work to the provider.
+session key, stored cost and tokens, tool results already present on that
+request, a SHA-256 identity scoped to the provider route and local checkout,
+and a prior non-streaming JSON response when one exists). Request text is not
+written to the local cache. The provider
+is bypassed only when the wrap bind is valid and the intercepted request bytes
+exactly match a recent record with a replayable provider response. A different
+ask always forwards even when project, path, and tool overlap. Streaming calls
+and team excerpts do not auto-replay. Team excerpts remain available to agents
+through `retrieve_team_work`; they are Diagnose context, not proof of equivalent
+work. Every wrapped request injects `Helm is wrapping this request.` A verified
+replay prints a louder line and attributes avoided dollars only from the
+stored original measurement.
 
 When this machine is linked, the tool hook also sends a work fingerprint for
 each tool call in a mapped Claude Code or Codex session: the provider, the
 project folder name, a project-relative file or folder when the tool call
 already named one, the tool name, and the event time. That is the whole
-payload. Prompts, file contents, command lines, tool output, and diffs never
-leave this machine. Fingerprints let the team see that work happened in the
+fingerprint payload; it contains no prompts, file contents, command lines,
+tool output, or diffs. Fingerprints let the team see that work happened in the
 same project or file. They are labels, not savings, and they measure nothing
 about cost. If Helm Web is slow or unreachable, the send is dropped after 1.2
 seconds and the session continues; unlinked machines send nothing. A 2xx

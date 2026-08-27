@@ -3,13 +3,11 @@ import * as os from "node:os";
 import { hasLinkedAccount } from "./account-link.js";
 import {
   fetchLiveFingerprintOthers,
-  fetchTeamWorkExcerpts,
   sendUsageEvents,
   sendUsageExcerpt,
   sendUsageReuses,
   sendWorkFingerprints,
   type LiveOverlapPerson,
-  type TeamWorkExcerptCandidate,
   type UsageExcerptUploadBody,
   type UsageReuseUpload,
 } from "./api-web.js";
@@ -49,16 +47,15 @@ import { reportProxiedRequest, usageReuseFromStored } from "./proxy-report.js";
 import {
   excerptUploadFromParts,
   lastUserPromptFromRequestBody,
-  teamReuseLookup,
-  type TeamWorkFetcher,
 } from "./proxy-excerpt.js";
 import {
   defaultWorkCachePath,
+  hashWorkloadRequest,
   lookupWork,
   payloadFromToolResults,
   readWorkCache,
   recordReuse,
-  reuseResponseBody,
+  replayResponseBody,
   storeWork,
   workKeyFromFacts,
   writeWorkCache,
@@ -86,6 +83,8 @@ const RESPONSE_STRIP = new Set([
   "content-length",
 ]);
 
+const MAX_REPLAY_RESPONSE_BYTES = 256_000;
+
 export interface ProxyHooks {
   anthropicUpstream?: string;
   openaiUpstream?: string;
@@ -102,11 +101,9 @@ export interface ProxyHooks {
   sendFingerprints?: typeof sendWorkFingerprints;
   sendReuses?: typeof sendUsageReuses;
   sendExcerpt?: typeof sendUsageExcerpt;
-  fetchTeamWork?: TeamWorkFetcher;
   /**
-   * Slice-6 team store: excerpt POSTs after 2xx and teammate lookup on local
-   * miss. Opt-in so library consumers and tests stay fully offline; the
-   * `helm proxy` command turns this on.
+   * Slice-6 team store: excerpt POSTs after 2xx. Opt-in so library consumers
+   * and tests stay fully offline; the `helm proxy` command turns this on.
    */
   enableTeamStore?: boolean;
   environment?: string;
@@ -316,11 +313,6 @@ async function handleProxyRequest(
     homeDir,
     occurredAt: now.toISOString(),
   });
-  const lookup = lookupWork({ cache: readWorkCache(cachePath), key: workKey, now });
-  // Capture the forward reason before narrowing: a local reuse that is not
-  // wrap-bound falls through to the provider path below.
-  const localForwardReason: "no_facts" | "no_hit" | "no_payload" | null =
-    lookup.kind === "forward" ? lookup.reason : null;
   logHarness(hooks, HELM_WRAP_LINE);
   const wrapBound = requestWrapBound({
     expected: hooks.wrapToken,
@@ -328,94 +320,50 @@ async function handleProxyRequest(
     headerToken: headerWrapToken(req),
   });
 
-  if (lookup.kind === "reuse" && wrapBound) {
-    const louder = helmReuseLine(lookup.record.cost_usd);
-    logHarness(hooks, louder);
-    const body = reuseResponseBody({
-      provider,
-      model,
-      payload: lookup.record.payload,
-      notice: `${HELM_WRAP_LINE}\n${louder}`,
-    });
-    writeJson(res, 200, body);
-    let reuses: readonly UsageReuseUpload[] | undefined;
-    try {
-      const next = recordReuse({ cache: readWorkCache(cachePath), record: lookup.record, now });
-      writeWorkCache(cachePath, next);
-      const storedReuse = next.reuses[0];
-      if (storedReuse) {
-        reuses = [
-          usageReuseFromStored({
-            reuse: storedReuse,
-            record: lookup.record,
-            sessionKey: lookup.record.session_key,
-            environment: hooks.environment ?? getActiveEnvironment(),
-          }),
-        ];
-      }
-    } catch {
+  let outbound: Buffer = raw;
+  const others = await resolveOthers(hooks, { project_hint: projectHint, path_hint: pathHint });
+  const note = formatTeammateNote(others, now);
+  if (parsed !== null) {
+    let next = appendInterceptNote(provider, parsed, HELM_WRAP_LINE);
+    if (note) {
+      next = appendInterceptNote(provider, next, note);
     }
-    track.report = reportAfterResponse({
-      hooks,
-      provider,
-      model,
-      projectHint,
-      pathHint,
-      facts,
-      cwd,
-      homeDir,
-      now,
-      usage: null,
-      upstreamStatus: 200,
-      storeCache: false,
-      workKey,
-      reuses,
-    });
-    return;
+    outbound = Buffer.from(JSON.stringify(next), "utf8");
   }
 
-  // Local miss. Before paying the provider again, ask the team store for a
-  // teammate's stored work (slice 6). Wrap-bound and linked only; any failure
-  // forwards exactly as before.
-  if (
-    hooks.enableTeamStore === true &&
-    localForwardReason !== null &&
-    localForwardReason !== "no_facts" &&
-    workKey !== null &&
-    wrapBound &&
-    (hooks.linked ?? hasLinkedAccount(loadCredentials()))
-  ) {
-    const fetchTeamWork = hooks.fetchTeamWork ?? fetchTeamWorkExcerpts;
-    const teamLookup = await teamReuseLookup({ key: workKey, now, fetchTeamWork });
-    if (teamLookup.kind === "reuse") {
-      const teamRecord = teamLookup.record;
-      const louder = helmReuseLine(teamRecord.cost_usd);
-      logHarness(hooks, `${louder} (team)`);
-      const body = reuseResponseBody({
-        provider,
-        model,
-        payload: teamRecord.payload,
-        notice: `${HELM_WRAP_LINE}\n${louder} (team)`,
-      });
+  // Identity covers the exact bytes the provider would receive, including
+  // Helm's current intercept and teammate context, plus route and checkout.
+  const requestHash = hashWorkloadRequest(
+    outbound,
+    `${provider}\0${bindPath.pathname}${url.search}\0${cwd}`,
+  );
+  const lookup = lookupWork({
+    cache: readWorkCache(cachePath),
+    key: workKey,
+    requestHash,
+    now,
+  });
+  if (lookup.kind === "reuse" && wrapBound) {
+    const louder = helmReuseLine(lookup.record.cost_usd);
+    const body = replayResponseBody({
+      provider,
+      response: lookup.record.response,
+      notice: `${HELM_WRAP_LINE}\n${louder}`,
+    });
+    if (body !== null) {
+      logHarness(hooks, louder);
       writeJson(res, 200, body);
       let reuses: readonly UsageReuseUpload[] | undefined;
       try {
-        const next = recordReuse({
-          cache: readWorkCache(cachePath),
-          record: teamRecord,
-          now,
-        });
+        const next = recordReuse({ cache: readWorkCache(cachePath), record: lookup.record, now });
         writeWorkCache(cachePath, next);
         const storedReuse = next.reuses[0];
         if (storedReuse) {
           reuses = [
             usageReuseFromStored({
               reuse: storedReuse,
-              record: {
-                ...teamRecord,
-                model: teamRecord.model ?? (model !== "unknown" ? model : null),
-              },
-              sessionKey: teamRecord.session_key !== "" ? teamRecord.session_key : null,
+              record: lookup.record,
+              sessionKey: lookup.record.session_key,
               environment: hooks.environment ?? getActiveEnvironment(),
             }),
           ];
@@ -440,17 +388,6 @@ async function handleProxyRequest(
       });
       return;
     }
-  }
-
-  let outbound: Buffer = raw;
-  const others = await resolveOthers(hooks, { project_hint: projectHint, path_hint: pathHint });
-  const note = formatTeammateNote(others, now);
-  if (parsed !== null) {
-    let next = appendInterceptNote(provider, parsed, HELM_WRAP_LINE);
-    if (note) {
-      next = appendInterceptNote(provider, next, note);
-    }
-    outbound = Buffer.from(JSON.stringify(next), "utf8");
   }
 
   const upstreamBase =
@@ -509,6 +446,11 @@ async function handleProxyRequest(
     upstreamStatus: upstream.status,
     storeCache: true,
     workKey,
+    requestHash,
+    responseBody:
+      !isEventStream && responseBytes.length <= MAX_REPLAY_RESPONSE_BYTES
+        ? parseJsonBody(responseBytes)
+        : null,
     parsed,
     cachePath,
   });
@@ -569,6 +511,8 @@ async function reportAfterResponse(input: {
   upstreamStatus: number;
   storeCache: boolean;
   workKey: WorkKey | null;
+  requestHash?: string;
+  responseBody?: unknown;
   parsed?: unknown;
   cachePath?: string;
   reuses?: readonly UsageReuseUpload[];
@@ -622,6 +566,8 @@ async function reportAfterResponse(input: {
             cache_read_tokens: input.usage ? input.usage.cache_read_tokens : null,
             occurred_at: input.now.toISOString(),
             payload,
+            request_hash: input.requestHash ?? null,
+            response: isPlainRecord(input.responseBody) ? input.responseBody : null,
           },
         }),
       );
@@ -775,8 +721,8 @@ export async function runProxyProcess(options: {
     {
       host: options.host ?? process.env.HELM_PROXY_HOST ?? DEFAULT_PROXY_HOST,
       port: options.port ?? (process.env.HELM_PROXY_PORT ? Number(process.env.HELM_PROXY_PORT) : DEFAULT_PROXY_PORT),
-      // The real proxy daemon opts into the slice-6 team store: excerpt
-      // uploads after 2xx and teammate lookup on local miss. Both fail open.
+      // The real proxy daemon opts into bounded receipt uploads after 2xx.
+      // Upload failures never break the provider path.
       enableTeamStore: true,
     },
   );

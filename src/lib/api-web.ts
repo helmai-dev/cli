@@ -748,32 +748,7 @@ export interface UsageExcerptUploadBody {
 
 export const USAGE_EXCERPTS_ENDPOINT = "/usage/excerpts";
 
-export const USAGE_EXCERPTS_LOOKUP_ENDPOINT = "/usage/excerpts/lookup";
-
 export const USAGE_EXCERPT_TIMEOUT_MS = 1200;
-
-export interface TeamWorkExcerptCandidate {
-  readonly project_hint: string;
-  readonly path_hints: readonly string[];
-  readonly tool_names: readonly string[];
-  readonly session_key: string | null;
-  readonly prompt_excerpt: string | null;
-  readonly tool_excerpts: readonly UsageExcerptToolEntry[] | null;
-  readonly cost_usd: number | null;
-  /** Absent on rows stored by pre-1.3.13 CLIs. */
-  readonly model?: string | null;
-  readonly input_tokens?: number | null;
-  readonly output_tokens?: number | null;
-  readonly cache_write_tokens?: number | null;
-  readonly cache_read_tokens?: number | null;
-  readonly occurred_at: string;
-  readonly author_name: string | null;
-}
-
-export interface TeamWorkLookupQuery {
-  readonly project_hint: string;
-  readonly tool_names?: readonly string[];
-}
 
 export async function sendUsageExcerpt(
   body: UsageExcerptUploadBody,
@@ -787,29 +762,6 @@ export async function sendUsageExcerpt(
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-export async function fetchTeamWorkExcerpts(
-  query: TeamWorkLookupQuery,
-): Promise<TeamWorkExcerptCandidate[]> {
-  const params = new URLSearchParams();
-  params.set("project_hint", query.project_hint);
-  if (query.tool_names) {
-    for (const tool of query.tool_names) {
-      params.append("tool_names[]", tool);
-    }
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), USAGE_EXCERPT_TIMEOUT_MS);
-  try {
-    const data = await request<{ excerpts: TeamWorkExcerptCandidate[] }>(
-      `${USAGE_EXCERPTS_LOOKUP_ENDPOINT}?${params.toString()}`,
-      { method: "GET", signal: controller.signal },
-    );
-    return Array.isArray(data.excerpts) ? data.excerpts : [];
   } finally {
     clearTimeout(timer);
   }

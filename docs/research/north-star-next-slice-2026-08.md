@@ -1,5 +1,9 @@
 # About the next slice after the 2026-08-17 product bar
 
+> Historical audit. Its recommended team-rollup slice and the live `proxy` / `wrap`
+> intercept have since shipped. Use `docs/NORTH_STAR.md` and current source for
+> product decisions; the claims below describe the repository at `e61ba25`.
+
 This is an explanation of what Helm can already see, what the 2026-08-17 product bar still needs, and the one next slice that makes an org spend sentence true without inventing savings. It is not a how-to and not an implementation PR.
 
 Checked on 2026-08-17 against helmai-dev/cli `main` at `e61ba25` (after PRs #2, #1, #3, #4). helmai-dev/web, helmai-dev/desktop, and helmai-dev/helm were read through the GitHub API. Those repos were not cloned.

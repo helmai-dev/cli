@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { ensureHelmDir } from "./config.js";
 import { buildWorkFingerprint } from "./fingerprints.js";
 import { getProxyWorkCachePath } from "./proxy-state.js";
@@ -34,6 +35,10 @@ export interface WorkRecord {
   readonly cache_read_tokens: number | null;
   readonly occurred_at: string;
   readonly payload: ToolResultPayload | null;
+  /** Exact intercepted request bytes plus local route scope. The request itself is never persisted. */
+  readonly request_hash: string | null;
+  /** Prior provider response. Present only for non-streaming JSON responses. */
+  readonly response: Record<string, unknown> | null;
 }
 
 export interface WorkReuse {
@@ -52,8 +57,11 @@ export interface WorkCacheFile {
 }
 
 export type WorkLookup =
-  | { kind: "reuse"; record: WorkRecord & { payload: ToolResultPayload } }
-  | { kind: "forward"; reason: "no_facts" | "no_hit" | "no_payload" };
+  | {
+      kind: "reuse";
+      record: WorkRecord & { request_hash: string; response: Record<string, unknown> };
+    }
+  | { kind: "forward"; reason: "no_facts" | "no_hit" | "no_replay" };
 
 export interface WorkKey {
   readonly project_hint: string;
@@ -63,6 +71,10 @@ export interface WorkKey {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function hashWorkloadRequest(raw: Buffer, scope = ""): string {
+  return createHash("sha256").update(scope).update("\0").update(raw).digest("hex");
 }
 
 function uniqueStrings(values: readonly string[]): string[] {
@@ -201,6 +213,10 @@ function parseRecord(value: unknown): WorkRecord | null {
     typeof value.model === "string" && value.model !== "" && value.model !== "unknown"
       ? value.model
       : null;
+  const request_hash =
+    typeof value.request_hash === "string" && /^[0-9a-f]{64}$/.test(value.request_hash)
+      ? value.request_hash
+      : null;
   return {
     project_hint: value.project_hint,
     path_hints,
@@ -214,6 +230,8 @@ function parseRecord(value: unknown): WorkRecord | null {
     cache_read_tokens,
     occurred_at: value.occurred_at,
     payload: parsePayload(value.payload),
+    request_hash,
+    response: isPlainRecord(value.response) ? value.response : null,
   };
 }
 
@@ -276,6 +294,7 @@ export function defaultWorkCachePath(): string {
 export function lookupWork(input: {
   cache: WorkCacheFile;
   key: WorkKey | null;
+  requestHash: string;
   now: Date;
   windowMs?: number;
 }): WorkLookup {
@@ -295,6 +314,9 @@ export function lookupWork(input: {
     if (!setsOverlap(record.tool_names, input.key.tool_names)) {
       continue;
     }
+    if (record.request_hash !== input.requestHash) {
+      continue;
+    }
     const then = Date.parse(record.occurred_at);
     if (!Number.isFinite(then) || nowMs - then > windowMs || nowMs < then) {
       continue;
@@ -306,10 +328,13 @@ export function lookupWork(input: {
   if (latest === null) {
     return { kind: "forward", reason: "no_hit" };
   }
-  if (latest.payload === null || latest.payload.results.length === 0) {
-    return { kind: "forward", reason: "no_payload" };
+  if (latest.request_hash === null || latest.response === null) {
+    return { kind: "forward", reason: "no_replay" };
   }
-  return { kind: "reuse", record: { ...latest, payload: latest.payload } };
+  return {
+    kind: "reuse",
+    record: { ...latest, request_hash: latest.request_hash, response: latest.response },
+  };
 }
 
 export function storeWork(input: {
@@ -398,29 +423,30 @@ export function payloadFromToolResults(input: {
   return { kind: "tool_results", results: mapped };
 }
 
-export function reuseResponseBody(input: {
+export function replayResponseBody(input: {
   provider: "anthropic" | "openai";
-  model: string;
-  payload: ToolResultPayload;
+  response: Record<string, unknown>;
   notice: string;
-}): Record<string, unknown> {
-  const text = [input.notice, ...input.payload.results.map((result) => result.content)].join("\n\n");
+}): Record<string, unknown> | null {
+  const response = structuredClone(input.response);
   if (input.provider === "anthropic") {
-    return {
-      id: "helm_reuse",
-      type: "message",
-      role: "assistant",
-      model: input.model,
-      content: [{ type: "text", text }],
-      stop_reason: "end_turn",
-      usage: { input_tokens: 0, output_tokens: 0 },
-    };
+    if (!Array.isArray(response.content)) {
+      return null;
+    }
+    response.id = "helm_reuse";
+    response.content = [{ type: "text", text: input.notice }, ...response.content];
+    response.usage = { input_tokens: 0, output_tokens: 0 };
+    return response;
   }
-  return {
-    id: "helm_reuse",
-    object: "chat.completion",
-    model: input.model,
-    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
-    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-  };
+  if (!Array.isArray(response.choices) || !isPlainRecord(response.choices[0])) {
+    return null;
+  }
+  const choice = response.choices[0];
+  if (!isPlainRecord(choice.message) || typeof choice.message.content !== "string") {
+    return null;
+  }
+  response.id = "helm_reuse";
+  choice.message.content = `${input.notice}\n\n${choice.message.content}`;
+  response.usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  return response;
 }
