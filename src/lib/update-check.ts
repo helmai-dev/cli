@@ -49,7 +49,17 @@ function isNewerVersion(current: string, latest: string): boolean {
     return false;
 }
 
+/**
+ * Managed environments (Helm Code keeps its own CLI copy fresh) suppress the
+ * banner entirely: the "run helm update" advice is wrong for a desktop-managed
+ * binary, and stderr noise corrupts NDJSON pipes and hook transcripts.
+ */
+export function isUpdateCheckSuppressed(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.HELM_SUPPRESS_UPDATE_CHECK === '1';
+}
+
 export function checkForUpdate(): void {
+    if (isUpdateCheckSuppressed()) return;
     try {
         const cache = loadCache();
         const now = Date.now();

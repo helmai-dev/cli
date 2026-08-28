@@ -7,7 +7,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -239,6 +241,30 @@ test("headless next steps name helm wrap claude and helm wrap codex", () => {
     assert.doesNotMatch(output, /prompt cach/i);
     assert.doesNotMatch(output, /Cursor cloud/i);
     assert.doesNotMatch(output, /shared_context_savings_usd/);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("reinstall replaces via rename: new inode, no staged temp leftovers", () => {
+  const fixture = createFixture();
+  try {
+    const installDir = path.join(fixture.root, "usr-local-bin");
+    mkdirSync(installDir);
+    const installedBin = path.join(installDir, "helm");
+    writeExecutable(installedBin, "#!/bin/sh\necho 1.3.7\n");
+    const before = statSync(installedBin).ino;
+
+    const result = runInstall({ fixture, installDir });
+    const output = combinedOutput(result);
+
+    assert.equal(result.status, 0, output);
+    // A rename swaps the inode; an in-place cp would truncate the running one
+    // (ETXTBSY on Linux, and a killed live relay on macOS after re-signing).
+    assert.notEqual(statSync(installedBin).ino, before);
+    assert.match(readFileSync(installedBin, "utf8"), /echo 1\.3\.9/);
+    const leftovers = readdirSync(installDir).filter((name) => name.includes(".tmp."));
+    assert.deepEqual(leftovers, []);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

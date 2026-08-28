@@ -191,7 +191,11 @@ install_binary() {
   local dest="$1"
   local dest_dir
   dest_dir="$(dirname "$dest")"
-  local use_sudo=0
+  # Stage next to the destination so the final mv is an atomic rename on the
+  # same filesystem. A plain cp onto the live path truncates the running inode:
+  # ETXTBSY on Linux, and on macOS re-signing a binary that is currently
+  # executing can kill the process (e.g. an active `helm relay`).
+  local staged="$dest.tmp.$$"
 
   if [[ "$platform" == "windows" ]]; then
     if [[ ! -d "$dest_dir" ]]; then
@@ -214,32 +218,32 @@ install_binary() {
     mkdir -p "$dest_dir" 2>/dev/null || true
   fi
 
+  # macOS: Bun-compiled binaries have an embedded linker signature that becomes
+  # invalid after download/copy, so the STAGED copy is stripped and re-signed
+  # before it is renamed into place. The rename preserves file content, so the
+  # signature stays valid and the live binary is never mutated in place.
   if [[ -d "$dest_dir" && -w "$dest_dir" && ( ! -e "$dest" || -w "$dest" ) ]]; then
-    cp "$tmp_dir/$HELM_ARTIFACT_NAME" "$dest"
-    chmod 0755 "$dest"
+    cp "$tmp_dir/$HELM_ARTIFACT_NAME" "$staged" || { rm -f "$staged"; return 1; }
+    chmod 0755 "$staged"
+    if [[ "$platform" == "darwin" ]]; then
+      xattr -dr com.apple.quarantine "$staged" 2>/dev/null || true
+      codesign --remove-signature "$staged" 2>/dev/null || true
+      codesign --force --sign - "$staged" 2>/dev/null || true
+    fi
+    mv -f "$staged" "$dest" || { rm -f "$staged"; return 1; }
   else
     echo ""
     echo "Helm needs elevated permissions to install to $dest_dir"
     echo ""
     sudo mkdir -p "$dest_dir"
-    sudo cp "$tmp_dir/$HELM_ARTIFACT_NAME" "$dest"
-    sudo chmod 0755 "$dest"
-    use_sudo=1
-  fi
-
-  # macOS: Bun-compiled binaries have an embedded linker signature that becomes
-  # invalid after download/copy. Strip and re-sign the INSTALLED binary so
-  # Gatekeeper allows execution. Must happen after cp, not before.
-  if [[ "$platform" == "darwin" ]]; then
-    if [[ "$use_sudo" == "1" || ! -w "$dest" ]]; then
-      sudo xattr -dr com.apple.quarantine "$dest" 2>/dev/null || true
-      sudo codesign --remove-signature "$dest" 2>/dev/null || true
-      sudo codesign --force --sign - "$dest" 2>/dev/null || true
-    else
-      xattr -dr com.apple.quarantine "$dest" 2>/dev/null || true
-      codesign --remove-signature "$dest" 2>/dev/null || true
-      codesign --force --sign - "$dest" 2>/dev/null || true
+    sudo cp "$tmp_dir/$HELM_ARTIFACT_NAME" "$staged" || { sudo rm -f "$staged"; return 1; }
+    sudo chmod 0755 "$staged"
+    if [[ "$platform" == "darwin" ]]; then
+      sudo xattr -dr com.apple.quarantine "$staged" 2>/dev/null || true
+      sudo codesign --remove-signature "$staged" 2>/dev/null || true
+      sudo codesign --force --sign - "$staged" 2>/dev/null || true
     fi
+    sudo mv -f "$staged" "$dest" || { sudo rm -f "$staged"; return 1; }
   fi
 }
 
