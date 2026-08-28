@@ -14,6 +14,7 @@ import {
   daemonStopCommand,
 } from "./commands/daemon.js";
 import { daemonInstallCommand, daemonUninstallCommand } from "./commands/daemon-install.js";
+import { waitForStreamDrain } from "./lib/flush-exit.js";
 import { connectCommand } from "./commands/connect.js";
 import { mapProjectCommand } from "./commands/map.js";
 import { envCreateCommand, envListCommand, envSwitchCommand } from "./commands/env.js";
@@ -370,7 +371,12 @@ if (process.env.HELM_PROXY_MODE === "1") {
 } else {
   checkForUpdate();
   program.parseAsync().then(
-    () => process.exit(process.exitCode ?? 0),
+    async () => {
+      // Let piped stdout drain before exiting — process.exit() drops
+      // anything past the 64KB pipe buffer (see lib/flush-exit.ts).
+      await waitForStreamDrain(process.stdout);
+      process.exit(process.exitCode ?? 0);
+    },
     (error: unknown) => {
       console.error(error);
       process.exit(1);
