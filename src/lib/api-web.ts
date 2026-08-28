@@ -152,7 +152,37 @@ export interface HelmWebSessionComment {
   user_name: string;
   user_avatar_url: string | null;
   body: string;
+  /** null = plain note; "prompt_suggestion" = suggested prompt for the owner. */
+  kind?: string | null;
   created_at: string | null;
+}
+
+export interface HelmWebProjectRoom {
+  id: string;
+  project_id: string;
+  name: string;
+  topic: string | null;
+  archived_at: string | null;
+  created_at: string | null;
+  last_message_at: string | null;
+}
+
+export interface HelmWebRoomMessage {
+  id: string;
+  project_id: string;
+  room_id: string | null;
+  user_id: string | number;
+  user_name: string;
+  body: string;
+  message_kind?: string;
+  parent_id: string | null;
+  created_at: string | null;
+}
+
+export interface HelmWebRoomMessagesPage {
+  data: HelmWebRoomMessage[];
+  has_more: boolean;
+  room: HelmWebProjectRoom;
 }
 
 export async function fetchHelmWebProjects(signal?: AbortSignal): Promise<HelmWebProjectSummary[]> {
@@ -184,12 +214,95 @@ export async function fetchHelmWebSession(
 export async function createHelmWebSessionComment(
   sessionId: string,
   body: string,
+  kind?: "prompt_suggestion",
 ): Promise<HelmWebSessionComment> {
   const response = await request<{ data: HelmWebSessionComment }>(
     `/sessions/${encodeURIComponent(sessionId)}/comments`,
     {
       method: "POST",
-      body: JSON.stringify({ body }),
+      body: JSON.stringify({ body, ...(kind ? { kind } : {}) }),
+    },
+  );
+  return response.data;
+}
+
+export async function fetchHelmWebSessionComments(
+  sessionId: string,
+): Promise<HelmWebSessionComment[]> {
+  const response = await request<{ data: HelmWebSessionComment[] }>(
+    `/sessions/${encodeURIComponent(sessionId)}/comments`,
+    { method: "GET" },
+  );
+  return response.data;
+}
+
+export async function fetchHelmWebProjectRooms(projectId: string): Promise<HelmWebProjectRoom[]> {
+  const response = await request<{ data: HelmWebProjectRoom[] }>(
+    `/projects/${encodeURIComponent(projectId)}/rooms`,
+    { method: "GET" },
+  );
+  return response.data;
+}
+
+export async function createHelmWebProjectRoom(
+  projectId: string,
+  input: { name: string; topic?: string | null },
+): Promise<HelmWebProjectRoom> {
+  const response = await request<{ data: HelmWebProjectRoom }>(
+    `/projects/${encodeURIComponent(projectId)}/rooms`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+  return response.data;
+}
+
+export async function updateHelmWebProjectRoom(
+  projectId: string,
+  roomId: string,
+  patch: { name?: string; topic?: string | null; archived?: boolean },
+): Promise<HelmWebProjectRoom> {
+  const response = await request<{ data: HelmWebProjectRoom }>(
+    `/projects/${encodeURIComponent(projectId)}/rooms/${encodeURIComponent(roomId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    },
+  );
+  return response.data;
+}
+
+export async function fetchHelmWebRoomMessages(
+  projectId: string,
+  roomId: string,
+  options: { before?: string; limit?: number } = {},
+): Promise<HelmWebRoomMessagesPage> {
+  const query = new URLSearchParams();
+  if (options.before) query.set("before", options.before);
+  if (options.limit) query.set("limit", String(options.limit));
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return request<HelmWebRoomMessagesPage>(
+    `/projects/${encodeURIComponent(projectId)}/rooms/${encodeURIComponent(roomId)}/messages${suffix}`,
+    { method: "GET" },
+  );
+}
+
+export async function createHelmWebRoomMessage(
+  projectId: string,
+  roomId: string,
+  body: string,
+  parentId?: string | null,
+): Promise<HelmWebRoomMessage> {
+  const response = await request<{ data: HelmWebRoomMessage }>(
+    `/projects/${encodeURIComponent(projectId)}/rooms/${encodeURIComponent(roomId)}/messages`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        body,
+        message_kind: "human",
+        ...(parentId ? { parent_id: parentId } : {}),
+      }),
     },
   );
   return response.data;

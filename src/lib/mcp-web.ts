@@ -27,11 +27,14 @@ const TOOL_ARGUMENT_KEYS: Record<string, readonly string[]> = {
   list_todos: ["project_id"],
   create_todo: ["project_id", "title", "notes"],
   complete_todo: ["project_id", "todo_id"],
-  project_message_create: ["project_id", "body"],
+  project_message_create: ["project_id", "body", "room"],
   create_work_note: ["project_id", "body", "related_session_id", "related_todo_id"],
   list_sessions: ["project_id", "limit"],
   get_session_result: ["project_id", "session_id"],
+  list_rooms: ["project_id"],
+  read_room_messages: ["project_id", "room", "limit", "before"],
   list_live_teammates: ["project_hint", "path_hint"],
+  create_note: ["title", "content", "filename"],
 };
 
 export interface WebRequest {

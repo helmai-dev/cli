@@ -11,24 +11,36 @@ import { createInterface } from "node:readline";
 import {
   authorizeHelmWebBroadcast,
   claimWorkPackages,
+  createHelmWebProjectRoom,
   createHelmWebProjectTodo,
   createHelmWebProjectTodoComment,
+  createHelmWebRoomMessage,
   createHelmWebSessionComment,
   createHelmWebProjectMessage,
   deleteHelmWebProjectTodo,
+  fetchAuthenticatedUser,
   fetchHelmWebProjects,
   fetchHelmWebProjectMessages,
+  fetchHelmWebProjectRooms,
   fetchHelmWebProjectSessions,
   fetchHelmWebProjectTodoComments,
   fetchHelmWebProjectTodos,
+  fetchHelmWebRoomMessages,
   fetchHelmWebSession,
+  fetchHelmWebSessionComments,
   reportWorkPackageEvent,
+  updateHelmWebProjectRoom,
   updateHelmWebProjectTodo,
   updateHelmWebSessionSidebar,
   type ClaimWorkPackagesRequest,
   type HelmWebProjectTodoPatch,
   type WorkPackageEventRequest,
 } from "../lib/api-web.js";
+import {
+  inspectLocalRepository,
+  matchProjectForRepository,
+  normalizeRepositoryIdentity,
+} from "../lib/project-resolution.js";
 import { accountRequiredRelayError, hasLinkedAccount } from "../lib/account-link.js";
 import {
   getApiUrl,
@@ -55,8 +67,41 @@ export interface CodeBridgeReverbConfig {
 type CodeBridgeRequest =
   | { id: string; op: "bootstrap" }
   | { id: string; op: "session"; session_id: string }
-  | { id: string; op: "create_session_comment"; session_id: string; body: string }
+  | {
+      id: string;
+      op: "create_session_comment";
+      session_id: string;
+      body: string;
+      kind?: "prompt_suggestion";
+    }
+  | { id: string; op: "list_session_comments"; session_id: string }
   | { id: string; op: "create_project_message"; project_id: string; body: string; parent_id?: string | null }
+  | { id: string; op: "list_rooms"; project_id: string }
+  | { id: string; op: "create_room"; project_id: string; name: string; topic?: string | null }
+  | {
+      id: string;
+      op: "update_room";
+      project_id: string;
+      room_id: string;
+      patch: { name?: string; topic?: string | null; archived?: boolean };
+    }
+  | {
+      id: string;
+      op: "list_room_messages";
+      project_id: string;
+      room_id: string;
+      before?: string;
+      limit?: number;
+    }
+  | {
+      id: string;
+      op: "create_room_message";
+      project_id: string;
+      room_id: string;
+      body: string;
+      parent_id?: string | null;
+    }
+  | { id: string; op: "resolve_project"; cwd: string }
   | {
       id: string;
       op: "update_session_sidebar";
@@ -129,6 +174,11 @@ function isId(value: unknown): value is string {
   return typeof value === "string" && value !== "";
 }
 
+/** A room reference: a ProjectRoom ulid or the literal "general". */
+function isRoomId(value: unknown): value is string {
+  return typeof value === "string" && value !== "" && value.length <= 64;
+}
+
 /** Absent, explicitly cleared, or a string within the column's limit. */
 function isOptionalText(value: unknown, maxLength: number): boolean {
   if (value === undefined || value === null) return true;
@@ -197,14 +247,110 @@ export function parseCodeBridgeRequest(
     row.session_id !== "" &&
     typeof row.body === "string" &&
     row.body.trim() !== "" &&
-    row.body.length <= 10_000
+    row.body.length <= 10_000 &&
+    (row.kind === undefined || row.kind === "prompt_suggestion")
   ) {
     return {
       id: row.id,
       op: row.op,
       session_id: row.session_id,
       body: row.body,
+      ...(row.kind === "prompt_suggestion" ? { kind: row.kind } : {}),
     };
+  }
+  if (
+    row.op === "list_session_comments" &&
+    typeof row.session_id === "string" &&
+    row.session_id !== ""
+  ) {
+    return { id: row.id, op: row.op, session_id: row.session_id };
+  }
+  if (row.op === "list_rooms" && isId(row.project_id)) {
+    return { id: row.id, op: row.op, project_id: row.project_id };
+  }
+  if (
+    row.op === "create_room" &&
+    isId(row.project_id) &&
+    typeof row.name === "string" &&
+    row.name.trim() !== "" &&
+    row.name.length <= 60 &&
+    isOptionalText(row.topic, 255)
+  ) {
+    return {
+      id: row.id,
+      op: row.op,
+      project_id: row.project_id,
+      name: row.name,
+      ...(row.topic !== undefined ? { topic: row.topic as string | null } : {}),
+    };
+  }
+  if (
+    row.op === "update_room" &&
+    isId(row.project_id) &&
+    isId(row.room_id) &&
+    typeof row.patch === "object" &&
+    row.patch !== null
+  ) {
+    const patch = row.patch as Record<string, unknown>;
+    if (
+      (patch.name === undefined || (typeof patch.name === "string" && patch.name.length <= 60)) &&
+      isOptionalText(patch.topic, 255) &&
+      (patch.archived === undefined || typeof patch.archived === "boolean")
+    ) {
+      return {
+        id: row.id,
+        op: row.op,
+        project_id: row.project_id,
+        room_id: row.room_id,
+        patch: {
+          ...(patch.name !== undefined ? { name: patch.name as string } : {}),
+          ...(patch.topic !== undefined ? { topic: patch.topic as string | null } : {}),
+          ...(patch.archived !== undefined ? { archived: patch.archived as boolean } : {}),
+        },
+      };
+    }
+  }
+  if (
+    row.op === "list_room_messages" &&
+    isId(row.project_id) &&
+    isRoomId(row.room_id) &&
+    (row.before === undefined || (typeof row.before === "string" && row.before !== "")) &&
+    (row.limit === undefined ||
+      (typeof row.limit === "number" && Number.isInteger(row.limit) && row.limit >= 1 && row.limit <= 50))
+  ) {
+    return {
+      id: row.id,
+      op: row.op,
+      project_id: row.project_id,
+      room_id: row.room_id,
+      ...(typeof row.before === "string" ? { before: row.before } : {}),
+      ...(typeof row.limit === "number" ? { limit: row.limit } : {}),
+    };
+  }
+  if (
+    row.op === "create_room_message" &&
+    isId(row.project_id) &&
+    isRoomId(row.room_id) &&
+    typeof row.body === "string" &&
+    row.body.trim() !== "" &&
+    row.body.length <= 10_000
+  ) {
+    return {
+      id: row.id,
+      op: row.op,
+      project_id: row.project_id,
+      room_id: row.room_id,
+      body: row.body,
+      ...((typeof row.parent_id === "string" || row.parent_id === null) ? { parent_id: row.parent_id } : {}),
+    };
+  }
+  if (
+    row.op === "resolve_project" &&
+    typeof row.cwd === "string" &&
+    row.cwd.trim() !== "" &&
+    row.cwd.length <= 4_096
+  ) {
+    return { id: row.id, op: row.op, cwd: row.cwd };
   }
   if (
     row.op === "create_project_message" &&
@@ -408,7 +554,59 @@ export async function handleCodeBridgeRequest(request: CodeBridgeRequest): Promi
     });
   }
   if (request.op === "create_session_comment") {
-    return createHelmWebSessionComment(request.session_id, request.body);
+    return createHelmWebSessionComment(request.session_id, request.body, request.kind);
+  }
+  if (request.op === "list_session_comments") {
+    return { comments: await fetchHelmWebSessionComments(request.session_id) };
+  }
+  if (request.op === "list_rooms") {
+    return { rooms: await fetchHelmWebProjectRooms(request.project_id) };
+  }
+  if (request.op === "create_room") {
+    return createHelmWebProjectRoom(request.project_id, {
+      name: request.name,
+      ...(request.topic !== undefined ? { topic: request.topic } : {}),
+    });
+  }
+  if (request.op === "update_room") {
+    return updateHelmWebProjectRoom(request.project_id, request.room_id, request.patch);
+  }
+  if (request.op === "list_room_messages") {
+    return fetchHelmWebRoomMessages(request.project_id, request.room_id, {
+      ...(request.before !== undefined ? { before: request.before } : {}),
+      ...(request.limit !== undefined ? { limit: request.limit } : {}),
+    });
+  }
+  if (request.op === "create_room_message") {
+    return createHelmWebRoomMessage(
+      request.project_id,
+      request.room_id,
+      request.body,
+      request.parent_id,
+    );
+  }
+  if (request.op === "resolve_project") {
+    const repository = inspectLocalRepository(request.cwd);
+    if (repository === null) {
+      return { project: null, method: null };
+    }
+    const project = matchProjectForRepository(repository, await fetchHelmWebProjects());
+    if (project === null) {
+      return { project: null, method: null };
+    }
+    const remote = normalizeRepositoryIdentity(repository.remote);
+    const matchedByRemote =
+      remote !== null &&
+      [
+        project.github_repository_full_name,
+        project.github_clone_url,
+        project.github_html_url,
+        project.repository_path,
+      ].some((identity) => normalizeRepositoryIdentity(identity) === remote);
+    return {
+      project: { id: project.id, name: project.name },
+      method: matchedByRemote ? "remote" : "name",
+    };
   }
   if (request.op === "create_project_message") {
     return createHelmWebProjectMessage(request.project_id, request.body, request.parent_id);
@@ -451,11 +649,17 @@ export async function handleCodeBridgeRequest(request: CodeBridgeRequest): Promi
   const messages = (
     await Promise.all(projects.map((project) => fetchHelmWebProjectMessages(project.id)))
   ).flat();
+  // Best-effort: identity powers the sidebar's "not my sessions" filter, but
+  // a bootstrap without it is still a usable snapshot.
+  const identity = await fetchAuthenticatedUser()
+    .then((user) => ({ id: String(user.id), name: user.name ?? null }))
+    .catch(() => null);
   return {
     reverb: resolveCodeBridgeReverbConfig(getApiUrl()),
     projects,
     sessions,
     messages,
+    identity,
   };
 }
 

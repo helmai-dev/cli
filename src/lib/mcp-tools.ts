@@ -18,6 +18,7 @@ import {
   type McpToolResult,
 } from "./mcp-web.js";
 import { projectHintFromCwd } from "./fingerprints.js";
+import { resolveNotesRoot, writeNoteFile } from "./notes.js";
 import pkg from "../../package.json";
 
 export const HELM_MCP_PROTOCOL_VERSION = "2025-03-26";
@@ -35,16 +36,21 @@ export const WEB_MCP_TOOL_NAMES = [
   "create_work_note",
   "list_sessions",
   "get_session_result",
+  "list_rooms",
+  "read_room_messages",
 ] as const;
 
 export const LIVE_TEAMMATES_TOOL_NAME = "list_live_teammates";
 
 export const TEAM_WORK_TOOL_NAME = "retrieve_team_work";
 
+export const CREATE_NOTE_TOOL_NAME = "create_note";
+
 export const HELM_MCP_TOOL_NAMES = [
   ...WEB_MCP_TOOL_NAMES,
   LIVE_TEAMMATES_TOOL_NAME,
   TEAM_WORK_TOOL_NAME,
+  CREATE_NOTE_TOOL_NAME,
 ] as const;
 
 export interface McpToolDefinition {
@@ -233,6 +239,41 @@ export const HELM_MCP_TOOLS: McpToolDefinition[] = [
     },
   },
   {
+    name: "list_rooms",
+    description:
+      "List the chat rooms of a Helm project. Rooms are named channels (#landing-page) teammates and agents talk in; 'general' is the Project Room stream itself. Use read_room_messages to read one.",
+    inputSchema: {
+      type: "object",
+      properties: { project_id: PROJECT_ID },
+      required: ["project_id"],
+    },
+  },
+  {
+    name: "read_room_messages",
+    description:
+      "Read recent messages from one chat room of a Helm project, so 'we discussed this in the #landing-page room' is something you can look up. Address the room by name ('#landing-page' or 'landing-page'), by id, or as 'general' for the Project Room stream. Newest-last bounded pages; pass before with the oldest returned message id to page back.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: PROJECT_ID,
+        room: {
+          type: "string",
+          description:
+            "Room name ('#landing-page' or 'landing-page'), room id, or 'general' for the Project Room stream.",
+        },
+        limit: {
+          type: "integer",
+          description: "Messages per page, newest first (default 20, max 50).",
+        },
+        before: {
+          type: "string",
+          description: "Page back: return messages older than this message id.",
+        },
+      },
+      required: ["project_id", "room"],
+    },
+  },
+  {
     name: "list_live_teammates",
     description:
       "See who on the team is working in the same project or file right now. Returns path/project overlap only — never prompts or file contents. Empty when Helm Web has no live-fingerprint read yet.",
@@ -273,9 +314,34 @@ export const HELM_MCP_TOOLS: McpToolDefinition[] = [
       },
     },
   },
+  {
+    name: "create_note",
+    description:
+      "Create a Markdown note in the current project's notes/ directory \u2014 the Notes surface in Helm Code. Writes <repository root>/notes/<kebab-title>.md resolved from the current working directory; never overwrites (collisions get a numeric suffix). Purely local: works without a Helm account.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: {
+          type: "string",
+          description: "The note's title. Also names the file (kebab-cased) unless filename is given.",
+        },
+        content: {
+          type: "string",
+          description:
+            "The note's Markdown body. A leading '# Title' heading is added when the content does not start with a heading.",
+        },
+        filename: {
+          type: "string",
+          description:
+            "Optional bare file name (for example release-checklist.md). No path separators.",
+        },
+      },
+      required: ["title", "content"],
+    },
+  },
 ];
 
-export const HELM_MCP_INSTRUCTIONS = `Helm team tools for this machine. Discover projects with list_projects, then read the room with get_project_awareness and list_todos before acting. list_live_teammates shows path/project overlap with teammates. retrieve_team_work returns bounded excerpts of teammate work on this project (their ask, files, and tool results) so you can reuse it instead of redoing it.`;
+export const HELM_MCP_INSTRUCTIONS = `Helm team tools for this machine. Discover projects with list_projects, then read the room with get_project_awareness and list_todos before acting. Projects have named chat rooms (#landing-page): list_rooms lists them and read_room_messages reads one, so a reference like "we discussed this in the #landing-page room" is something you can look up. list_live_teammates shows path/project overlap with teammates. retrieve_team_work returns bounded excerpts of teammate work on this project (their ask, files, and tool results) so you can reuse it instead of redoing it. create_note files a Markdown note in the project's notes/ directory (Helm Code's Notes surface) and works even without a Helm account.`;
 
 export function advertisedMcpTools(): McpToolDefinition[] {
   return HELM_MCP_TOOLS;
@@ -370,6 +436,11 @@ async function callTool(params: unknown, runtime: McpRuntime): Promise<McpToolRe
   }
 
   const args = sanitizeToolArguments(name, rawArgs);
+  // create_note is purely local (a Markdown file in the project checkout), so
+  // it must work unlinked — the link gate below guards team-plane tools only.
+  if (name === CREATE_NOTE_TOOL_NAME) {
+    return createNoteResult(args);
+  }
   if (!runtime.isLinked()) {
     return errorResult(UNLINKED_MCP_MESSAGE);
   }
@@ -431,6 +502,31 @@ async function callTool(params: unknown, runtime: McpRuntime): Promise<McpToolRe
     }
     const text = error instanceof Error ? error.message : String(error);
     return errorResult(text);
+  }
+}
+
+function createNoteResult(args: Record<string, unknown>): McpToolResult {
+  const title = typeof args.title === "string" ? args.title.trim() : "";
+  const content = typeof args.content === "string" ? args.content : "";
+  if (title === "") return errorResult("create_note requires a non-empty title.");
+  if (content.trim() === "") return errorResult("create_note requires non-empty content.");
+  try {
+    const note = writeNoteFile({
+      root: resolveNotesRoot(process.cwd()),
+      title,
+      content,
+      ...(typeof args.filename === "string" ? { filename: args.filename } : {}),
+    });
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ ok: true, path: note.relativePath, absolute_path: note.path }),
+        },
+      ],
+    };
+  } catch (error) {
+    return errorResult(error instanceof Error ? error.message : String(error));
   }
 }
 

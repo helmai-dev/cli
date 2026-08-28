@@ -271,3 +271,108 @@ test("code bridge bounds todo comment bodies like session comments", () => {
   assert.throws(() => parseCodeBridgeRequest({ ...request, body: "x".repeat(10_001) }), /unsupported/);
   assert.throws(() => parseCodeBridgeRequest({ ...request, todo_id: "" }), /unsupported/);
 });
+
+test("code bridge exposes bounded room reads and writes plus project resolution", () => {
+  assert.deepEqual(parseCodeBridgeRequest({ id: "r1", op: "list_rooms", project_id: "proj-1" }), {
+    id: "r1",
+    op: "list_rooms",
+    project_id: "proj-1",
+  });
+  assert.deepEqual(
+    parseCodeBridgeRequest({ id: "r2", op: "create_room", project_id: "proj-1", name: "landing-page" }),
+    { id: "r2", op: "create_room", project_id: "proj-1", name: "landing-page" },
+  );
+  assert.deepEqual(
+    parseCodeBridgeRequest({
+      id: "r3",
+      op: "update_room",
+      project_id: "proj-1",
+      room_id: "room-1",
+      patch: { archived: true, ignored: "dropped" },
+    }),
+    { id: "r3", op: "update_room", project_id: "proj-1", room_id: "room-1", patch: { archived: true } },
+  );
+  assert.deepEqual(
+    parseCodeBridgeRequest({
+      id: "r4",
+      op: "list_room_messages",
+      project_id: "proj-1",
+      room_id: "general",
+      before: "01J",
+      limit: 50,
+    }),
+    { id: "r4", op: "list_room_messages", project_id: "proj-1", room_id: "general", before: "01J", limit: 50 },
+  );
+  assert.throws(
+    () =>
+      parseCodeBridgeRequest({
+        id: "r5",
+        op: "list_room_messages",
+        project_id: "proj-1",
+        room_id: "general",
+        limit: 51,
+      }),
+    /unsupported/,
+  );
+  assert.deepEqual(
+    parseCodeBridgeRequest({
+      id: "r6",
+      op: "create_room_message",
+      project_id: "proj-1",
+      room_id: "room-1",
+      body: "Ship it.",
+      parent_id: "01J",
+    }),
+    { id: "r6", op: "create_room_message", project_id: "proj-1", room_id: "room-1", body: "Ship it.", parent_id: "01J" },
+  );
+  assert.throws(
+    () =>
+      parseCodeBridgeRequest({
+        id: "r7",
+        op: "create_room_message",
+        project_id: "proj-1",
+        room_id: "room-1",
+        body: "   ",
+      }),
+    /unsupported/,
+  );
+  assert.deepEqual(
+    parseCodeBridgeRequest({ id: "r8", op: "resolve_project", cwd: "/Users/dev/code/app" }),
+    { id: "r8", op: "resolve_project", cwd: "/Users/dev/code/app" },
+  );
+  assert.throws(() => parseCodeBridgeRequest({ id: "r9", op: "resolve_project", cwd: "" }), /unsupported/);
+});
+
+test("session comment kind is limited to prompt_suggestion and comments are listable", () => {
+  assert.deepEqual(
+    parseCodeBridgeRequest({
+      id: "k1",
+      op: "create_session_comment",
+      session_id: "session-1",
+      body: "Try this prompt.",
+      kind: "prompt_suggestion",
+    }),
+    {
+      id: "k1",
+      op: "create_session_comment",
+      session_id: "session-1",
+      body: "Try this prompt.",
+      kind: "prompt_suggestion",
+    },
+  );
+  assert.throws(
+    () =>
+      parseCodeBridgeRequest({
+        id: "k2",
+        op: "create_session_comment",
+        session_id: "session-1",
+        body: "Nope.",
+        kind: "send_to_agent",
+      }),
+    /unsupported/,
+  );
+  assert.deepEqual(
+    parseCodeBridgeRequest({ id: "k3", op: "list_session_comments", session_id: "session-1" }),
+    { id: "k3", op: "list_session_comments", session_id: "session-1" },
+  );
+});

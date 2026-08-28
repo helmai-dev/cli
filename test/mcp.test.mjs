@@ -570,3 +570,96 @@ test("codex TOML section edit replaces stale entries and preserves neighbors", (
   });
   assert.ok(escaped.includes("\"C:\\\\Program Files\\\\helm\\\\helm.exe\""));
 });
+
+test("read_room_messages forwards room arguments to the web tool, sanitized", async () => {
+  const { runtime, calls } = recordingRuntime();
+  const response = await handleMcpRequest(
+    {
+      jsonrpc: "2.0",
+      id: 21,
+      method: "tools/call",
+      params: {
+        name: "read_room_messages",
+        arguments: { project_id: "proj_1", room: "#landing-page", limit: 10, before: "01J", prompt: PROMPT_SECRET },
+      },
+    },
+    runtime,
+  );
+  assert.equal(response.error, undefined);
+  const call = calls.find((entry) => entry.kind === "web-tool");
+  assert.equal(call.name, "read_room_messages");
+  assert.deepEqual(call.arguments, { project_id: "proj_1", room: "#landing-page", limit: 10, before: "01J" });
+});
+
+test("create_note is purely local: works unlinked, writes notes/, dedupes names", async () => {
+  const { runtime, calls } = recordingRuntime({ linked: false });
+  const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "helm-mcp-note-"));
+  const previousCwd = process.cwd();
+  process.chdir(workdir);
+  try {
+    const first = await handleMcpRequest(
+      {
+        jsonrpc: "2.0",
+        id: 31,
+        method: "tools/call",
+        params: {
+          name: "create_note",
+          arguments: { title: "Release Checklist", content: "- [ ] tag the build" },
+        },
+      },
+      runtime,
+    );
+    assert.equal(first.result.isError, undefined);
+    const payload = JSON.parse(first.result.content[0].text);
+    assert.equal(payload.path, "notes/release-checklist.md");
+    assert.match(
+      fs.readFileSync(path.join(workdir, "notes", "release-checklist.md"), "utf8"),
+      /^# Release Checklist/,
+    );
+
+    const second = await handleMcpRequest(
+      {
+        jsonrpc: "2.0",
+        id: 32,
+        method: "tools/call",
+        params: {
+          name: "create_note",
+          arguments: { title: "Release Checklist", content: "again" },
+        },
+      },
+      runtime,
+    );
+    assert.equal(JSON.parse(second.result.content[0].text).path, "notes/release-checklist-2.md");
+
+    const traversal = await handleMcpRequest(
+      {
+        jsonrpc: "2.0",
+        id: 33,
+        method: "tools/call",
+        params: {
+          name: "create_note",
+          arguments: { title: "Escape", content: "nope", filename: "../escape.md" },
+        },
+      },
+      runtime,
+    );
+    assert.equal(traversal.result.isError, true);
+
+    // Local tool, no web traffic — and the web tools stay gated while unlinked.
+    assert.equal(calls.length, 0);
+    const gated = await handleMcpRequest(
+      {
+        jsonrpc: "2.0",
+        id: 34,
+        method: "tools/call",
+        params: { name: "list_rooms", arguments: { project_id: "proj_1" } },
+      },
+      runtime,
+    );
+    assert.equal(gated.result.isError, true);
+    assert.match(gated.result.content[0].text, /helm connect/);
+  } finally {
+    process.chdir(previousCwd);
+    fs.rmSync(workdir, { recursive: true, force: true });
+  }
+});
