@@ -651,6 +651,97 @@ test("two chained proxied turns measure re-billed repeated context and upload no
   }
 });
 
+test("fingerprints from one conversation report under a single session key", async () => {
+  // The proxy used to mint a random session key per request, so every call
+  // looked like its own session: the dashboard's overlap read went quadratic
+  // and "two people in sessions that share files" was measuring pseudo-sessions.
+  // The measured chain is the real session, and fingerprints ride it.
+  const factsPath = tempFactsPath();
+  const fingerprintPosts = [];
+  const provider = await listenMock((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          id: "msg_session",
+          model: "claude-sonnet-4-20250514",
+          usage: {
+            input_tokens: 4000,
+            output_tokens: 20,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+          content: [{ type: "text", text: "ok" }],
+        }),
+      );
+    });
+  });
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0 },
+    {
+      anthropicUpstream: provider.url,
+      openaiUpstream: provider.url,
+      cwd: PROJECT_CWD,
+      homeDir: HOME_DIR,
+      now: () => NOW,
+      log: () => {},
+      linked: true,
+      deviceUlid: "01DEVICE",
+      fetchLiveOthers: async () => [],
+      workCachePath: path.join(path.dirname(factsPath), "proxy-work.json"),
+      promptFactsPath: factsPath,
+      sendUsage: async () => ({ accepted: 1 }),
+      sendFingerprints: async (body) => {
+        fingerprintPosts.push(body);
+      },
+      sendReuses: async () => ({ accepted: 1 }),
+      sendPromptFacts: async () => ({ accepted: 1 }),
+      environment: "default",
+    },
+  );
+
+  const post = async (body) => {
+    const response = await fetch(`${proxy.url}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "sk-ant-user-token",
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 200);
+    await proxy.reported;
+  };
+
+  try {
+    await post(toolTurn());
+    await post(
+      toolTurn([
+        { role: "assistant", content: [{ type: "text", text: "done" }] },
+        { role: "user", content: "now add the tests" },
+      ]),
+    );
+
+    const keys = fingerprintPosts
+      .flatMap((body) => body.fingerprints ?? [])
+      .map((fingerprint) => fingerprint.session_key)
+      .filter((key) => typeof key === "string" && key !== "");
+
+    assert.ok(keys.length >= 2, "both turns fingerprinted their tool paths");
+    assert.equal(
+      new Set(keys).size,
+      1,
+      `one conversation must report one session key, saw ${JSON.stringify(keys)}`,
+    );
+  } finally {
+    await proxy.close();
+    await provider.close();
+  }
+});
+
 test("a cached prefix reports no waste even though the context was re-sent", async () => {
   const factsPath = tempFactsPath();
   const helmPosts = [];

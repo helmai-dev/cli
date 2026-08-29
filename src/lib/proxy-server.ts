@@ -570,7 +570,57 @@ async function reportAfterResponse(input: {
   }
 
   const fingerprintProvider = usageProviderFor(input.provider) === "claude" ? "claude-compatible" : "codex";
-  const sessionKey = mintProxySessionKey();
+
+  // Prompt-inefficiency measurement. Runs after the client already has its
+  // response, so it can never slow or fail the user's provider call. Stored
+  // locally even when unlinked, so `helm scan` and `helm audit` still work for
+  // CLI-only users. Only hashes, byte lengths, and counts are persisted.
+  //
+  // It runs before the session key is chosen because it is what knows the
+  // session: turn N's messages are turn N-1's plus new entries, so the chain
+  // identifies the conversation. Everything below then reports under that one
+  // key instead of a fresh random one per request.
+  const mintedSessionKey = mintProxySessionKey();
+  let promptFacts: PromptFactsBody | null = null;
+  let chainedSessionKey: string | null = null;
+  if (input.storeCache && input.usage) {
+    try {
+      const factsPath = promptFactsPathFor(input.hooks);
+      const observed = observePromptFacts({
+        file: readPromptFacts(factsPath),
+        parsed: input.parsed,
+        usage: input.usage,
+        projectHint: input.projectHint,
+        model: input.model,
+        now: input.now,
+        sessionKey: mintedSessionKey,
+      });
+      if (observed !== null) {
+        writePromptFacts(factsPath, observed.file);
+        chainedSessionKey = observed.session.session_key;
+        promptFacts = {
+          device_ulid: input.hooks.deviceUlid ?? loadMachineIdentity()?.ulid ?? null,
+          facts: [
+            promptFactsUploadFromMeasurement({
+              measurement: observed.measurement,
+              projectHint: input.projectHint,
+              sessionKey: observed.session.session_key,
+              provider: usageProviderFor(input.provider),
+              model: input.model,
+              occurredAt: input.now,
+              environment: input.hooks.environment ?? getActiveEnvironment(),
+            }),
+          ],
+        };
+      }
+    } catch {
+    }
+  }
+
+  // One conversation, one session key — for fingerprints, excerpts and the
+  // work cache alike. The random fallback only applies when the request
+  // carries no chain to join (a replayed cache hit, an unparseable body).
+  const sessionKey = chainedSessionKey ?? mintedSessionKey;
   let excerpt: UsageExcerptUploadBody | null = null;
   if (input.storeCache && input.workKey && input.cachePath) {
     try {
@@ -629,43 +679,6 @@ async function reportAfterResponse(input: {
     } catch {
     }
   }
-  // Prompt-inefficiency measurement. Runs after the client already has its
-  // response, so it can never slow or fail the user's provider call. Stored
-  // locally even when unlinked, so `helm scan` and `helm audit` still work for
-  // CLI-only users. Only hashes, byte lengths, and counts are persisted.
-  let promptFacts: PromptFactsBody | null = null;
-  if (input.storeCache && input.usage) {
-    try {
-      const factsPath = promptFactsPathFor(input.hooks);
-      const observed = observePromptFacts({
-        file: readPromptFacts(factsPath),
-        parsed: input.parsed,
-        usage: input.usage,
-        projectHint: input.projectHint,
-        model: input.model,
-        now: input.now,
-      });
-      if (observed !== null) {
-        writePromptFacts(factsPath, observed.file);
-        promptFacts = {
-          device_ulid: input.hooks.deviceUlid ?? loadMachineIdentity()?.ulid ?? null,
-          facts: [
-            promptFactsUploadFromMeasurement({
-              measurement: observed.measurement,
-              projectHint: input.projectHint,
-              sessionKey: observed.session.session_key,
-              provider: usageProviderFor(input.provider),
-              model: input.model,
-              occurredAt: input.now,
-              environment: input.hooks.environment ?? getActiveEnvironment(),
-            }),
-          ],
-        };
-      }
-    } catch {
-    }
-  }
-
   const fingerprints: WorkFingerprintsBody | null = (() => {
     const built = [];
     for (const fact of input.facts) {
