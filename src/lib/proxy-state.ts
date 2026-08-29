@@ -48,6 +48,11 @@ export function getProxyWorkCachePath(): string {
   return envFile("proxy-work.json");
 }
 
+/** Prompt-inefficiency measurements: session chain tips, hashes, token counts. */
+export function getProxyPromptFactsPath(): string {
+  return envFile("proxy-prompt-facts.json");
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }

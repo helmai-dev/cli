@@ -1,13 +1,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import * as os from "node:os";
+import * as path from "node:path";
 import { hasLinkedAccount } from "./account-link.js";
 import {
   fetchLiveFingerprintOthers,
+  sendPromptFacts,
   sendUsageEvents,
   sendUsageExcerpt,
   sendUsageReuses,
   sendWorkFingerprints,
   type LiveOverlapPerson,
+  type PromptFactsBody,
   type UsageExcerptUploadBody,
   type UsageReuseUpload,
 } from "./api-web.js";
@@ -43,7 +46,17 @@ import {
   type LiveUsageRecord,
   type ProxiedProvider,
 } from "./proxy-inspect.js";
-import { reportProxiedRequest, usageReuseFromStored } from "./proxy-report.js";
+import {
+  promptFactsUploadFromMeasurement,
+  reportProxiedRequest,
+  usageReuseFromStored,
+} from "./proxy-report.js";
+import {
+  defaultPromptFactsPath,
+  observePromptFacts,
+  readPromptFacts,
+  writePromptFacts,
+} from "./prompt-facts.js";
 import {
   excerptUploadFromParts,
   lastUserPromptFromRequestBody,
@@ -101,6 +114,7 @@ export interface ProxyHooks {
   sendFingerprints?: typeof sendWorkFingerprints;
   sendReuses?: typeof sendUsageReuses;
   sendExcerpt?: typeof sendUsageExcerpt;
+  sendPromptFacts?: typeof sendPromptFacts;
   /**
    * Slice-6 team store: excerpt POSTs after 2xx. Opt-in so library consumers
    * and tests stay fully offline; the `helm proxy` command turns this on.
@@ -109,6 +123,7 @@ export interface ProxyHooks {
   environment?: string;
   log?: (line: string) => void;
   workCachePath?: string;
+  promptFactsPath?: string;
   wrapToken?: string | null;
 }
 
@@ -124,6 +139,22 @@ export interface RunningProxy {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Both files are proxy state for the same environment, so prompt facts follow
+ * the work cache wherever it points. A caller that redirects one (a test, a
+ * throwaway environment) gets the other redirected too, and never writes to the
+ * real state directory by accident.
+ */
+function promptFactsPathFor(hooks: ProxyHooks): string {
+  if (hooks.promptFactsPath !== undefined) {
+    return hooks.promptFactsPath;
+  }
+  if (hooks.workCachePath !== undefined) {
+    return path.join(path.dirname(hooks.workCachePath), "proxy-prompt-facts.json");
+  }
+  return defaultPromptFactsPath();
 }
 
 function headerNames(req: IncomingMessage): string[] {
@@ -598,6 +629,43 @@ async function reportAfterResponse(input: {
     } catch {
     }
   }
+  // Prompt-inefficiency measurement. Runs after the client already has its
+  // response, so it can never slow or fail the user's provider call. Stored
+  // locally even when unlinked, so `helm scan` and `helm audit` still work for
+  // CLI-only users. Only hashes, byte lengths, and counts are persisted.
+  let promptFacts: PromptFactsBody | null = null;
+  if (input.storeCache && input.usage) {
+    try {
+      const factsPath = promptFactsPathFor(input.hooks);
+      const observed = observePromptFacts({
+        file: readPromptFacts(factsPath),
+        parsed: input.parsed,
+        usage: input.usage,
+        projectHint: input.projectHint,
+        model: input.model,
+        now: input.now,
+      });
+      if (observed !== null) {
+        writePromptFacts(factsPath, observed.file);
+        promptFacts = {
+          device_ulid: input.hooks.deviceUlid ?? loadMachineIdentity()?.ulid ?? null,
+          facts: [
+            promptFactsUploadFromMeasurement({
+              measurement: observed.measurement,
+              projectHint: input.projectHint,
+              sessionKey: observed.session.session_key,
+              provider: usageProviderFor(input.provider),
+              model: input.model,
+              occurredAt: input.now,
+              environment: input.hooks.environment ?? getActiveEnvironment(),
+            }),
+          ],
+        };
+      }
+    } catch {
+    }
+  }
+
   const fingerprints: WorkFingerprintsBody | null = (() => {
     const built = [];
     for (const fact of input.facts) {
@@ -629,10 +697,12 @@ async function reportAfterResponse(input: {
     fingerprints,
     reuses: input.reuses,
     excerpt,
+    promptFacts,
     sendUsage: input.hooks.sendUsage ?? sendUsageEvents,
     sendFingerprints: input.hooks.sendFingerprints ?? sendWorkFingerprints,
     sendReuses: input.hooks.sendReuses ?? sendUsageReuses,
     sendExcerpt: input.hooks.sendExcerpt ?? sendUsageExcerpt,
+    sendPromptFacts: input.hooks.sendPromptFacts ?? sendPromptFacts,
   });
 }
 

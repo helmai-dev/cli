@@ -27,6 +27,11 @@ import { runLocalScan } from "../lib/local-scan.js";
 import { getTeamUsage, sendUsageEvents, usageEventToUpload } from "../lib/api-web.js";
 import { getApiUrl, loadCredentials, loadMachineIdentity } from "../lib/config.js";
 import { defaultWorkCachePath, readWorkCache, summarizeWorkReuses } from "../lib/proxy-work-cache.js";
+import {
+  defaultPromptFactsPath,
+  readPromptFacts,
+  summarizePromptFacts,
+} from "../lib/prompt-facts.js";
 
 const UPLOAD_BATCH_SIZE = 500;
 const MAX_TEAM_USERS = 10000;
@@ -127,6 +132,7 @@ function formatLocalAuditHuman(snapshot: LocalAuditSnapshot): string {
     lines.push("  To request a sales audit, open https://tryhelm.ai");
     lines.push("");
     appendLocalReuse(lines, snapshot);
+    appendPromptFacts(lines, snapshot);
     appendTeamSections(lines, snapshot);
     return lines.join("\n");
   }
@@ -149,6 +155,7 @@ function formatLocalAuditHuman(snapshot: LocalAuditSnapshot): string {
   );
   lines.push("");
   appendLocalReuse(lines, snapshot);
+  appendPromptFacts(lines, snapshot);
   appendTeamSections(lines, snapshot);
   appendNotComputed(lines, snapshot);
   return lines.join("\n");
@@ -279,9 +286,15 @@ function appendObservedDiagnose(lines: string[], rollup: TeamRollupObserved): vo
   lines.push("");
 }
 
+/** Keys leave this list as they become real measurements. A key with a stored
+ * value is printed in its own measured section, never under "Not computed". */
 function appendNotComputed(lines: string[], snapshot: AuditSnapshot): void {
+  const pending = Object.entries(snapshot.not_computed).filter(([, value]) => value == null);
+  if (pending.length === 0) {
+    return;
+  }
   lines.push(chalk.bold("  Not computed"));
-  for (const key of Object.keys(snapshot.not_computed)) {
+  for (const [key] of pending) {
     lines.push(`    ${key.padEnd(34)}not computed`);
   }
   lines.push("");
@@ -303,6 +316,31 @@ function appendLocalReuse(lines: string[], snapshot: LocalAuditSnapshot): void {
   } else {
     lines.push(`    ${count}  ${storedUsd(reuse.avoided_usd)}`);
   }
+  lines.push("");
+}
+
+/** An observation about tokens. Never a dollar: Helm Web owns the rate table. */
+function appendPromptFacts(lines: string[], snapshot: LocalAuditSnapshot): void {
+  const facts = snapshot.local_prompt_facts;
+  if (facts == null || facts.observations < 1) {
+    return;
+  }
+  lines.push(chalk.bold("  Repeated context (measured at the wrap)"));
+  const requests = facts.observations === 1 ? "1 request" : `${facts.observations} requests`;
+  lines.push(
+    `    ${requests} measured · ${facts.duplicate_prompt_count} re-sent context the provider did not serve from cache`,
+  );
+  lines.push(
+    `    ${fmt(facts.repeated_rebilled_tokens)} repeated tokens were re-billed at the full input rate`,
+  );
+  if (facts.duplicate_attachment_count > 0) {
+    lines.push(
+      `    ${facts.duplicate_attachment_count} re-attached tool results (${fmt(facts.duplicate_attachment_tokens)} tokens)`,
+    );
+  }
+  lines.push(
+    chalk.gray("    Token counts only. Helm Web prices these; this CLI does not."),
+  );
   lines.push("");
 }
 
@@ -388,7 +426,11 @@ export async function auditCommand(options: AuditCommandOptions): Promise<void> 
     inputs = await promptAuditInputs();
   }
   const reuse = summarizeWorkReuses(readWorkCache(defaultWorkCachePath()));
-  const snapshot = auditSnapshotFromScan(summary, days, inputs, reuse);
+  const promptFacts = summarizePromptFacts(readPromptFacts(defaultPromptFactsPath()), {
+    now: new Date(),
+    windowDays: days,
+  });
+  const snapshot = auditSnapshotFromScan(summary, days, inputs, reuse, promptFacts);
 
   if (!options.json) {
     console.log(formatAuditHuman(snapshot));
