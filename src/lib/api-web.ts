@@ -880,6 +880,68 @@ export async function sendUsageExcerpt(
   }
 }
 
+// --- Prompt-inefficiency measurements ---
+
+/**
+ * One measured wrap request. Tokens only — the CLI never submits a dollar.
+ * Helm Web prices `repeated_rebilled_tokens_apportioned` at the server rate
+ * table (`UsageRates::costUsd($model, $tokens, 0, 0, 0)`), because those tokens
+ * were billed at the full input rate. Fields ending `_apportioned` were divided
+ * out of the provider's own prompt-token total by measured byte share; see
+ * docs/prompt-inefficiency-detector.md for the exact definitions.
+ */
+export interface PromptFactsUpload {
+  /** Measurement contract version, so the server can reject builds it predates. */
+  readonly measurement: string;
+  readonly project_hint: string;
+  readonly session_key: string;
+  readonly turn_index: number;
+  readonly provider: string;
+  readonly model: string | null;
+  readonly input_tokens: number;
+  readonly output_tokens: number;
+  readonly cache_write_tokens: number;
+  readonly cache_read_tokens: number;
+  readonly repeated_prefix_tokens_apportioned: number;
+  readonly repeated_rebilled_tokens_apportioned: number;
+  readonly duplicate_attachment_tokens_apportioned: number;
+  readonly duplicate_attachment_count: number;
+  readonly occurred_at: string;
+  readonly environment: string | null;
+}
+
+export interface PromptFactsBody {
+  readonly device_ulid: string | null;
+  readonly facts: readonly [PromptFactsUpload, ...PromptFactsUpload[]];
+}
+
+export const PROMPT_FACTS_ENDPOINT = "/usage/prompt-facts";
+
+export const PROMPT_FACTS_TIMEOUT_MS = 1200;
+
+/**
+ * POST measured prompt facts. Helm Web may not implement this route yet, so a
+ * 404 or a 422 from an older server is a normal outcome, not an error worth
+ * surfacing: callers swallow it exactly like the other wrap uploads and the
+ * user's provider call is never affected.
+ */
+export async function sendPromptFacts(
+  body: PromptFactsBody,
+  requester: WebRequester = request,
+): Promise<{ accepted: number }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROMPT_FACTS_TIMEOUT_MS);
+  try {
+    return await requester<{ accepted: number }>(PROMPT_FACTS_ENDPOINT, {
+      method: "POST",
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export type WebRequester = <T>(
   endpoint: string,
   options?: RequestInit,

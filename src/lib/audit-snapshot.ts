@@ -9,6 +9,7 @@
  */
 
 import { providerCacheSavingsUsd, type ScanSummary } from "./claude-scan.js";
+import type { PromptFactsSummary } from "./prompt-facts.js";
 import type { WorkReuseSummary } from "./proxy-work-cache.js";
 
 export interface AuditSnapshotDerived {
@@ -19,8 +20,14 @@ export interface AuditSnapshotDerived {
 export interface AuditSnapshotNotComputed {
   identified_savings_usd: null;
   waste_rate: null;
-  duplicate_prompt_count: null;
+  /** Requests in the window that re-sent context and were re-billed for it.
+   * Null until the wrap proxy has measured some; this is a count, never a
+   * dollar, and it comes from stored measurements only. */
+  duplicate_prompt_count: number | null;
   model_routing_opportunity_usd: null;
+  /** Stays null on purpose. The CLI measures the wasted tokens but does not own
+   * a rate table for them: Helm Web prices the uploaded measurement at the
+   * server rate table. Pricing here would be inventing a dollar. */
   prompt_optimization_savings_usd: null;
   shared_context_savings_usd: null;
 }
@@ -150,6 +157,8 @@ export interface LocalAuditSnapshot extends AuditSnapshotBase {
   source: "local_transcripts";
   observed: ScanSummary;
   local_reuse?: WorkReuseSummary;
+  /** Repeated-context measured at this machine's wrap proxy. Tokens only. */
+  local_prompt_facts?: PromptFactsSummary;
 }
 
 export interface TeamAuditSnapshot extends AuditSnapshotBase {
@@ -191,6 +200,7 @@ export function auditSnapshotFromScan(
   windowDays: number,
   inputs: AuditTeamInputs = ABSENT_INPUTS,
   localReuse: WorkReuseSummary | null = null,
+  promptFacts: PromptFactsSummary | null = null,
 ): LocalAuditSnapshot {
   const promptTokens =
     summary.totals.input + summary.totals.cacheWrite + summary.totals.cacheRead;
@@ -223,8 +233,15 @@ export function auditSnapshotFromScan(
     },
     inputs,
     scenario,
-    not_computed: { ...NOT_COMPUTED },
+    not_computed: {
+      ...NOT_COMPUTED,
+      // Only a stored measurement fills this. No proxy traffic, no count.
+      duplicate_prompt_count: promptFacts != null ? promptFacts.duplicate_prompt_count : null,
+    },
     ...(localReuse != null && localReuse.count > 0 ? { local_reuse: localReuse } : {}),
+    ...(promptFacts != null && promptFacts.observations > 0
+      ? { local_prompt_facts: promptFacts }
+      : {}),
   };
 }
 

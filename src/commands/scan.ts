@@ -13,6 +13,12 @@ import { decideScanAuth, hasLinkedAccount, refuseUnlinkedAccount } from "../lib/
 import { sendUsageEvents, usageEventToUpload } from "../lib/api-web.js";
 import { getApiUrl, loadCredentials, loadMachineIdentity } from "../lib/config.js";
 import { runLocalScan } from "../lib/local-scan.js";
+import {
+  defaultPromptFactsPath,
+  readPromptFacts,
+  summarizePromptFacts,
+  type PromptFactsSummary,
+} from "../lib/prompt-facts.js";
 
 const UPLOAD_BATCH_SIZE = 500;
 
@@ -31,10 +37,31 @@ function fmt(n: number): string {
   return n.toLocaleString("en-US");
 }
 
-function printSummary(summary: ScanSummary, days: number): void {
+/** Repeated context measured at the wrap proxy. An observation in tokens:
+ * Helm Web owns the rate table, so the CLI never turns this into a dollar. */
+function printPromptFacts(facts: PromptFactsSummary | null): void {
+  if (facts == null || facts.observations < 1) {
+    return;
+  }
+  console.log(chalk.bold("  Repeated context (measured at the wrap)"));
+  console.log(
+    `  ${fmt(facts.repeated_rebilled_tokens)} repeated tokens re-billed at the full input rate across ${facts.duplicate_prompt_count} of ${facts.observations} measured requests`,
+  );
+  if (facts.duplicate_attachment_count > 0) {
+    console.log(
+      chalk.gray(
+        `  ${facts.duplicate_attachment_count} re-attached tool results (${fmt(facts.duplicate_attachment_tokens)} tokens)`,
+      ),
+    );
+  }
+  console.log("");
+}
+
+function printSummary(summary: ScanSummary, days: number, facts: PromptFactsSummary | null): void {
   console.log(chalk.cyan.bold(`\n  ⎈ Helm Scan — last ${days} days\n`));
   if (summary.events.length === 0) {
     console.log(chalk.gray("  No Claude Code activity found in this window.\n"));
+    printPromptFacts(facts);
     return;
   }
   const t = summary.totals;
@@ -64,6 +91,7 @@ function printSummary(summary: ScanSummary, days: number): void {
     );
   }
   console.log("");
+  printPromptFacts(facts);
 }
 
 export async function scanCommand(options: ScanCommandOptions): Promise<void> {
@@ -83,11 +111,15 @@ export async function scanCommand(options: ScanCommandOptions): Promise<void> {
 
   const days = Math.max(1, Math.min(365, Number.parseInt(options.days ?? "30", 10) || 30));
   const summary = await runLocalScan(days);
+  const promptFacts = summarizePromptFacts(readPromptFacts(defaultPromptFactsPath()), {
+    now: new Date(),
+    windowDays: days,
+  });
 
   if (options.json || options.quiet) {
     // JSON mode prints exactly one JSON document (after upload), below.
   } else {
-    printSummary(summary, days);
+    printSummary(summary, days, promptFacts);
   }
 
   const upload: { attempted: boolean; accepted: number; error: string | null } = {
@@ -126,6 +158,17 @@ export async function scanCommand(options: ScanCommandOptions): Promise<void> {
   }
 
   if (options.json) {
-    console.log(JSON.stringify({ ...summary, days, upload }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          ...summary,
+          days,
+          upload,
+          ...(promptFacts != null ? { prompt_facts: promptFacts } : {}),
+        },
+        null,
+        2,
+      ),
+    );
   }
 }
