@@ -54,6 +54,9 @@ function printPromptFacts(facts: PromptFactsSummary | null): void {
       ),
     );
   }
+  // The reason the number is trustworthy: context the provider served from
+  // its cache is excluded, so this counts only what was actually re-billed.
+  console.log(chalk.gray("  Context served from the provider's cache is not counted."));
   console.log("");
 }
 
