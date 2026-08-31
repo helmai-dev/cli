@@ -429,7 +429,7 @@ export function getUpdateCommandForSource(source: InstallSource): string {
 export function getUninstallCommandForSource(source: InstallSource): string {
   switch (source) {
     case "curl":
-      return "sudo rm /usr/local/bin/helm";
+      return "rm ~/.local/bin/helm";
     case "npm":
       return "npm uninstall -g @helmai/cli";
     case "pnpm":

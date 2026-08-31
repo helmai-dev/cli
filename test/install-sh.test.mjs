@@ -70,6 +70,13 @@ function createFixture() {
   const fakeBin = path.join(root, "fake-bin");
   mkdirSync(fakeBin);
   writeExecutable(
+    path.join(fakeBin, "sudo"),
+    `#!/bin/sh
+echo "sudo should not run during Helm install" >&2
+exit 1
+`,
+  );
+  writeExecutable(
     path.join(fakeBin, "curl"),
     `#!/usr/bin/env bash
 set -euo pipefail
@@ -266,6 +273,87 @@ test("reinstall replaces via rename: new inode, no staged temp leftovers", () =>
     const leftovers = readdirSync(installDir).filter((name) => name.includes(".tmp."));
     assert.deepEqual(leftovers, []);
   } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("default unix install dir is ~/.local/bin and never calls sudo", () => {
+  const fixture = createFixture();
+  try {
+    const result = runInstall({
+      fixture,
+      installDir: path.join(fixture.root, "unused-usr-local-bin"),
+      passDir: false,
+      extraEnv: { HELM_UPDATE_ONLY: "", HELM_SKIP_SETUP: "1", SHELL: "/bin/zsh" },
+    });
+    const output = combinedOutput(result);
+    const installedBin = path.join(fixture.root, ".local", "bin", "helm");
+    const zshrc = readFileSync(path.join(fixture.root, ".zshrc"), "utf8");
+
+    assert.equal(result.status, 0, output);
+    assert.doesNotMatch(output, /sudo should not run/i);
+    assert.doesNotMatch(output, /elevated permissions/i);
+    assert.match(output, /Installed helm v1\.3\.9 to /);
+    assert.match(output, /\.local\/bin\/helm/);
+    assert.equal(existsSync(installedBin), true);
+    assert.match(zshrc, /Helm CLI \(tryhelm\.ai\)/);
+    assert.match(zshrc, /\.local\/bin/);
+    assert.match(output, /Added .* to PATH/);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("explicit --dir does not edit the shell rc", () => {
+  const fixture = createFixture();
+  try {
+    const installDir = path.join(fixture.root, "custom-bin");
+    mkdirSync(installDir);
+    const result = runInstall({
+      fixture,
+      installDir,
+      passDir: false,
+      args: ["--dir", installDir],
+      extraEnv: { HELM_UPDATE_ONLY: "", HELM_SKIP_SETUP: "1", SHELL: "/bin/zsh" },
+    });
+    const output = combinedOutput(result);
+
+    assert.equal(result.status, 0, output);
+    assert.equal(existsSync(path.join(installDir, "helm")), true);
+    assert.equal(existsSync(path.join(fixture.root, ".zshrc")), false);
+    assert.match(output, /add .* to PATH/);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("an unwritable earlier Helm CLI is left in place instead of sudo", () => {
+  const fixture = createFixture();
+  try {
+    const shadowDir = path.join(fixture.root, "usr-local-bin");
+    mkdirSync(shadowDir);
+    const shadowBin = path.join(shadowDir, "helm");
+    writeExecutable(shadowBin, "#!/bin/sh\necho 1.3.7\n");
+    chmodSync(shadowDir, 0o555);
+
+    const result = runInstall({
+      fixture,
+      installDir: path.join(fixture.root, "unused"),
+      pathPrefix: [shadowDir],
+      passDir: false,
+      extraEnv: { HELM_UPDATE_ONLY: "", HELM_SKIP_SETUP: "1", SHELL: "/bin/zsh" },
+    });
+    const output = combinedOutput(result);
+    const installedBin = path.join(fixture.root, ".local", "bin", "helm");
+
+    assert.equal(result.status, 0, output);
+    assert.doesNotMatch(output, /sudo should not run/i);
+    assert.doesNotMatch(output, /Replaced earlier helm on PATH/);
+    assert.match(output, /will not show this install/i);
+    assert.equal(existsSync(installedBin), true);
+    assert.match(readFileSync(shadowBin, "utf8"), /echo 1\.3\.7/);
+  } finally {
+    chmodSync(path.join(fixture.root, "usr-local-bin"), 0o755);
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });

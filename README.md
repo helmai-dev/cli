@@ -19,7 +19,9 @@ One step. macOS, Linux, Windows/WSL — no Node required:
 curl -fsSL https://tryhelm.ai/install | bash
 ```
 
-That binary includes `helm proxy` and `helm wrap`. Stay in the same
+That binary includes `helm proxy` and `helm wrap`. The installer writes
+to `~/.local/bin` and does not ask for your computer password. Coding
+agents can follow https://tryhelm.ai/for/agents. Stay in the same
 terminal:
 
 ```bash
@@ -30,10 +32,11 @@ Restart the agent. Undo with `helm unwrap claude` or `helm unwrap
 codex`. This is laptop intercept for Claude Code and Codex. It does
 not sit on Cursor cloud VMs.
 
-If PATH already runs our CLI (Homebrew on macOS, an older npm global),
-the installer replaces that binary so `helm wrap` is the install you
-just ran. Kubernetes Helm is never overwritten. A root-owned curl
-install is removed with `sudo rm /usr/local/bin/helm`.
+If PATH already runs our CLI in a writable directory (Homebrew on
+macOS, an older npm global), the installer replaces that binary so
+`helm wrap` is the install you just ran. Kubernetes Helm is never
+overwritten. Uninstall with `rm ~/.local/bin/helm`. A leftover
+root-owned copy is `sudo rm /usr/local/bin/helm`.
 
 Homebrew tap (same binary, same `proxy` / `wrap`):
 

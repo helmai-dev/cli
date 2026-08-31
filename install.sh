@@ -67,7 +67,13 @@ if [[ -z "$install_dir" ]]; then
     fi
     install_dir="$install_root/bin"
   else
-    install_dir="/usr/local/bin"
+    if [[ -z "${HOME:-}" ]]; then
+      echo "Unable to determine home directory."
+      echo "Set HELM_INSTALL_DIR or pass --dir."
+      exit 1
+    fi
+    # User-writable: the curl one-liner must not ask for a computer password.
+    install_dir="$HOME/.local/bin"
   fi
 fi
 
@@ -125,12 +131,98 @@ if [[ -n "$existing_bin" && "$force_install" != "1" ]]; then
   fi
 fi
 
-# Homebrew on Apple Silicon puts /opt/homebrew/bin ahead of /usr/local/bin.
-# If PATH already runs our CLI, install onto that directory so `helm wrap`
-# is not a second hidden binary.
+# Homebrew on Apple Silicon puts /opt/homebrew/bin ahead of ~/.local/bin.
+# If PATH already runs our CLI in a writable directory, install onto that
+# directory so `helm wrap` is not a second hidden binary. A root-owned
+# leftover in /usr/local/bin is left in place; the new copy goes to
+# ~/.local/bin and PATH is prepended so it wins without sudo.
 if [[ "$user_set_dir" != "1" && -n "$existing_bin" ]] && is_our_helm "$existing_version"; then
-  install_dir="$(cd "$(dirname "$existing_bin")" && pwd)"
+  existing_dir="$(cd "$(dirname "$existing_bin")" && pwd)"
+  if [[ -d "$existing_dir" && -w "$existing_dir" && ( ! -e "$existing_bin" || -w "$existing_bin" ) ]]; then
+    install_dir="$existing_dir"
+  fi
 fi
+
+path_contains_dir() {
+  case ":$PATH:" in
+    *":$1:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+detect_shell_profile() {
+  local shell_name
+  shell_name="$(basename "${SHELL:-}")"
+  case "$shell_name" in
+    zsh)
+      if [[ -f "${HOME}/.zshrc" ]]; then
+        echo "${HOME}/.zshrc"
+        return 0
+      fi
+      if [[ -f "${HOME}/.zprofile" ]]; then
+        echo "${HOME}/.zprofile"
+        return 0
+      fi
+      echo "${HOME}/.zshrc"
+      return 0
+      ;;
+    bash)
+      if [[ -f "${HOME}/.bashrc" ]]; then
+        echo "${HOME}/.bashrc"
+        return 0
+      fi
+      if [[ -f "${HOME}/.bash_profile" ]]; then
+        echo "${HOME}/.bash_profile"
+        return 0
+      fi
+      echo "${HOME}/.bashrc"
+      return 0
+      ;;
+    *)
+      if [[ -f "${HOME}/.profile" ]]; then
+        echo "${HOME}/.profile"
+        return 0
+      fi
+      return 1
+      ;;
+  esac
+}
+
+# Prepend the install dir on PATH in the user's shell rc so `helm` works in
+# new terminals. Never uses sudo. Explicit --dir installs print a tip instead
+# of editing rc files (Helm Code pins HELM_CLI_BIN and should not touch zshrc).
+ensure_install_dir_on_path() {
+  local dest="$1"
+  if path_contains_dir "$dest"; then
+    return 0
+  fi
+  if [[ "$user_set_dir" == "1" ]]; then
+    echo "Tip: add $dest to PATH to run $HELM_BIN_NAME from anywhere."
+    echo "  export PATH=\"$dest:\$PATH\""
+    return 0
+  fi
+  local profile
+  if ! profile="$(detect_shell_profile)"; then
+    echo "Tip: add $dest to PATH to run $HELM_BIN_NAME from anywhere."
+    echo "  export PATH=\"$dest:\$PATH\""
+    return 0
+  fi
+  local marker="# Helm CLI (tryhelm.ai)"
+  if [[ -f "$profile" ]] && grep -Fqs "$marker" "$profile"; then
+    echo "Restart your terminal so PATH includes $dest, or run:"
+    echo "  export PATH=\"$dest:\$PATH\""
+    return 0
+  fi
+  mkdir -p "$(dirname "$profile")" 2>/dev/null || true
+  {
+    echo ""
+    echo "$marker"
+    echo "export PATH=\"$dest:\$PATH\""
+  } >> "$profile"
+  echo "Added $dest to PATH in $profile"
+  echo "This terminal:"
+  echo "  export PATH=\"$dest:\$PATH\""
+}
 
 tmp_dir="$(mktemp -d)"
 cleanup() { rm -rf "$tmp_dir"; }
@@ -233,17 +325,13 @@ install_binary() {
     mv -f "$staged" "$dest" || { rm -f "$staged"; return 1; }
   else
     echo ""
-    echo "Helm needs elevated permissions to install to $dest_dir"
+    echo "Unable to write to $dest_dir."
+    echo "Helm installs to a user directory so it does not need your computer password."
     echo ""
-    sudo mkdir -p "$dest_dir"
-    sudo cp "$tmp_dir/$HELM_ARTIFACT_NAME" "$staged" || { sudo rm -f "$staged"; return 1; }
-    sudo chmod 0755 "$staged"
-    if [[ "$platform" == "darwin" ]]; then
-      sudo xattr -dr com.apple.quarantine "$staged" 2>/dev/null || true
-      sudo codesign --remove-signature "$staged" 2>/dev/null || true
-      sudo codesign --force --sign - "$staged" 2>/dev/null || true
-    fi
-    sudo mv -f "$staged" "$dest" || { sudo rm -f "$staged"; return 1; }
+    echo "  curl -fsSL https://tryhelm.ai/install | bash"
+    echo "  curl -fsSL https://tryhelm.ai/install | bash -s -- --dir \"\$HOME/.local/bin\""
+    echo ""
+    return 1
   fi
 }
 
@@ -262,11 +350,14 @@ hash -r 2>/dev/null || true
 path_bin="$(command -v "$HELM_BIN_NAME" 2>/dev/null || true)"
 if [[ -n "$path_bin" ]] && ! [[ "$path_bin" -ef "$installed_bin" ]]; then
   path_version="$("$path_bin" --version 2>&1 || true)"
-  if is_our_helm "$path_version" && install_binary "$path_bin"; then
-    echo "Replaced earlier $HELM_BIN_NAME on PATH: $path_bin"
-    replaced_path_winner=1
-    hash -r 2>/dev/null || true
-    path_bin="$(command -v "$HELM_BIN_NAME" 2>/dev/null || true)"
+  if is_our_helm "$path_version"; then
+    path_dir="$(cd "$(dirname "$path_bin")" && pwd)"
+    if [[ -d "$path_dir" && -w "$path_dir" && -w "$path_bin" ]] && install_binary "$path_bin"; then
+      echo "Replaced earlier $HELM_BIN_NAME on PATH: $path_bin"
+      replaced_path_winner=1
+      hash -r 2>/dev/null || true
+      path_bin="$(command -v "$HELM_BIN_NAME" 2>/dev/null || true)"
+    fi
   fi
 fi
 
@@ -290,8 +381,12 @@ if [[ -n "$path_bin" && "$replaced_path_winner" != "1" ]] && ! [[ "$path_bin" -e
   echo "    # or put $install_dir earlier in PATH"
 fi
 
-if [[ "$platform" == "windows" ]] && [[ ":$PATH:" != *":$install_dir:"* ]]; then
-  echo "Tip: add $install_dir to PATH to run helm from anywhere."
+if [[ "$platform" == "windows" ]]; then
+  if ! path_contains_dir "$install_dir"; then
+    echo "Tip: add $install_dir to PATH to run helm from anywhere."
+  fi
+else
+  ensure_install_dir_on_path "$install_dir"
 fi
 
 if [[ "${HELM_UPDATE_ONLY:-}" != "1" ]]; then
