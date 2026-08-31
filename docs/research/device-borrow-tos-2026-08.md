@@ -2,13 +2,13 @@
 
 Checked 2026-08-31 against public terms, not legal advice. Question from the Ben call: can Helm, with the host’s consent, run another engineer’s turn on that host’s already-logged-in Claude Code or Codex so leftover subscription quota is used?
 
-**Verdict.** Do not ship device-borrow against consumer Pro/Max/Plus seats, and do not ship it against Team seats that are billed per member. The official pooling products are org API keys and (for OpenAI) workspace credit pools. Wrap reuse stays the legal skip: no one else’s seat is used.
+**Verdict.** The design is not password-sharing. Credentials stay on B’s machine. The remaining ToS problem is **using B’s per-seat limit so A can keep working after A hit theirs.** Anthropic and OpenAI sell overflow as extra usage / a workspace pool, not as leftover seat multiplexing. Occasional “hey, run this prompt on your Claude” is a coworker favor. A Helm product whose job is to reallocate leftover Max/Team quota is what they price against. Wrap reuse stays the clean skip.
 
 ## What we would be doing
 
-Not wrap skip. A live model request billed to teammate B’s Claude/Codex login, prompted by teammate A, on B’s machine after B approves a link.
+Not wrap skip, and not copying B’s login. After B approves, Helm asks the unmodified Claude/Codex on **B’s already-logged-in device** to run a prompt A wrote. B’s OAuth never leaves B’s laptop. From the provider’s billing view, **B** submitted the input.
 
-Josh’s “device sharing, not account sharing” split is not a term the providers use. Both treat “make the account available to anyone else” and “each end user authenticates with their own credentials” as the rule.
+That is closer to Slack: “here’s a prompt, run this for me.” It is not Netflix-password sharing. The earlier note over-weighted credential sharing. The clauses that still matter are per-seat limits, “ordinary individual usage,” and not circumventing rate limits by moving the work onto another account.
 
 ## Anthropic
 
@@ -89,4 +89,15 @@ The legal team pool is already in product: Enterprise/Edu **flexible pricing dra
 - A Team **admin** starting a Claude Code job as a named User via the org’s own admin APIs, if any exist, vs Helm driving the unmodified binary with that User’s OAuth cookie.
 - Whether a written Anthropic/OpenAI partnership could allow org-level routing. Today’s public Claude Code rule is: each end user authenticates as themselves; Helm must not intermediate.
 
-Until counsel says otherwise, device-borrow stays a do-not-build. The Thursday story is wrap + no-password install + honest receipts, not token torrenting.
+## The “run this for me” framing
+
+If B is the user at the keyboard of their own Claude Code, B is using B’s account. Consumer “do not share credentials” is not the hit. Two other rules are:
+
+1. **Per-seat limits are the product.** Claude Team: if one member hits the included limit, others are unaffected — and the official overflow is **extra usage credits at API rates**, plus per-user spend caps ([extra usage](https://support.claude.com/en/articles/12005970-extra-usage-for-claude-for-work-team-and-enterprise-plans)). OpenAI Business: one End User per End User Account; Enterprise flexible pricing already **pools credits at the workspace**. Neither vendor documents “send the blocked turn to a teammate with headroom.”
+2. **Circumvention.** OpenAI Terms: do not “circumvent any rate limits or restrictions.” Anthropic AUP: do not “circumvent a ban through the use of a different account” and do not coordinate across accounts to avoid guardrails. If the *reason* the prompt moves from A to B is that A is out of quota, Helm is a system for continuing work the rate limit was meant to stop.
+
+Claude Code’s “ordinary, individual usage” line and “do not intermediate usage on their end users’ behalf” still apply if Helm’s *product* is A’s coding session billed to B’s plan. A one-off human paste is not that. A lend/borrow queue that exists to burn leftover seats is.
+
+**ToS-safer cousin (already in Helm’s daemon/inbound path):** B accepts a **work assignment as B** — named author, B’s repo checkout, B’s login, B’s receipt. That is B doing B’s job on B’s seat. It is not A remaining the author while B is a quota battery.
+
+Until counsel says otherwise, do not build leftover-quota routing. Thursday: wrap + no-password install + honest receipts. Official team overflow is extra usage / API / workspace credits.
