@@ -35,7 +35,7 @@ export interface WorkRecord {
   readonly cache_read_tokens: number | null;
   readonly occurred_at: string;
   readonly payload: ToolResultPayload | null;
-  /** Exact intercepted request bytes plus local route scope. The request itself is never persisted. */
+  /** SHA-256 of project_hint + sorted path_hints + sorted tool_names. Lookup does not require this to match. */
   readonly request_hash: string | null;
   /** Prior provider response. Present only for non-streaming JSON responses. */
   readonly response: Record<string, unknown> | null;
@@ -59,10 +59,7 @@ export interface WorkCacheFile {
 }
 
 export type WorkLookup =
-  | {
-      kind: "reuse";
-      record: WorkRecord & { request_hash: string };
-    }
+  | { kind: "reuse"; record: WorkRecord }
   | { kind: "forward"; reason: "no_facts" | "no_hit" | "no_replay" };
 
 export interface WorkKey {
@@ -75,8 +72,16 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function hashWorkloadRequest(raw: Buffer, scope = ""): string {
-  return createHash("sha256").update(scope).update("\0").update(raw).digest("hex");
+export function hashWorkloadKey(key: WorkKey): string {
+  const paths = [...key.path_hints].filter((value) => value !== "").sort();
+  const tools = [...key.tool_names].filter((value) => value !== "").sort();
+  return createHash("sha256")
+    .update(key.project_hint)
+    .update("\0")
+    .update(paths.join("\0"))
+    .update("\0")
+    .update(tools.join("\0"))
+    .digest("hex");
 }
 
 function uniqueStrings(values: readonly string[]): string[] {
@@ -297,7 +302,6 @@ export function defaultWorkCachePath(): string {
 export function lookupWork(input: {
   cache: WorkCacheFile;
   key: WorkKey | null;
-  requestHash: string;
   now: Date;
   windowMs?: number;
 }): WorkLookup {
@@ -317,9 +321,6 @@ export function lookupWork(input: {
     if (!setsOverlap(record.tool_names, input.key.tool_names)) {
       continue;
     }
-    if (record.request_hash !== input.requestHash) {
-      continue;
-    }
     const then = Date.parse(record.occurred_at);
     if (!Number.isFinite(then) || nowMs - then > windowMs || nowMs < then) {
       continue;
@@ -332,13 +333,10 @@ export function lookupWork(input: {
     return { kind: "forward", reason: "no_hit" };
   }
   const hasReplay = latest.response != null || Boolean(latest.stream_body);
-  if (latest.request_hash === null || !hasReplay) {
+  if (!hasReplay) {
     return { kind: "forward", reason: "no_replay" };
   }
-  return {
-    kind: "reuse",
-    record: { ...latest, request_hash: latest.request_hash },
-  };
+  return { kind: "reuse", record: latest };
 }
 
 export function storeWork(input: {

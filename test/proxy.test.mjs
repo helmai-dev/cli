@@ -40,7 +40,7 @@ import {
 import { listenProxy } from "../dist/lib/proxy-server.js";
 import { reportProxiedRequest, usageReuseFromStored } from "../dist/lib/proxy-report.js";
 import {
-  hashWorkloadRequest,
+  hashWorkloadKey,
   lookupWork,
   parseWorkCache,
   readWorkCache,
@@ -910,6 +910,7 @@ const TOOL_RESULT = "<?php class Foo {}";
 function toolWorkBody(
   filePath = "/Users/team/billing/src/Foo.php",
   prompt = SECRET,
+  toolId = "toolu_1",
 ) {
   return {
     model: "claude-sonnet-4-20250514",
@@ -918,13 +919,13 @@ function toolWorkBody(
       {
         role: "assistant",
         content: [
-          { type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: filePath } },
+          { type: "tool_use", id: toolId, name: "Read", input: { file_path: filePath } },
         ],
       },
       {
         role: "user",
         content: [
-          { type: "tool_result", tool_use_id: "toolu_1", content: TOOL_RESULT },
+          { type: "tool_result", tool_use_id: toolId, content: TOOL_RESULT },
         ],
       },
     ],
@@ -971,8 +972,8 @@ test("wrap bind is a proxy token in the URL wrap already writes", () => {
   assert.equal(WRAP_BIND_HEADER, "x-helm-wrap-token");
 });
 
-test("lookup requires the exact request hash and a replayable provider response", () => {
-  const requestHash = hashWorkloadRequest(Buffer.from(JSON.stringify(toolWorkBody())));
+test("lookup matches project, path, and tool and requires a replayable provider response", () => {
+  const key = { project_hint: "billing", path_hints: ["src/Foo.php"], tool_names: ["Read"] };
   const record = {
     project_hint: "billing",
     path_hints: ["src/Foo.php"],
@@ -986,16 +987,11 @@ test("lookup requires the exact request hash and a replayable provider response"
     cache_read_tokens: 0,
     occurred_at: NOW.toISOString(),
     payload: { kind: "tool_results", results: [{ tool_name: "Read", path_hint: "src/Foo.php", content: TOOL_RESULT }] },
-    request_hash: requestHash,
+    request_hash: hashWorkloadKey(key),
     response: { id: "msg_cached", content: [{ type: "text", text: "cached answer" }] },
   };
   const cache = { kind: WORK_CACHE_KIND, records: [record], reuses: [] };
-  const hit = lookupWork({
-    cache,
-    key: { project_hint: "billing", path_hints: ["src/Foo.php"], tool_names: ["Read"] },
-    requestHash,
-    now: NOW,
-  });
+  const hit = lookupWork({ cache, key, now: NOW });
   assert.equal(hit.kind, "reuse");
   assert.equal(hit.record.cost_usd, 0.0123);
 
@@ -1003,7 +999,6 @@ test("lookup requires the exact request hash and a replayable provider response"
     lookupWork({
       cache,
       key: { project_hint: "billing", path_hints: ["src/Bar.php"], tool_names: ["Read"] },
-      requestHash,
       now: NOW,
     }).kind,
     "forward",
@@ -1011,29 +1006,68 @@ test("lookup requires the exact request hash and a replayable provider response"
   assert.equal(
     lookupWork({
       cache,
-      key: { project_hint: "billing", path_hints: ["src/Foo.php"], tool_names: ["Read"] },
-      requestHash: hashWorkloadRequest(Buffer.from(JSON.stringify(toolWorkBody(undefined, "different ask")))),
+      key: { project_hint: "billing", path_hints: ["src/Foo.php"], tool_names: ["Grep"] },
       now: NOW,
     }).kind,
     "forward",
   );
   assert.equal(
     lookupWork({
-      cache: { kind: WORK_CACHE_KIND, records: [{ ...record, response: null }], reuses: [] },
-      key: { project_hint: "billing", path_hints: ["src/Foo.php"], tool_names: ["Read"] },
-      requestHash,
+      cache,
+      key,
+      now: NOW,
+    }).kind,
+    "reuse",
+    "a different ask of the same project/path/tool still reuses",
+  );
+  assert.equal(
+    lookupWork({
+      cache: { kind: WORK_CACHE_KIND, records: [{ ...record, response: null, stream_body: null }], reuses: [] },
+      key,
       now: NOW,
     }).reason,
     "no_replay",
   );
 });
 
-test("request identity is scoped to the provider route and checkout", () => {
-  const raw = Buffer.from(JSON.stringify(toolWorkBody()));
-  const first = hashWorkloadRequest(raw, "anthropic\0/v1/messages\0/Users/team/billing");
-  assert.equal(first, hashWorkloadRequest(raw, "anthropic\0/v1/messages\0/Users/team/billing"));
-  assert.notEqual(first, hashWorkloadRequest(raw, "openai\0/v1/messages\0/Users/team/billing"));
-  assert.notEqual(first, hashWorkloadRequest(raw, "anthropic\0/v1/messages\0/Users/team/other"));
+test("workload identity is project, path, and tool, independent of path order", () => {
+  const first = hashWorkloadKey({
+    project_hint: "billing",
+    path_hints: ["src/Foo.php", "src/Bar.php"],
+    tool_names: ["Read"],
+  });
+  assert.equal(
+    first,
+    hashWorkloadKey({
+      project_hint: "billing",
+      path_hints: ["src/Bar.php", "src/Foo.php"],
+      tool_names: ["Read"],
+    }),
+  );
+  assert.notEqual(
+    first,
+    hashWorkloadKey({
+      project_hint: "other",
+      path_hints: ["src/Foo.php", "src/Bar.php"],
+      tool_names: ["Read"],
+    }),
+  );
+  assert.notEqual(
+    first,
+    hashWorkloadKey({
+      project_hint: "billing",
+      path_hints: ["src/Foo.php"],
+      tool_names: ["Read"],
+    }),
+  );
+  assert.notEqual(
+    first,
+    hashWorkloadKey({
+      project_hint: "billing",
+      path_hints: ["src/Foo.php", "src/Bar.php"],
+      tool_names: ["Grep"],
+    }),
+  );
 });
 
 test("OpenAI replay preserves the prior answer and reports zero new usage", () => {
@@ -1141,6 +1175,14 @@ test("first proxied request stores a work record and injects the wrap line", asy
     assert.equal(cache.records[0].cache_read_tokens, 0);
     assert.equal(cache.records[0].payload.kind, "tool_results");
     assert.equal(cache.records[0].payload.results[0].content, TOOL_RESULT);
+    assert.equal(
+      cache.records[0].request_hash,
+      hashWorkloadKey({
+        project_hint: "billing",
+        path_hints: ["src/Foo.php"],
+        tool_names: ["Read"],
+      }),
+    );
     const cacheText = fs.readFileSync(cachePath, "utf8");
     assert.equal(cacheText.includes(SECRET), false);
     assert.equal(cacheText.includes("\"prompt\""), false);
@@ -1503,7 +1545,143 @@ test("matching project/path/tool without the wrap bind forwards and does not ret
   }
 });
 
-test("a different path or ask always forwards", async () => {
+test("wrap reuses the same project, path, and tool when the ask and tool ids differ", async () => {
+  const cachePath = tempWorkCachePath();
+  const logs = [];
+  const providerHits = [];
+  const helmPosts = [];
+  const provider = await listenMock((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      providerHits.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "msg_workload",
+        model: "claude-sonnet-4-20250514",
+        usage: { input_tokens: 11, output_tokens: 7, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        content: [{ type: "text", text: "ok" }],
+      }));
+    });
+  });
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0 },
+    {
+      anthropicUpstream: provider.url,
+      openaiUpstream: provider.url,
+      cwd: PROJECT_CWD,
+      homeDir: HOME_DIR,
+      now: () => NOW,
+      log: (line) => logs.push(line),
+      linked: true,
+      deviceUlid: "01DEVICE",
+      fetchLiveOthers: async () => [],
+      workCachePath: cachePath,
+      sendUsage: async () => ({ accepted: 1 }),
+      sendFingerprints: async () => {},
+      sendReuses: async (body) => {
+        helmPosts.push({ kind: "reuses", body });
+        return { accepted: 1 };
+      },
+      environment: "default",
+    },
+  );
+
+  try {
+    const headers = {
+      "content-type": "application/json",
+      "x-api-key": "sk-ant-user-token",
+      "anthropic-version": "2023-06-01",
+    };
+    const wrapUrl = `${proxy.url}/wrap/${proxy.wrapToken}/v1/messages`;
+    const first = await fetch(wrapUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(toolWorkBody()),
+    });
+    assert.equal(first.status, 200);
+    await proxy.reported;
+    const stored = readWorkCache(cachePath).records[0];
+    assert.ok(stored);
+
+    const second = await fetch(wrapUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(toolWorkBody("/Users/team/billing/src/Foo.php", "different ask", "toolu_live_2")),
+    });
+    assert.equal(second.status, 200);
+    const reused = await second.json();
+    await proxy.reported;
+
+    assert.equal(providerHits.length, 1);
+    assert.equal(reused.id, "helm_reuse");
+    assert.equal(reused.usage.input_tokens, 0);
+    assert.ok(logs.some((line) => line.includes("REUSED PRIOR WORK")));
+    assert.equal(readWorkCache(cachePath).reuses.length, 1);
+    assert.equal(helmPosts.filter((post) => post.kind === "reuses").length, 1);
+  } finally {
+    await proxy.close();
+    await provider.close();
+  }
+});
+
+test("wrap still forwards when the path differs", async () => {
+  const cachePath = tempWorkCachePath();
+  const providerHits = [];
+  const logs = [];
+  const provider = await listenMock((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      providerHits.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "msg_path",
+        usage: { input_tokens: 2, output_tokens: 1 },
+        content: [{ type: "text", text: "ok" }],
+      }));
+    });
+  });
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0 },
+    {
+      anthropicUpstream: provider.url,
+      openaiUpstream: provider.url,
+      cwd: PROJECT_CWD,
+      homeDir: HOME_DIR,
+      now: () => NOW,
+      log: (line) => logs.push(line),
+      linked: false,
+      fetchLiveOthers: async () => [],
+      workCachePath: cachePath,
+    },
+  );
+
+  try {
+    const headers = { "content-type": "application/json", "x-api-key": "sk-ant-user" };
+    const wrapUrl = `${proxy.url}/wrap/${proxy.wrapToken}/v1/messages`;
+    await fetch(wrapUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(toolWorkBody("/Users/team/billing/src/Foo.php")),
+    });
+    await proxy.reported;
+    await fetch(wrapUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(toolWorkBody("/Users/team/billing/src/Bar.php")),
+    });
+    await proxy.reported;
+    assert.equal(providerHits.length, 2);
+    assert.equal(logs.some((line) => line.includes("REUSED PRIOR WORK")), false);
+    assert.equal(readWorkCache(cachePath).reuses.length, 0);
+  } finally {
+    await proxy.close();
+    await provider.close();
+  }
+});
+
+test("unbound wrap still forwards a matching workload", async () => {
   const cachePath = tempWorkCachePath();
   const providerHits = [];
   const logs = [];
@@ -1660,7 +1838,7 @@ test("wrapped 2xx POSTs a bounded excerpt to the team store when enabled", async
     assert.equal(serialized.includes(proxy.wrapToken), false);
     assert.equal(serialized.includes("wrap_token"), false);
     assert.equal(serialized.toLowerCase().includes("system"), false);
-    // The local cache still holds the receipt for exact-request replay.
+    // The local cache still holds the receipt for workload replay.
     assert.equal(readWorkCache(cachePath).records.length, 1);
   } finally {
     await proxy.close();

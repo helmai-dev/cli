@@ -1,106 +1,77 @@
 # Workload identity and replayable team artifacts
 
-Plan only. No product code from this document. Written 2026-08-27,
-after `29dadc2` tightened reuse to verified exact replay.
+Shipped wrap identity: **project + path + tool**. Equivalence / dollar gate:
+a stored provider `response` or `stream_body`. Written 2026-08-27 as plan;
+updated 2026-08-31 after organic Claude traffic missed exact-byte replay.
 
-## The problem this document exists for
+## The problem
 
-`29dadc2` made the proxy bypass a provider call only when the incoming
-request's bytes hash-match a stored record that carries the prior
-non-streaming provider response. That is the only claim of "Helm saved
-this request" that needs no trust: the response is provably the answer
-to this exact request.
+Exact-byte `request_hash` (sha256 over scope + outbound request bytes)
+made wrap skip honest and almost never fire. Claude Code grows its
+message list every turn and mints a new `tool_use` id on every Read.
+Two Reads of `src/lib/config.ts` in the same project were two hashes,
+so `usage_reuses` stayed empty.
 
-The cost of that honesty: organic agent traffic almost never repeats a
-request byte-for-byte. Claude Code grows its message list every turn;
-one changed character is a different hash. So `usage_reuses` stays
-near-empty, "Saved by Helm" on `/usage` reads "Not quantified yet,"
-and the team-value surface is `retrieve_team_work` — bounded excerpts
-as retrieval context, with the provider still paid for every request.
+NORTH_STAR still forbids prompt-shape hashing: two requests with the
+same normalized chat can deserve different answers. The unit of analysis
+is the **AI workload**, project plus path plus tool, not a prompt string.
 
-The demo-rehearsal runbook names the way out: reuse dollars return
-when "a future workload identity and replayable team artifact prove
-equivalence." This document says what that could mean, so a decision
-can be made deliberately instead of drifting back toward heuristics.
+## What wrap skip is
 
-## What already exists
+`lookupWork` hits when:
 
-- Exact-replay cache: `hashWorkloadRequest` (sha256 over scope + raw
-  request bytes) and `lookupWork` requiring `request_hash` equality
-  plus a stored `response` (`src/lib/proxy-work-cache.ts`).
-- Bounded team excerpts with the original work's model and token
-  buckets (`/usage/excerpts` + lookup; cli#25 / web#38).
-- Server pricing of reuse rows from stored original tokens behind an
-  evidence gate (web#37 as amended).
-- Day-fact fingerprints (path/tool observations) and overlap-based
-  Diagnose counts — observation, never dollars
-  (helm-web `docs/workload-identity-audit.md`).
+1. Wrap bind is valid (`/wrap/<token>/`).
+2. Same `project_hint`, overlapping `path_hints`, overlapping `tool_names`.
+3. Record is inside the 24h window.
+4. The record still carries a replayable provider body (`response` or
+   `stream_body`).
 
-## The gap, precisely
+Avoided dollars are only the stored original `cost_usd` / tokens. The
+CLI never invents a rate. Web prices reuse rows from those tokens.
 
-A "workload" today is a `project_hint` string. Two facts we cannot
-state yet:
+`hashWorkloadKey` is sha256 of `project_hint` + sorted paths + sorted
+tools. It is stored as `request_hash` for diagnostics. Lookup does not
+require it to match, so records stored under the old byte-hash still
+reuse when project/path/tool overlap.
 
-1. **Identity.** That two requests — across turns, sessions, or
-   teammates — are *the same work*, when their bytes differ.
-2. **Equivalence of result.** That serving a stored artifact instead
-   of calling the provider would have produced an acceptable answer.
+A different path or tool still forwards. Unbound traffic still forwards.
 
-Exact replay solves both trivially and rarely. Anything broader must
-solve them separately, and only (2) justifies a dollar.
+## What wrap skip is not
 
-## Options
+- **Prompt-shape identity.** Rejected. Different user prose of the same
+  Read is the same workload; that is the point. A different *file* or
+  *tool* is a different workload.
+- **helm-web vector memory.** `context_memory_chunks.embedding` and
+  hybrid retrieval power the Project Context Pack. They are Diagnose
+  retrieval, not a wrap skip, and they mint no Verified Saving.
+- **Team excerpts.** `POST /usage/excerpts` plus
+  `GET /usage/excerpts/lookup` / MCP `retrieve_team_work` let a teammate
+  *read* bounded receipts (ask, paths, tool bytes). That is multiplayer
+  Diagnose. It does not bypass the provider on laptop B unless B's own
+  wrap cache already holds a replayable provider body for that
+  project/path/tool.
 
-**A. Sub-request identity: the tool result is the unit.**
-Most agent spend is the model re-reading tool output. A tool
-invocation (`Read src/lib/config.ts`, `Grep foo`) has a *naturally
-canonical identity*: tool name + normalized arguments + file content
-hash at read time. The artifact is the tool result itself — which the
-excerpt store already holds. Reuse then means: when the agent issues
-the same tool call against unchanged content, Helm can serve the
-stored result without the provider ever seeing the request — but this
-happens at the MCP/tool layer, not by intercepting the chat
-completion. Equivalence is provable (same tool, same args, same
-content hash → same result, by definition). The saved dollar is the
-priced token delta of not re-sending those bytes as context — a
-measured number, though it needs a stated attribution rule.
+Headroom's intercept/save is the local analog: sit on the model path,
+meter, skip a request that is the same work. Helm adds the verified
+receipt layer (stored body + token/cost from that intercept) and the
+helm-web multiplayer surfaces (fingerprints, excerpts, rooms) without
+treating retrieval as money saved.
 
-**B. Prompt-shape identity: normalize the chat request.**
-Strip volatile fields (message history beyond the last ask, request
-ids, timestamps), hash what remains, call matches "the same
-workload." This is where every similar product goes and it is exactly
-what NORTH_STAR forbids until equivalence is provable: two requests
-with the same normalized shape can deserve different answers.
-Identity without equivalence — Diagnose signal at best. No dollars.
+## Options that did not ship
 
-**C. Declared identity: the workload is named upstream.**
-An explicit id (env var, MCP annotation, CI job name) travels with
-requests; Helm aggregates by it. Solves attribution for *pipelines*
-(the same nightly job, the same eval suite) where requests genuinely
-repeat and replay has a real hit rate. Cheap, honest, narrow: it makes
-exact replay useful for automated workloads, and it gives `/usage`
-workload names better than directory basenames. Does nothing for
-interactive traffic.
+**A. Tool result + content hash at the MCP layer.** Honest equivalence
+(same tool, same args, same bytes → same result). Still the right
+longer path if wrap skip of a prior *completion* proves too coarse.
+Does not replace the wrap intercept.
 
-## Recommendation
+**B. Prompt-shape hash.** Rejected on NORTH_STAR grounds.
 
-C then A. C is a small additive wire change (`workload_id` alongside
-`project_hint`) that makes today's verified replay actually fire for
-the traffic where it can (automation, CI, batch), and improves the
-dashboard grain. A is the honest path to team reuse dollars for
-interactive work, built where equivalence is provable — the tool
-layer — and it composes with `retrieve_team_work` instead of
-replacing it. B stays rejected on NORTH_STAR grounds.
-
-Neither ships from this document. A needs its own design pass on the
-attribution rule (what exactly was avoided, priced how) before any
-`usage_reuses` row is written from it.
+**C. Declared `workload_id`.** Still useful for CI/batch later. Additive.
+Not required for interactive Read-the-same-file traffic.
 
 ## Related
 
-- helm-web `docs/workload-identity-audit.md` — why shared paths are
-  not workloads.
-- `docs/demo-rehearsal.md` — the beats that must stay honest while
-  none of this exists.
-- helm-web `docs/research/ben-dashboard-chat-2026-08.md` — the
-  buyer-side receipt/evidence framing any of this must feed.
+- helm-web `docs/workload-identity-audit.md`. Why shared paths alone
+  are not workloads.
+- `docs/demo-rehearsal.md`. Beat 3 is wrap skip. Beat 4 is retrieval.
+- helm-web `docs/slice-6-readable-excerpts.md`. Team store vs wrap skip.

@@ -125,7 +125,7 @@ and their output streams back into the Helm canvas.
 | `helm mcp` | stdio MCP server that exposes Helm team tools (todos, notes, awareness, live teammates) to local coding agents |
 | `helm scan` | Report local Claude Code and Codex usage and sync it to the team dashboard (requires a linked account) |
 | `helm audit` | Observed API-equivalent spend from local transcripts, plus realized provider-cache savings. `--team <id>` prints the Helm Web team rollup after `helm connect`. `shared_projects` and `shared_paths` print as observed overlap when the rollup includes them. `avoidable_spend` and `diagnose_buckets` print as observed Diagnose when the rollup includes them. Optional `--users` / `--teams` add an unshared-replay ceiling on the local path. Does not compute identified savings. |
-| `helm proxy` | Loopback model proxy on 127.0.0.1 (port 8787 or a free port). Passes Anthropic Messages and OpenAI-compatible chat through with the client's own auth headers. An identical non-streaming request may replay its prior provider response; path/tool overlap alone never bypasses the provider. `--daemon` backgrounds it. |
+| `helm proxy` | Loopback model proxy on 127.0.0.1 (port 8787 or a free port). Passes Anthropic Messages and OpenAI-compatible chat through with the client's own auth headers. A wrap-bound request matching a recent project/path/tool record with a stored provider body may replay it. `--daemon` backgrounds it. |
 | `helm wrap claude\|codex` | Start the proxy if needed and point that agent at it (`ANTHROPIC_BASE_URL` or Codex/OpenAI base URL). Undo with `helm unwrap`. Does not touch Kubernetes Helm. |
 | `helm unwrap claude\|codex` | Restore the agent's previous provider URL |
 | `helm map <project-id> [path]` | Register a local checkout for a project |
@@ -187,17 +187,18 @@ caching. After a
 successful proxied request, the proxy stores a local work record in
 `~/.helm/environments/<env>/proxy-work.json` (project, path hints, tools,
 session key, stored cost and tokens, tool results already present on that
-request, a SHA-256 identity scoped to the provider route and local checkout,
-and a prior non-streaming JSON response when one exists). Request text is not
-written to the local cache. The provider
-is bypassed only when the wrap bind is valid and the intercepted request bytes
-exactly match a recent record with a replayable provider response. A different
-ask always forwards even when project, path, and tool overlap. Streaming calls
-and team excerpts do not auto-replay. Team excerpts remain available to agents
-through `retrieve_team_work`; they are Diagnose context, not proof of equivalent
-work. Every wrapped request injects `Helm is wrapping this request.` A verified
-replay prints a louder line and attributes avoided dollars only from the
-stored original measurement.
+request, a SHA-256 identity of project + path + tool, and a prior provider
+JSON or bounded SSE body when one fits). Request text is not written to the
+local cache. The provider is bypassed only when the wrap bind is valid and a
+recent record matches the same project, overlapping path, and overlapping
+tool, and still carries a replayable provider response. A different path or
+tool still forwards. Streaming calls replay only when the stored SSE body
+fits the budget. Team excerpts remain available to agents through
+`retrieve_team_work`; they are Diagnose context, not a wrap skip. Helm-web
+context-memory embeddings retrieve teammate receipts for the context pack.
+They do not mint a Verified Saving. Every wrapped request injects `Helm is
+wrapping this request.` A verified replay prints a louder line and
+attributes avoided dollars only from the stored original measurement.
 
 When this machine is linked, the tool hook also sends a work fingerprint for
 each tool call in a mapped Claude Code or Codex session: the provider, the
