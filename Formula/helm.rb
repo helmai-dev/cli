@@ -9,7 +9,7 @@
 class Helm < Formula
   desc "Laptop intercept between Claude Code / Codex and model providers"
   homepage "https://tryhelm.ai"
-  version "1.3.19",
+  version "1.3.20",
   license "MIT"
 
   livecheck do
