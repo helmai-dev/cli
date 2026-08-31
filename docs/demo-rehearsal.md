@@ -34,7 +34,7 @@ Solo rehearsal: Beats 0–2 on Laptop A only.
 
    ```
    curl -fsSL https://tryhelm.ai/install | bash
-   helm --version    # must print 1.3.19 or later
+   helm --version    # must print 1.3.20 or later
    ```
 
    On this machine `/usr/local/bin/helm` may still be 1.3.17 if sudo was
