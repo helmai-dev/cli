@@ -64,7 +64,7 @@ import {
 } from "./proxy-excerpt.js";
 import {
   defaultWorkCachePath,
-  hashWorkloadRequest,
+  hashWorkloadKey,
   lookupWork,
   payloadFromToolResults,
   readWorkCache,
@@ -403,16 +403,12 @@ async function handleProxyRequest(
     outbound = Buffer.from(JSON.stringify(next), "utf8");
   }
 
-  // Identity covers the exact bytes the provider would receive, including
-  // Helm's current intercept and teammate context, plus route and checkout.
-  const requestHash = hashWorkloadRequest(
-    outbound,
-    `${provider}\0${bindPath.pathname}${url.search}\0${cwd}`,
-  );
+  // Identity is the AI workload (project + path + tool), not request bytes.
+  // Volatile tool_use ids and growing message lists must not miss a hit.
+  const requestHash = workKey ? hashWorkloadKey(workKey) : null;
   const lookup = lookupWork({
     cache: readWorkCache(cachePath),
     key: workKey,
-    requestHash,
     now,
   });
   const wantsStream = isPlainRecord(parsed) && parsed.stream === true;
@@ -595,7 +591,7 @@ async function reportAfterResponse(input: {
   upstreamStatus: number;
   storeCache: boolean;
   workKey: WorkKey | null;
-  requestHash?: string;
+  requestHash?: string | null;
   responseBody?: unknown;
   streamBody?: string | null;
   parsed?: unknown;

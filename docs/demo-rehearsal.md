@@ -110,8 +110,10 @@ on the same project, path, and tool. Streaming is fine on 1.3.18+:
 
 > Read src/lib/config.ts again and list its exported functions.
 
-If the intercepted request is identical (same wrap-bound bytes, same
-tools/paths), Helm must **not** send it to the provider.
+If the wrap is bound and the request is the same project, path, and tool
+as a recent stored record with a replayable provider body, Helm must
+**not** send it to the provider. Different user prose and volatile
+`tool_use` ids must not miss.
 
 **Verify:**
 
@@ -123,8 +125,8 @@ tools/paths), Helm must **not** send it to the provider.
 
 **If it fails:** the lookup needs path hints **and** tool names (a Read
 of a file, not a bare chat). Wrap bind must be on (`/wrap/<token>/…`).
-Different prose with the same Read can still miss exact-hash replay —
-that is a Savings Opportunity, not a Verified Saving.
+A different path or tool still forwards. No stored `response` /
+`stream_body` is a Savings Opportunity, not a Verified Saving.
 
 ## Beat 4 — Team work is retrieval, not a silent bypass
 
@@ -133,8 +135,10 @@ B never did A's work. Ask B for A's original task:
 > Read src/lib/config.ts and explain how environments resolve.
 
 **Verify:** Helm can surface Dana's receipt through `retrieve_team_work`.
-B's model request still reaches the provider. No team reuse line. Overlap
-until a future workload-identity replay proves equivalence.
+B's model request still reaches the provider unless B's own wrap has a
+local replayable record for that project/path/tool. Team excerpts and
+context-memory embeddings are Diagnose context, not a wrap skip on
+Laptop B.
 
 ## Closing screen
 
