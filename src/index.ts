@@ -163,7 +163,7 @@ program
 program
   .command("inject", { hidden: true })
   .description("Hook handler: print team context for the current session (reads stdin)")
-  .option("--format <format>", "Hook output protocol (plain, codex, cursor, gemini, or copilot)")
+  .option("--format <format>", "Hook output protocol (plain, claude, codex, plugin, cursor, gemini, or copilot)")
   .action(async (options: { format?: string }) => {
     const { injectCommand } = await import("./commands/inject.js");
     await injectCommand(options);

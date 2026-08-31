@@ -24,9 +24,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { fetchHelmWebProjects } from "../lib/api-web.js";
+import { decideAmbientIntervention } from "../lib/ambient-intervention.js";
 import { rememberPrompt } from "../lib/ambient-state.js";
 import { getApiUrl, getEnvironmentDir, loadCredentials } from "../lib/config.js";
-import { decideInjectedOutput, maybeLiveOverlapNotice } from "../lib/live-overlap.js";
+import {
+  formatInterventionOutput,
+  type HostOutput,
+} from "../lib/host-presentation.js";
+import { maybeLiveOverlapNotice } from "../lib/live-overlap.js";
 import {
   inspectLocalRepository,
   matchProjectForRepository,
@@ -68,7 +73,7 @@ export interface NormalizedHookPayload {
   provider: string;
 }
 
-export type InjectOutput = "plain" | "cursor-json" | "gemini-json" | "copilot-json";
+export type InjectOutput = HostOutput;
 
 export interface InjectOptions {
   format?: string;
@@ -77,10 +82,15 @@ export interface InjectOptions {
 function requestedOutput(format: string | undefined): InjectOutput | null {
   switch (format) {
     case undefined:
+      return null;
     case "plain":
-      return format === "plain" ? "plain" : null;
-    case "codex":
       return "plain";
+    case "codex":
+      return "codex-json";
+    case "claude":
+      return "claude-json";
+    case "plugin":
+      return "plugin-json";
     case "cursor":
       return "cursor-json";
     case "gemini":
@@ -119,7 +129,7 @@ export function normalizeHookPayload(
         payload.hook_event_name === "sessionStart" ||
         payload.hook_event_name === "beforeSubmitPrompt"
       ? "cursor-json"
-      : "plain");
+      : "claude-json");
   return {
     cwd: payload.cwd ?? payload.workspace_roots?.[0] ?? payload.workspaceRoots?.[0] ?? process.cwd(),
     sessionId: payload.session_id ?? payload.sessionId ?? payload.conversation_id ?? "unknown-session",
@@ -137,32 +147,46 @@ export function normalizeHookPayload(
           ? "gemini"
           : output === "copilot-json"
             ? "copilot"
-            : "claude-compatible")),
+            : output === "plugin-json"
+              ? "plugin"
+              : "claude-compatible")),
   };
 }
 
 export function formatContextOutput(
   context: string | null,
   output: NormalizedHookPayload["output"],
+  eventName?: string,
 ): string {
-  switch (output) {
-    case "cursor-json":
-      return JSON.stringify(context ? { additional_context: context } : {});
-    case "gemini-json":
-      return JSON.stringify(
-        context
-          ? { hookSpecificOutput: { additionalContext: context }, suppressOutput: true }
-          : { suppressOutput: true },
-      );
-    case "copilot-json":
-      return JSON.stringify(context ? { additionalContext: context } : {});
-    case "plain":
-      return context ?? "";
-  }
+  return formatInterventionOutput(
+    {
+      modelContext: context,
+      visibleMessage: null,
+      actions: [],
+      nextHash: null,
+      acknowledgeSession: false,
+    },
+    output,
+    eventName,
+  );
 }
 
-function emitContext(context: string | null, output: NormalizedHookPayload["output"]): void {
-  process.stdout.write(formatContextOutput(context, output));
+function emitIntervention(
+  intervention: ReturnType<typeof decideAmbientIntervention>,
+  output: NormalizedHookPayload["output"],
+  eventName?: string,
+): void {
+  process.stdout.write(formatInterventionOutput(intervention, output, eventName));
+}
+
+function emptyIntervention(): ReturnType<typeof decideAmbientIntervention> {
+  return {
+    modelContext: null,
+    visibleMessage: null,
+    actions: [],
+    nextHash: null,
+    acknowledgeSession: false,
+  };
 }
 
 async function readStdin(): Promise<string> {
@@ -351,8 +375,54 @@ function rememberInjectedHash(sessionId: string, hash: string): void {
   }
 }
 
+function sessionAckPath(sessionId: string): string {
+  return `${sessionStatePath(sessionId)}.ack`;
+}
+
+function sessionAcknowledged(sessionId: string): boolean {
+  try {
+    return fs.existsSync(sessionAckPath(sessionId));
+  } catch {
+    return false;
+  }
+}
+
+function rememberSessionAck(sessionId: string): void {
+  try {
+    const file = sessionAckPath(sessionId);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "1");
+  } catch {
+    // Missing ack only causes one extra visible Active line.
+  }
+}
+
+export function projectLabelFor(cwd: string, projectId: string | null): string | null {
+  if (projectId) {
+    const named = loadWebProjects().find((entry) => entry.projectId === projectId)?.name?.trim();
+    if (named) {
+      return named;
+    }
+  }
+  const base = path.basename(cwd.replace(/[\\/]+$/, ""));
+  return base !== "" && base !== "." && base !== "/" ? base : null;
+}
+
+async function collectRepairs(eventName: string | undefined): Promise<string[]> {
+  if (eventName !== "SessionStart") {
+    return [];
+  }
+  try {
+    const { reconcileLiveRuntime } = await import("../lib/runtime-reconciler.js");
+    const repairs = await reconcileLiveRuntime();
+    return repairs.map((repair) => repair.summary);
+  } catch {
+    return [];
+  }
+}
+
 export async function injectCommand(options: InjectOptions = {}): Promise<void> {
-  let output: NormalizedHookPayload["output"] = "plain";
+  let output: NormalizedHookPayload["output"] = "claude-json";
   try {
     const raw = await readStdin();
     const payload = (raw ? JSON.parse(raw) : {}) as HookPayload;
@@ -363,6 +433,7 @@ export async function injectCommand(options: InjectOptions = {}): Promise<void> 
       prompt: normalized.prompt,
       cwd: normalized.cwd,
     });
+    const repairs = collectRepairs(normalized.eventName);
     const projectId = await resolveProjectId(normalized.cwd);
 
     let rendered: string | null = null;
@@ -390,18 +461,24 @@ export async function injectCommand(options: InjectOptions = {}): Promise<void> 
       rendered = renderContextPack(pack);
     }
 
-    const decided = decideInjectedOutput({
+    const decided = decideAmbientIntervention({
       renderedPack: rendered,
-      notice: await liveNotice,
+      overlapNotice: await liveNotice,
+      repairs: await repairs,
       eventName: normalized.eventName,
       lastHash: lastInjectedHash(normalized.sessionId),
+      projectLabel: projectLabelFor(normalized.cwd, projectId),
+      sessionAcknowledged: sessionAcknowledged(normalized.sessionId),
     });
     if (decided.nextHash && decided.nextHash !== lastInjectedHash(normalized.sessionId)) {
       rememberInjectedHash(normalized.sessionId, decided.nextHash);
     }
-    emitContext(decided.context, output);
+    if (decided.acknowledgeSession) {
+      rememberSessionAck(normalized.sessionId);
+    }
+    emitIntervention(decided, output, normalized.eventName);
   } catch {
     // Fail-open: a broken Helm must never break the user's harness.
-    emitContext(null, output);
+    emitIntervention(emptyIntervention(), output);
   }
 }

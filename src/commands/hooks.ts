@@ -173,7 +173,17 @@ export function allAgentHooksInstalled(): boolean {
   }
 }
 
-export async function hooksInstallCommand(): Promise<void> {
+export function anyAgentIntegrationInstalled(): boolean {
+  try {
+    return getAgentHookStatus().some((provider) => provider.installed) ||
+      mcpHostStatus().some((host) => host.installed);
+  } catch {
+    return false;
+  }
+}
+
+/** Write hook and MCP files without printing. Used by `helm hooks install` and session-start repair. */
+export function installAgentIntegrations(): ReturnType<typeof installHelmMcpHosts> {
   const claudePath = getClaudeSettingsPath();
   const codexPath = getCodexHooksPath();
   const cursorPath = getCursorHooksPath();
@@ -206,7 +216,11 @@ export async function hooksInstallCommand(): Promise<void> {
   writePiExtension(piPath);
   writeAmpPlugin(ampPath);
   writeKiloPlugin(kiloPath);
-  const mcpHosts = installHelmMcpHosts();
+  return installHelmMcpHosts();
+}
+
+export async function hooksInstallCommand(): Promise<void> {
+  const mcpHosts = installAgentIntegrations();
 
   console.log(chalk.green("\n✓ Installed Helm agent integrations"));
   for (const { name, path, derivedFrom, runtimeDetected } of getAgentHookStatus()) {

@@ -10,6 +10,7 @@ export interface ProxyListenState {
   port: number;
   started_at: string;
   wrap_token: string | null;
+  cli_version: string | null;
 }
 
 export interface WrapRecord {
@@ -78,6 +79,7 @@ export function readProxyState(): ProxyListenState | null {
       port: raw.port,
       started_at: typeof raw.started_at === "string" ? raw.started_at : "",
       wrap_token: wrapToken,
+      cli_version: typeof raw.cli_version === "string" && raw.cli_version !== "" ? raw.cli_version : null,
     };
   } catch {
     return null;

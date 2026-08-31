@@ -6,6 +6,7 @@ import {
 } from "../lib/claude-settings.js";
 import {
   applyCodexOpenAiBaseUrl,
+  openaiBaseUrlFromToml,
 } from "../lib/codex-proxy-env.js";
 import {
   mergeClaudeProxyEnv,
@@ -46,6 +47,7 @@ export interface WrapResult {
   agent: WrapAgent;
   proxyUrl: string;
   alreadyWrapped: boolean;
+  repaired: boolean;
 }
 
 export interface UnwrapResult {
@@ -76,7 +78,7 @@ export function writeCodexConfigFile(toml: string, configPath = getCodexConfigPa
   fs.writeFileSync(configPath, toml.endsWith("\n") ? toml : `${toml}\n`);
 }
 
-function liveRuntime(): WrapRuntime {
+export function liveWrapRuntime(): WrapRuntime {
   return {
     ensureProxy: () => ensureRunningProxy(),
     readClaudeSettings: () => readClaudeSettings(),
@@ -95,6 +97,22 @@ function liveRuntime(): WrapRuntime {
   };
 }
 
+export function agentIsPointingAtProxy(
+  agent: WrapAgent,
+  runtime: WrapRuntime,
+  proxyUrl: string,
+): boolean {
+  if (agent === "claude") {
+    const env = runtime.readClaudeSettings().env;
+    if (typeof env !== "object" || env === null) {
+      return false;
+    }
+    return (env as Record<string, unknown>).ANTHROPIC_BASE_URL === proxyUrl;
+  }
+  const toml = runtime.readCodexConfig();
+  return toml !== null && openaiBaseUrlFromToml(toml) === proxyUrl;
+}
+
 function proxyUrlFor(agent: WrapAgent, host: string, port: number, wrapToken?: string | null): string {
   const base = agent === "claude" ? claudeProxyUrl(host, port) : codexProxyUrl(host, port);
   return wrapToken ? applyWrapBind(base, wrapToken) : base;
@@ -104,8 +122,8 @@ export async function wrapAgent(agent: WrapAgent, runtime: WrapRuntime): Promise
   const existing = runtime.readWrap(agent);
   const proxy = await runtime.ensureProxy();
   const proxyUrl = proxyUrlFor(agent, proxy.host, proxy.port, proxy.wrapToken);
-  if (existing) {
-    return { agent, proxyUrl: existing.proxy_url, alreadyWrapped: true };
+  if (existing && agentIsPointingAtProxy(agent, runtime, proxyUrl)) {
+    return { agent, proxyUrl, alreadyWrapped: true, repaired: false };
   }
 
   if (agent === "claude") {
@@ -114,27 +132,27 @@ export async function wrapAgent(agent: WrapAgent, runtime: WrapRuntime): Promise
     runtime.writeWrap({
       agent,
       proxy_url: proxyUrl,
-      wrapped_at: new Date().toISOString(),
-      previous: {
+      wrapped_at: existing?.wrapped_at ?? new Date().toISOString(),
+      previous: existing?.previous ?? {
         claude_env_anthropic_base_url: merged.previous,
         claude_had_env_key: merged.previous !== undefined,
       },
     });
-    return { agent, proxyUrl, alreadyWrapped: false };
+    return { agent, proxyUrl, alreadyWrapped: false, repaired: existing !== null };
   }
 
-  const previousToml = runtime.readCodexConfig();
-  runtime.writeCodexConfig(applyCodexOpenAiBaseUrl(previousToml ?? "", proxyUrl));
+  const currentToml = runtime.readCodexConfig();
+  runtime.writeCodexConfig(applyCodexOpenAiBaseUrl(currentToml ?? "", proxyUrl));
   runtime.writeWrap({
     agent,
     proxy_url: proxyUrl,
-    wrapped_at: new Date().toISOString(),
-    previous: {
-      codex_config_toml: previousToml,
-      created_codex_config: previousToml === null,
+    wrapped_at: existing?.wrapped_at ?? new Date().toISOString(),
+    previous: existing?.previous ?? {
+      codex_config_toml: currentToml,
+      created_codex_config: currentToml === null,
     },
   });
-  return { agent, proxyUrl, alreadyWrapped: false };
+  return { agent, proxyUrl, alreadyWrapped: false, repaired: existing !== null };
 }
 
 export async function unwrapAgent(agent: WrapAgent, runtime: WrapRuntime): Promise<UnwrapResult> {
@@ -167,10 +185,16 @@ export async function wrapCommand(rawAgent: string, options: { undo?: boolean } 
     await unwrapCommand(agent);
     return;
   }
-  const result = await wrapAgent(agent, liveRuntime());
+  const result = await wrapAgent(agent, liveWrapRuntime());
   const envName = agent === "claude" ? "ANTHROPIC_BASE_URL" : "OPENAI_BASE_URL / config.toml base_url";
   if (result.alreadyWrapped) {
     console.log(chalk.yellow(`\n  ${agent} is already wrapped through ${result.proxyUrl}\n`));
+    return;
+  }
+  if (result.repaired) {
+    console.log(chalk.green(`\n  ✓ Repaired ${agent} wrap through Helm`));
+    console.log(chalk.gray(`    ${envName}=${result.proxyUrl}`));
+    console.log(chalk.gray(`    Restart any running ${agent} session.\n`));
     return;
   }
   console.log(chalk.green(`\n  ✓ ${agent} now sends model requests through Helm`));
@@ -181,7 +205,7 @@ export async function wrapCommand(rawAgent: string, options: { undo?: boolean } 
 
 export async function unwrapCommand(rawAgent: string): Promise<void> {
   const agent = parseWrapAgent(rawAgent);
-  const result = await unwrapAgent(agent, liveRuntime());
+  const result = await unwrapAgent(agent, liveWrapRuntime());
   if (!result.restored) {
     console.log(chalk.yellow(`\n  ${agent} was not wrapped.\n`));
     return;

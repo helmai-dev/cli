@@ -25,7 +25,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     try {
       const cwd = event.systemPromptOptions.cwd ?? ctx.cwd
-      const result = spawnSync("helm", ["inject"], {
+      const result = spawnSync("helm", ["inject", "--format", "plugin"], {
         cwd,
         encoding: "utf-8",
         input: JSON.stringify({
@@ -35,9 +35,24 @@ export default function (pi: ExtensionAPI) {
         }),
         timeout: 2_500,
       })
-      const context = result.status === 0 ? result.stdout?.trim() : ""
-      if (!context) return
-      return { message: { customType: "helm-team-context", content: context, display: false } }
+      const stdout = result.status === 0 ? result.stdout?.trim() ?? "" : ""
+      let additionalContext = ""
+      let systemMessage = ""
+      if (stdout) {
+        try {
+          const parsed = JSON.parse(stdout)
+          additionalContext = typeof parsed?.additionalContext === "string" ? parsed.additionalContext : ""
+          systemMessage = typeof parsed?.systemMessage === "string" ? parsed.systemMessage : ""
+        } catch {
+          additionalContext = stdout
+        }
+      }
+      if (additionalContext) {
+        return { message: { customType: "helm-team-context", content: additionalContext, display: false } }
+      }
+      if (systemMessage) {
+        return { message: { customType: "helm-visible", content: systemMessage, display: true } }
+      }
     } catch {
       // Helm must never interrupt Pi.
     }

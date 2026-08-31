@@ -16,6 +16,7 @@ import {
 } from "./api-web.js";
 import { usageCostUsd } from "./claude-scan.js";
 import { getActiveEnvironment, loadCredentials, loadMachineIdentity } from "./config.js";
+import pkg from "../../package.json";
 import {
   buildWorkFingerprint,
   mintProxySessionKey,
@@ -73,6 +74,7 @@ import {
   workKeyFromFacts,
   writeWorkCache,
   type WorkKey,
+  type WorkRecord,
 } from "./proxy-work-cache.js";
 
 const HOP_BY_HOP = new Set([
@@ -139,6 +141,21 @@ export interface RunningProxy {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function proxyVersion(): string {
+  return pkg.version;
+}
+
+export function proxyNeedsRestart(input: {
+  healthy: boolean;
+  reportedVersion: string | null;
+  currentVersion: string;
+}): boolean {
+  if (!input.healthy) {
+    return true;
+  }
+  return input.reportedVersion !== input.currentVersion;
 }
 
 /**
@@ -292,12 +309,36 @@ async function writeUpstreamBody(input: {
 
 function writeHealth(res: ServerResponse): void {
   res.writeHead(200, { "content-type": "application/json" });
-  res.end(JSON.stringify({ ok: true, service: "helm-proxy" }));
+  res.end(JSON.stringify({ ok: true, service: "helm-proxy", version: proxyVersion() }));
 }
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
+}
+
+function replayCachedWork(input: {
+  provider: ProxiedProvider;
+  record: WorkRecord;
+  wantsStream: boolean;
+  notice: string;
+}): { kind: "json"; body: Record<string, unknown> } | { kind: "stream"; body: string } | null {
+  if (input.wantsStream) {
+    if (input.record.stream_body === null) {
+      return null;
+    }
+    const comment = input.notice.replace(/\n/g, " ");
+    return { kind: "stream", body: `: ${comment}\n\n${input.record.stream_body}` };
+  }
+  if (input.record.response === null) {
+    return null;
+  }
+  const body = replayResponseBody({
+    provider: input.provider,
+    response: input.record.response,
+    notice: input.notice,
+  });
+  return body !== null ? { kind: "json", body } : null;
 }
 
 function headerWrapToken(req: IncomingMessage): string | null {
@@ -374,16 +415,24 @@ async function handleProxyRequest(
     requestHash,
     now,
   });
+  const wantsStream = isPlainRecord(parsed) && parsed.stream === true;
   if (lookup.kind === "reuse" && wrapBound) {
     const louder = helmReuseLine(lookup.record.cost_usd);
-    const body = replayResponseBody({
+    const notice = `${HELM_WRAP_LINE}\n${louder}`;
+    const replayed = replayCachedWork({
       provider,
-      response: lookup.record.response,
-      notice: `${HELM_WRAP_LINE}\n${louder}`,
+      record: lookup.record,
+      wantsStream,
+      notice,
     });
-    if (body !== null) {
+    if (replayed !== null) {
       logHarness(hooks, louder);
-      writeJson(res, 200, body);
+      if (replayed.kind === "json") {
+        writeJson(res, 200, replayed.body);
+      } else {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(replayed.body);
+      }
       let reuses: readonly UsageReuseUpload[] | undefined;
       try {
         const next = recordReuse({ cache: readWorkCache(cachePath), record: lookup.record, now });
@@ -482,6 +531,10 @@ async function handleProxyRequest(
       !isEventStream && responseBytes.length <= MAX_REPLAY_RESPONSE_BYTES
         ? parseJsonBody(responseBytes)
         : null,
+    streamBody:
+      isEventStream && responseBytes.length > 0 && responseBytes.length <= MAX_REPLAY_RESPONSE_BYTES
+        ? responseBytes.toString("utf8")
+        : null,
     parsed,
     cachePath,
   });
@@ -544,6 +597,7 @@ async function reportAfterResponse(input: {
   workKey: WorkKey | null;
   requestHash?: string;
   responseBody?: unknown;
+  streamBody?: string | null;
   parsed?: unknown;
   cachePath?: string;
   reuses?: readonly UsageReuseUpload[];
@@ -649,6 +703,7 @@ async function reportAfterResponse(input: {
             payload,
             request_hash: input.requestHash ?? null,
             response: isPlainRecord(input.responseBody) ? input.responseBody : null,
+            stream_body: typeof input.streamBody === "string" && input.streamBody !== "" ? input.streamBody : null,
           },
         }),
       );
@@ -765,7 +820,10 @@ export async function listenProxy(
   }
   const preferred = options.port ?? DEFAULT_PROXY_PORT;
   const track = { report: Promise.resolve() };
-  const wrapToken = normalizeWrapToken(hooks.wrapToken) ?? mintWrapToken();
+  const wrapToken =
+    normalizeWrapToken(hooks.wrapToken) ??
+    normalizeWrapToken(process.env.HELM_PROXY_WRAP_TOKEN) ??
+    mintWrapToken();
   const server = createProxyServer(
     { ...hooks, wrapToken, enableTeamStore: options.enableTeamStore ?? hooks.enableTeamStore },
     track,
@@ -818,18 +876,31 @@ export async function runProxyProcess(options: {
   return running;
 }
 
-export async function isProxyHealthy(url: string, timeoutMs = 400): Promise<boolean> {
+export async function inspectProxyHealth(
+  url: string,
+  timeoutMs = 400,
+): Promise<{ ok: boolean; version: string | null }> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const response = await fetch(`${url.replace(/\/+$/, "")}/health`, { signal: controller.signal });
     clearTimeout(timer);
     if (!response.ok) {
-      return false;
+      return { ok: false, version: null };
     }
     const body: unknown = await response.json();
-    return isPlainRecord(body) && body.ok === true && body.service === "helm-proxy";
+    if (!isPlainRecord(body) || body.ok !== true || body.service !== "helm-proxy") {
+      return { ok: false, version: null };
+    }
+    return {
+      ok: true,
+      version: typeof body.version === "string" && body.version !== "" ? body.version : null,
+    };
   } catch {
-    return false;
+    return { ok: false, version: null };
   }
+}
+
+export async function isProxyHealthy(url: string, timeoutMs = 400): Promise<boolean> {
+  return (await inspectProxyHealth(url, timeoutMs)).ok;
 }

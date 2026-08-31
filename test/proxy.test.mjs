@@ -1245,7 +1245,7 @@ test("an identical non-streaming request replays the prior provider response", a
 
     const cache = readWorkCache(cachePath);
     assert.equal(cache.reuses.length, 1);
-    assert.equal(cache.reuses[0].avoided_usd, null);
+    assert.equal(cache.reuses[0].avoided_usd, stored.cost_usd);
     assert.equal(fs.readFileSync(cachePath, "utf8").includes(SECRET), false);
     const fingerprintPosts = helmPosts.filter((post) => post.kind === "fingerprints");
     assert.ok(fingerprintPosts.length >= 2);
@@ -1273,6 +1273,87 @@ test("an identical non-streaming request replays the prior provider response", a
     assertReuseUploadHasNoSecrets(reusePosts[0].body);
     assert.equal(JSON.stringify(reusePosts[0].body).includes(TOOL_RESULT), false);
     assert.equal(JSON.stringify(reusePosts[0].body).includes(proxy.wrapToken), false);
+  } finally {
+    await proxy.close();
+    await provider.close();
+  }
+});
+
+test("an identical streaming request replays stored SSE and records a reuse", async () => {
+  const cachePath = tempWorkCachePath();
+  const logs = [];
+  const providerHits = [];
+  const helmPosts = [];
+  const sse =
+    'data: {"type":"message_start","message":{"id":"msg_stream","usage":{"input_tokens":11,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}\n\n' +
+    'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"ok"}}\n\n' +
+    'data: {"type":"message_delta","usage":{"output_tokens":7}}\n\n';
+  const provider = await listenMock((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      providerHits.push(req.url);
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(sse);
+    });
+  });
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0 },
+    {
+      anthropicUpstream: provider.url,
+      openaiUpstream: provider.url,
+      cwd: PROJECT_CWD,
+      homeDir: HOME_DIR,
+      now: () => NOW,
+      log: (line) => logs.push(line),
+      linked: true,
+      deviceUlid: "01DEVICE",
+      fetchLiveOthers: async () => [],
+      workCachePath: cachePath,
+      sendUsage: async (body) => {
+        helmPosts.push({ kind: "usage", body });
+        return { accepted: 1 };
+      },
+      sendFingerprints: async (body) => {
+        helmPosts.push({ kind: "fingerprints", body });
+      },
+      sendReuses: async (body) => {
+        helmPosts.push({ kind: "reuses", body });
+        return { accepted: 1 };
+      },
+      environment: "default",
+    },
+  );
+
+  try {
+    const headers = {
+      "content-type": "application/json",
+      "x-api-key": "sk-ant-user-token",
+      "anthropic-version": "2023-06-01",
+    };
+    const wrapUrl = `${proxy.url}/wrap/${proxy.wrapToken}/v1/messages`;
+    const body = JSON.stringify({ ...toolWorkBody(), stream: true });
+    const first = await fetch(wrapUrl, { method: "POST", headers, body });
+    assert.equal(first.status, 200);
+    assert.equal(first.headers.get("content-type")?.includes("text/event-stream"), true);
+    await proxy.reported;
+    const stored = readWorkCache(cachePath).records[0];
+    assert.ok(stored.stream_body);
+    assert.match(stored.stream_body, /message_start/);
+    assert.equal(stored.response, null);
+
+    const second = await fetch(wrapUrl, { method: "POST", headers, body });
+    assert.equal(second.status, 200);
+    assert.equal(second.headers.get("content-type")?.includes("text/event-stream"), true);
+    const replayed = await second.text();
+    await proxy.reported;
+
+    assert.equal(providerHits.length, 1);
+    assert.match(replayed, /message_start/);
+    assert.match(replayed, /HELM REUSED PRIOR WORK/);
+    assert.equal(readWorkCache(cachePath).reuses.length, 1);
+    assert.equal(helmPosts.some((post) => post.kind === "reuses"), true);
+    assert.equal(replayed.includes(SECRET), false);
   } finally {
     await proxy.close();
     await provider.close();

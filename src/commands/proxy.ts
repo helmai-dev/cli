@@ -8,7 +8,13 @@ import {
   DEFAULT_PROXY_PORT,
   isLoopbackBind,
 } from "../lib/proxy-inspect.js";
-import { isProxyHealthy, runProxyProcess } from "../lib/proxy-server.js";
+import {
+  inspectProxyHealth,
+  isProxyHealthy,
+  proxyNeedsRestart,
+  proxyVersion,
+  runProxyProcess,
+} from "../lib/proxy-server.js";
 import {
   clearProxyState,
   getProxyLogPath,
@@ -81,13 +87,40 @@ async function waitForHealthy(state: { host: string; port: number }, timeoutMs =
   return false;
 }
 
+function listenState(info: {
+  pid: number;
+  host: string;
+  port: number;
+  wrapToken: string | null;
+}): ProxyListenState {
+  return {
+    pid: info.pid,
+    host: info.host,
+    port: info.port,
+    started_at: new Date().toISOString(),
+    wrap_token: info.wrapToken,
+    cli_version: proxyVersion(),
+  };
+}
+
 export async function startProxyDaemon(options: {
   host?: string;
   port?: number;
+  wrapToken?: string | null;
 }): Promise<ProxyListenState> {
   const existing = readProxyState();
-  if (existing && (await isProxyHealthy(proxyUrl(existing)))) {
-    return existing;
+  const preservedToken = options.wrapToken ?? existing?.wrap_token ?? null;
+  if (existing) {
+    const health = await inspectProxyHealth(proxyUrl(existing));
+    const version = health.version ?? existing.cli_version ?? null;
+    if (!proxyNeedsRestart({
+      healthy: health.ok,
+      reportedVersion: version,
+      currentVersion: proxyVersion(),
+    })) {
+      return existing;
+    }
+    await stopProxyIfRunning();
   }
 
   const plan = resolveDaemonSpawn(process.execPath, process.argv[1]);
@@ -111,6 +144,7 @@ export async function startProxyDaemon(options: {
       HELM_PROXY_MODE: "1",
       HELM_PROXY_HOST: host,
       HELM_PROXY_PORT: String(port),
+      ...(preservedToken ? { HELM_PROXY_WRAP_TOKEN: preservedToken } : {}),
     },
     windowsHide: true,
   });
@@ -136,15 +170,6 @@ export async function ensureRunningProxy(options: {
   host?: string;
   port?: number;
 } = {}): Promise<{ host: string; port: number; url: string; wrapToken: string | null }> {
-  const existing = readProxyState();
-  if (existing && (await isProxyHealthy(proxyUrl(existing)))) {
-    return {
-      host: existing.host,
-      port: existing.port,
-      url: proxyUrl(existing),
-      wrapToken: existing.wrap_token,
-    };
-  }
   const started = await startProxyDaemon(options);
   return {
     host: started.host,
@@ -184,13 +209,12 @@ export async function proxyCommand(options: {
     host,
     port,
     onListening: (info) => {
-      writeProxyState({
+      writeProxyState(listenState({
         pid: process.pid,
         host: info.host,
         port: info.port,
-        started_at: new Date().toISOString(),
-        wrap_token: info.wrapToken,
-      });
+        wrapToken: info.wrapToken,
+      }));
       console.log(chalk.green(`\n  ✓ Helm proxy listening on ${info.url}`));
       console.log(chalk.gray("    Pass-through to Anthropic Messages and OpenAI-compatible chat/completions."));
       console.log(chalk.gray("    Prompt text stays on this machine.\n"));
@@ -230,13 +254,12 @@ export async function runProxyChildFromEnv(): Promise<void> {
     host,
     port,
     onListening: (info) => {
-      writeProxyState({
+      writeProxyState(listenState({
         pid: process.pid,
         host: info.host,
         port: info.port,
-        started_at: new Date().toISOString(),
-        wrap_token: info.wrapToken,
-      });
+        wrapToken: info.wrapToken,
+      }));
     },
   });
   process.on("SIGINT", () => {

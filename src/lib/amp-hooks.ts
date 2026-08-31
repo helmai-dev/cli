@@ -27,7 +27,7 @@ export default function (amp: PluginAPI) {
 
   amp.on("agent.start", async (event) => {
     try {
-      const result = spawnSync("helm", ["inject"], {
+      const result = spawnSync("helm", ["inject", "--format", "plugin"], {
         cwd: workspace,
         encoding: "utf-8",
         input: JSON.stringify({
@@ -37,9 +37,24 @@ export default function (amp: PluginAPI) {
         }),
         timeout: 2_500,
       })
-      const context = result.status === 0 ? result.stdout?.trim() : ""
-      if (!context) return
-      return { message: { content: context, display: false } }
+      const stdout = result.status === 0 ? result.stdout?.trim() ?? "" : ""
+      let additionalContext = ""
+      let systemMessage = ""
+      if (stdout) {
+        try {
+          const parsed = JSON.parse(stdout)
+          additionalContext = typeof parsed?.additionalContext === "string" ? parsed.additionalContext : ""
+          systemMessage = typeof parsed?.systemMessage === "string" ? parsed.systemMessage : ""
+        } catch {
+          additionalContext = stdout
+        }
+      }
+      if (additionalContext) {
+        return { message: { content: additionalContext, display: false } }
+      }
+      if (systemMessage) {
+        return { message: { content: systemMessage, display: true } }
+      }
     } catch {
       // Helm must never interrupt Amp.
     }

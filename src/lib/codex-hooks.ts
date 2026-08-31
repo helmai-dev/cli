@@ -32,8 +32,8 @@ export interface CodexHooks {
 }
 
 const HELM_CODEX_HOOKS = {
-  SessionStart: { command: HELM_CODEX_INJECT_COMMAND },
-  UserPromptSubmit: { command: HELM_CODEX_INJECT_COMMAND },
+  SessionStart: { command: HELM_CODEX_INJECT_COMMAND, statusMessage: "Helm" },
+  UserPromptSubmit: { command: HELM_CODEX_INJECT_COMMAND, statusMessage: "Helm" },
   PostToolUse: { command: HELM_OBSERVE_HOOK_COMMAND, timeout: 2 },
   Stop: { command: HELM_CODEX_LEARN_COMMAND, timeout: 3 },
   SessionEnd: { command: HELM_USAGE_SYNC_HOOK_COMMAND, timeout: 3 },

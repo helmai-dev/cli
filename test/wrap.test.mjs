@@ -15,6 +15,7 @@ import {
   restoreClaudeProxyEnv,
 } from "../dist/lib/claude-proxy-env.js";
 import {
+  agentIsPointingAtProxy,
   parseWrapAgent,
   unwrapAgent,
   wrapAgent,
@@ -141,8 +142,33 @@ test("wrap twice keeps the same bind URL", async () => {
   const first = await wrapAgent("claude", runtime);
   const second = await wrapAgent("claude", runtime);
   assert.equal(second.alreadyWrapped, true);
+  assert.equal(second.repaired, false);
   assert.equal(second.proxyUrl, first.proxyUrl);
   assert.equal(second.proxyUrl, `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}`);
+});
+
+test("a stale wrap record is repaired when the agent config no longer points at Helm", async () => {
+  const { state, runtime } = memoryRuntime({
+    wraps: {
+      codex: {
+        agent: "codex",
+        proxy_url: "http://127.0.0.1:9/wrap/deadbeefdeadbeefdeadbeefdeadbeef/v1",
+        wrapped_at: "2026-08-01T00:00:00.000Z",
+        previous: {
+          created_codex_config: true,
+          codex_config_toml: null,
+        },
+      },
+    },
+    codex: "model = \"gpt-5\"\n",
+  });
+  assert.equal(agentIsPointingAtProxy("codex", runtime, `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}/v1`), false);
+  const result = await wrapAgent("codex", runtime);
+  assert.equal(result.alreadyWrapped, false);
+  assert.equal(result.repaired, true);
+  assert.equal(openaiBaseUrlFromToml(state.codex), `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}/v1`);
+  assert.equal(state.wraps.codex.previous.created_codex_config, true);
+  assert.equal(state.wraps.codex.previous.codex_config_toml, null);
 });
 
 test("wrap without a proxy token keeps the bare proxy URL", async () => {

@@ -41,7 +41,7 @@ for (const [name, source, write, installed, remove] of integrations) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), `helm-${name}-test-`));
     const filePath = path.join(root, name === "copilot" ? "helm.json" : "helm.ts");
     assert.match(source, /managed by `helm hooks`/);
-    assert.match(source, /helm (inject|scan)|\["inject"\]/);
+    assert.match(source, /helm (inject|scan)|"inject"/);
     write(filePath);
     assert.equal(installed(filePath), true);
     assert.equal(remove(filePath), true);
@@ -53,6 +53,15 @@ test("Kilo integration captures the supported OpenCode-compatible lifecycle", ()
   assert.match(HELM_KILO_PLUGIN, /chat\.message/);
   assert.match(HELM_KILO_PLUGIN, /tool\.execute\.after/);
   assert.match(HELM_KILO_PLUGIN, /\["learn"\]/);
+  assert.match(HELM_KILO_PLUGIN, /--format", "plugin/);
+  assert.match(HELM_KILO_PLUGIN, /systemMessage/);
+});
+
+test("Amp and Pi show a visible Helm line when there is no model context", () => {
+  assert.match(HELM_AMP_PLUGIN, /display: true/);
+  assert.match(HELM_PI_EXTENSION, /display: true/);
+  assert.match(HELM_AMP_PLUGIN, /--format", "plugin/);
+  assert.match(HELM_PI_EXTENSION, /--format", "plugin/);
 });
 
 test("managed integration files never overwrite unrelated user files", () => {

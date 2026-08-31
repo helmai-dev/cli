@@ -54,17 +54,31 @@ export const HelmPlugin: Plugin = async ({ directory, client }) => {
     ) => {
       try {
         const sessionID = input.sessionID ?? "kilo-session"
-        const result = runHelm(["inject"], {
+        const result = runHelm(["inject", "--format", "plugin"], {
           session_id: sessionID,
           cwd: directory,
           hook_event_name: "UserPromptSubmit",
           provider: "kilo",
           prompt: prompts.get(sessionID),
         })
-        const context = result?.status === 0 ? result.stdout?.trim() : ""
-        if (!context) return
-        if (output.system.length === 0) output.system.push(context)
-        else output.system[0] = output.system[0] + "\\n\\n" + context
+        const stdout = result?.status === 0 ? result.stdout?.trim() ?? "" : ""
+        let additionalContext = ""
+        let systemMessage = ""
+        if (stdout) {
+          try {
+            const parsed = JSON.parse(stdout)
+            additionalContext = typeof parsed?.additionalContext === "string" ? parsed.additionalContext : ""
+            systemMessage = typeof parsed?.systemMessage === "string" ? parsed.systemMessage : ""
+          } catch {
+            additionalContext = stdout
+          }
+        }
+        if (!additionalContext && !systemMessage) return
+        if (additionalContext) {
+          if (output.system.length === 0) output.system.push(additionalContext)
+          else output.system[0] = output.system[0] + "\\n\\n" + additionalContext
+        }
+        if (systemMessage) output.system.unshift(systemMessage)
       } catch {
         // Helm must never interrupt Kilo.
       }

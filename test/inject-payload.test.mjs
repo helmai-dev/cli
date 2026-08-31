@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { formatContextOutput, normalizeHookPayload } from "../dist/commands/inject.js";
 
-test("normalizes Claude and Codex payloads to plain context", () => {
+test("normalizes Claude payloads to JSON so visible systemMessage can be shown", () => {
   assert.deepEqual(
     normalizeHookPayload({
       session_id: "session-1",
@@ -14,7 +14,7 @@ test("normalizes Claude and Codex payloads to plain context", () => {
       cwd: "/repo",
       sessionId: "session-1",
       eventName: "UserPromptSubmit",
-      output: "plain",
+      output: "claude-json",
       prompt: null,
       query: "Current project decisions, constraints, active work, and relevant team learnings.",
       provider: "claude-compatible",
@@ -53,9 +53,9 @@ test("explicit Gemini and Copilot formats override payload auto-detection", () =
   assert.equal(normalizeHookPayload(payload, "copilot").output, "copilot-json");
 });
 
-test("explicit Codex format keeps plain output and attributes captured turns", () => {
+test("explicit Codex format uses JSON and attributes captured turns", () => {
   const normalized = normalizeHookPayload({ prompt: "Fix auth" }, "codex");
-  assert.equal(normalized.output, "plain");
+  assert.equal(normalized.output, "codex-json");
   assert.equal(normalized.provider, "codex");
 });
 

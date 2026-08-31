@@ -39,6 +39,8 @@ export interface WorkRecord {
   readonly request_hash: string | null;
   /** Prior provider response. Present only for non-streaming JSON responses. */
   readonly response: Record<string, unknown> | null;
+  /** Prior SSE bytes. Present only for streaming responses that fit the replay budget. */
+  readonly stream_body: string | null;
 }
 
 export interface WorkReuse {
@@ -59,7 +61,7 @@ export interface WorkCacheFile {
 export type WorkLookup =
   | {
       kind: "reuse";
-      record: WorkRecord & { request_hash: string; response: Record<string, unknown> };
+      record: WorkRecord & { request_hash: string };
     }
   | { kind: "forward"; reason: "no_facts" | "no_hit" | "no_replay" };
 
@@ -232,6 +234,7 @@ function parseRecord(value: unknown): WorkRecord | null {
     payload: parsePayload(value.payload),
     request_hash,
     response: isPlainRecord(value.response) ? value.response : null,
+    stream_body: typeof value.stream_body === "string" && value.stream_body !== "" ? value.stream_body : null,
   };
 }
 
@@ -328,12 +331,13 @@ export function lookupWork(input: {
   if (latest === null) {
     return { kind: "forward", reason: "no_hit" };
   }
-  if (latest.request_hash === null || latest.response === null) {
+  const hasReplay = latest.response != null || Boolean(latest.stream_body);
+  if (latest.request_hash === null || !hasReplay) {
     return { kind: "forward", reason: "no_replay" };
   }
   return {
     kind: "reuse",
-    record: { ...latest, request_hash: latest.request_hash, response: latest.response },
+    record: { ...latest, request_hash: latest.request_hash },
   };
 }
 
@@ -381,7 +385,7 @@ export function recordReuse(input: {
     project_hint: input.record.project_hint,
     path_hints: input.record.path_hints,
     tool_names: input.record.tool_names,
-    avoided_usd: null,
+    avoided_usd: input.record.cost_usd,
     original_occurred_at: input.record.occurred_at,
   };
   return {
