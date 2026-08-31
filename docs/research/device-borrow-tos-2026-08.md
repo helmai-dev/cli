@@ -98,6 +98,18 @@ If B is the user at the keyboard of their own Claude Code, B is using B’s acco
 
 Claude Code’s “ordinary, individual usage” line and “do not intermediate usage on their end users’ behalf” still apply if Helm’s *product* is A’s coding session billed to B’s plan. A one-off human paste is not that. A lend/borrow queue that exists to burn leftover seats is.
 
-**ToS-safer cousin (already in Helm’s daemon/inbound path):** B accepts a **work assignment as B** — named author, B’s repo checkout, B’s login, B’s receipt. That is B doing B’s job on B’s seat. It is not A remaining the author while B is a quota battery.
+**ToS-safer cousin (already in Helm’s daemon/inbound path):** A named **workload** is offered as a link. B accepts. Unmodified Claude/Codex starts **on B’s device as B**. When it finishes, the change (diff, output) comes back through Helm for A to take — like a PR, not like A still being mid-session on B’s Max plan.
 
-Until counsel says otherwise, do not build leftover-quota routing. Thursday: wrap + no-password install + honest receipts. Official team overflow is extra usage / API / workspace credits.
+That is work assignment, not leftover-quota routing:
+
+| | Quota pinch (do not build) | Workload link (this shape) |
+|---|---|---|
+| What A sends | “Finish my turn, I hit a limit” | A workload (project, ask, paths) |
+| What B does | Lend unused Max | Accept and run it as B |
+| Who Anthropic/OpenAI bills | B’s seat, for A’s session | B’s seat, for B’s run |
+| What comes back | Streamed completion on A’s chat | Artifact A can copy/apply |
+| Helm already has | Nothing honest | Daemon claim + inbound `code-bridge` + work package lifecycle |
+
+Keep matching on “B volunteered / B is the right person,” not “B has 70% left.” Spend on that run is B’s observed spend. A Verified Saving is still only wrap reuse, never “we used Ben’s leftover tokens.”
+
+Until counsel says otherwise, do not build leftover-quota routing. A consent link that starts **B’s** agent on a named workload and returns the diff is the inbound path, not token torrenting. Thursday: wrap + no-password install + honest receipts. Official seat overflow remains extra usage / API / workspace credits.
