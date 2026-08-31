@@ -24,16 +24,20 @@ export default function (amp: PluginAPI) {
   const workspace = amp.system.workspaceRoot
     ? amp.helpers.filePathFromURI(amp.system.workspaceRoot)
     : process.cwd()
+  const started = new Set()
 
   amp.on("agent.start", async (event) => {
     try {
+      const sessionId = event.thread.id
+      const first = !started.has(sessionId)
+      if (first) started.add(sessionId)
       const result = spawnSync("helm", ["inject", "--format", "plugin"], {
         cwd: workspace,
         encoding: "utf-8",
         input: JSON.stringify({
-          session_id: event.thread.id,
+          session_id: sessionId,
           cwd: workspace,
-          hook_event_name: "UserPromptSubmit",
+          hook_event_name: first ? "SessionStart" : "UserPromptSubmit",
         }),
         timeout: 2_500,
       })

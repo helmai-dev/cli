@@ -183,6 +183,7 @@ test("reconciler repairs drifted wrap, stale proxy, and incomplete integrations"
     },
     anyIntegrationInstalled: () => true,
     allIntegrationsInstalled: () => false,
+    integrationsVersion: () => "1.3.17",
     async installIntegrations() {
       calls.push("hooks");
     },
@@ -214,6 +215,7 @@ test("reconciler is silent when wrap records point at a current proxy and integr
     },
     anyIntegrationInstalled: () => true,
     allIntegrationsInstalled: () => true,
+    integrationsVersion: () => "1.3.17",
     async installIntegrations() {
       throw new Error("should not install");
     },
@@ -241,12 +243,42 @@ test("reconciler does not wrap agents the user never opted into", async () => {
     },
     anyIntegrationInstalled: () => false,
     allIntegrationsInstalled: () => false,
+    integrationsVersion: () => null,
     async installIntegrations() {
       throw new Error("should not install hooks the user never enabled");
     },
   };
   assert.deepEqual(await reconcileRuntime(runtime), []);
   assert.deepEqual(wrapped, []);
+});
+
+test("reconciler rewrites integrations when the CLI version changed", async () => {
+  const calls = [];
+  const runtime = {
+    packageVersion: "1.3.18",
+    wrapAgents: [],
+    inspectWrap() {
+      return { hasRecord: false, pointingAtProxy: false };
+    },
+    async wrapAgent() {
+      throw new Error("no wraps");
+    },
+    async proxyStatus() {
+      return { running: false, current: false, version: null };
+    },
+    async restartProxy() {
+      throw new Error("no proxy");
+    },
+    anyIntegrationInstalled: () => true,
+    allIntegrationsInstalled: () => true,
+    integrationsVersion: () => "1.3.17",
+    async installIntegrations() {
+      calls.push("hooks");
+    },
+  };
+  const repairs = await reconcileRuntime(runtime);
+  assert.deepEqual(calls, ["hooks"]);
+  assert.equal(repairs[0].summary, "Updated coding-agent integrations to 1.3.18");
 });
 
 test("withBudget returns the fallback without rejecting slow work", async () => {

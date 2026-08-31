@@ -22,16 +22,19 @@ import { randomUUID } from "node:crypto"
 export default function (pi: ExtensionAPI) {
   const sessionId = randomUUID()
 
+  let started = false
   pi.on("before_agent_start", async (event, ctx) => {
     try {
       const cwd = event.systemPromptOptions.cwd ?? ctx.cwd
+      const first = !started
+      started = true
       const result = spawnSync("helm", ["inject", "--format", "plugin"], {
         cwd,
         encoding: "utf-8",
         input: JSON.stringify({
           session_id: sessionId,
           cwd,
-          hook_event_name: "UserPromptSubmit",
+          hook_event_name: first ? "SessionStart" : "UserPromptSubmit",
         }),
         timeout: 2_500,
       })

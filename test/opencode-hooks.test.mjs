@@ -18,6 +18,7 @@ test("OpenCode plugin injects context, observes tools, learns, and syncs usage",
   assert.match(HELM_OPENCODE_PLUGIN, /tool\.execute\.after/);
   assert.match(HELM_OPENCODE_PLUGIN, /session\.idle/);
   assert.match(HELM_OPENCODE_PLUGIN, /\["inject", "--format", "plugin"\]/);
+  assert.match(HELM_OPENCODE_PLUGIN, /SessionStart/);
   assert.match(HELM_OPENCODE_PLUGIN, /\["observe"\]/);
   assert.match(HELM_OPENCODE_PLUGIN, /\["learn"\]/);
   assert.doesNotMatch(HELM_OPENCODE_PLUGIN, /\["capture"\]/);

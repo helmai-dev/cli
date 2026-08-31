@@ -1,6 +1,8 @@
 /** `helm hooks install|uninstall|status` — manage all supported agent hooks. */
 
 import chalk from "chalk";
+import pkg from "../../package.json";
+import { writeIntegrationsVersion } from "../lib/integrations-state.js";
 import {
   getClaudeSettingsPath,
   helmHooksInstalled as claudeHooksInstalled,
@@ -216,7 +218,9 @@ export function installAgentIntegrations(): ReturnType<typeof installHelmMcpHost
   writePiExtension(piPath);
   writeAmpPlugin(ampPath);
   writeKiloPlugin(kiloPath);
-  return installHelmMcpHosts();
+  const hosts = installHelmMcpHosts();
+  writeIntegrationsVersion(pkg.version);
+  return hosts;
 }
 
 export async function hooksInstallCommand(): Promise<void> {

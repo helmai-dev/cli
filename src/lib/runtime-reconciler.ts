@@ -28,6 +28,7 @@ export interface ReconcilerRuntime {
   readonly restartProxy: () => Promise<void>;
   readonly anyIntegrationInstalled: () => boolean;
   readonly allIntegrationsInstalled: () => boolean;
+  readonly integrationsVersion: () => string | null;
   readonly installIntegrations: () => Promise<void>;
 }
 
@@ -94,11 +95,19 @@ export async function reconcileRuntime(runtime: ReconcilerRuntime): Promise<Repa
   }
 
   try {
-    if (runtime.anyIntegrationInstalled() && !runtime.allIntegrationsInstalled()) {
+    const staleVersion =
+      runtime.anyIntegrationInstalled() &&
+      runtime.integrationsVersion() !== runtime.packageVersion;
+    if (
+      runtime.anyIntegrationInstalled() &&
+      (!runtime.allIntegrationsInstalled() || staleVersion)
+    ) {
       await runtime.installIntegrations();
       repairs.push({
         kind: "hooks",
-        summary: "Restored coding-agent integrations",
+        summary: staleVersion
+          ? `Updated coding-agent integrations to ${runtime.packageVersion}`
+          : "Restored coding-agent integrations",
       });
     }
   } catch {

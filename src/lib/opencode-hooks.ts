@@ -17,6 +17,7 @@ import { spawn, spawnSync } from "node:child_process"
 export const HelmPlugin: Plugin = async ({ directory, client }) => {
   let syncStarted = false
   const prompts = new Map<string, string>()
+  const started = new Set()()
 
   const runHelm = (args: string[], payload: unknown, timeout = 2_000) => {
     try {
@@ -50,10 +51,12 @@ export const HelmPlugin: Plugin = async ({ directory, client }) => {
     ) => {
       try {
         const sessionID = input.sessionID ?? "opencode-session"
+        const first = !started.has(sessionID)
+        if (first) started.add(sessionID)
         const result = runHelm(["inject", "--format", "plugin"], {
           session_id: sessionID,
           cwd: directory,
-          hook_event_name: "UserPromptSubmit",
+          hook_event_name: first ? "SessionStart" : "UserPromptSubmit",
           provider: "opencode",
           prompt: prompts.get(sessionID),
         })

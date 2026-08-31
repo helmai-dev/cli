@@ -7,6 +7,7 @@ import { installAgentIntegrations, anyAgentIntegrationInstalled, allAgentHooksIn
 import { ensureRunningProxy } from "../commands/proxy.js";
 import { agentIsPointingAtProxy, liveWrapRuntime, wrapAgent, type WrapRuntime } from "../commands/wrap.js";
 import { inspectProxyHealth } from "./proxy-server.js";
+import { readIntegrationsVersion } from "./integrations-state.js";
 import { readProxyState, type WrapAgent } from "./proxy-state.js";
 import type { ReconcilerRuntime } from "./runtime-reconciler.js";
 
@@ -54,6 +55,7 @@ export function liveReconcilerRuntime(
     },
     anyIntegrationInstalled: () => anyAgentIntegrationInstalled(),
     allIntegrationsInstalled: () => allAgentHooksInstalled(),
+    integrationsVersion: () => readIntegrationsVersion(),
     async installIntegrations() {
       installAgentIntegrations();
     },

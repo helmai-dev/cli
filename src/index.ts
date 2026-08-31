@@ -119,6 +119,15 @@ hooks
   });
 
 program
+  .command("doctor")
+  .description("Check wrap, proxy, hooks, and helm-web link for a demo-ready machine")
+  .option("--json", "Emit machine-readable checks")
+  .action(async (options: { json?: boolean }) => {
+    const { doctorCommand } = await import("./commands/doctor.js");
+    await doctorCommand(options);
+  });
+
+program
   .command("mcp")
   .description("stdio MCP server: Helm team tools for local coding agents")
   .action(async () => {

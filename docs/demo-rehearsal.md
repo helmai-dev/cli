@@ -1,12 +1,21 @@
-# Two-laptop demo rehearsal
+# Demo rehearsal — Observe, Diagnose, Optimize
 
-This rehearsal proves the Observe and Diagnose path: live wrapped spend,
-bounded receipts, and overlapping work across two people. It does not claim
-avoidable dollars from path/tool overlap. Only a verified replay of an
-identical non-streaming request can bypass the provider and create a reuse row.
+This rehearsal proves the north star on one laptop, then optionally two.
+Helm is ambient infrastructure: install once, stay in the editor, and only
+speak when it did something. Dollars on `/usage` are either observed spend
+or a **Verified Saving** from an actual reuse. A Savings Opportunity never
+headlines as money saved.
 
-Run this end-to-end at least once before demo day. Unit tests do not
-prove the demo; the built binary against production does.
+Unit tests do not prove the demo. Rehearse against the built CLI
+(`helm --version` ≥ 1.3.18) and production tryhelm.ai.
+
+## The sentence the demo must earn
+
+> You spent $X, and Helm avoided $Y you already paid for.
+
+`$X` is ingested wrap/scan spend. `$Y` is the SUM of server-priced
+`usage_reuses` rows — the Intervention Receipts. If `$Y` is empty, say
+"not quantified yet." Do not invent it.
 
 ## Cast
 
@@ -15,124 +24,136 @@ prove the demo; the built binary against production does.
 | A | Dana (presenter) | Laptop A | Helm Web account on the demo team |
 | B | Maya (teammate) | Laptop B | Second account, **same team** |
 
-Two physical machines beat one machine with two OS users — the story is
-"my teammate already paid for this work."
+Solo rehearsal: Beats 0–2 on Laptop A only.
 
 ## Prerequisites (day before)
 
-1. Both accounts exist on tryhelm.ai and are members of the same team.
-   Open `/usage` as each account and confirm the same team renders.
-2. Install the CLI on both laptops with the curl installer (not npm —
-   the npm channel is stale at 1.3.0):
+1. Both accounts exist on tryhelm.ai and share a team. Open `/usage` as
+   each account and confirm the same team renders.
+2. Install with the curl installer (not npm — npm is stale):
 
    ```
    curl -fsSL https://tryhelm.ai/install | bash
-   helm --version    # must print 1.3.13 or later
+   helm --version    # must print 1.3.18 or later
    ```
 
-3. `helm connect` on both. `helm whoami` shows the user id and device.
-4. Both laptops clone the same demo repo and open it as cwd. The
-   project directory NAME is the `project_hint` — keep it identical on
-   both machines.
-5. Claude Code installed and signed in on both.
-6. Clean slate for a scripted rehearsal (optional but repeatable):
+   On this machine `/usr/local/bin/helm` may still be 1.3.17 if sudo was
+   not available. Prefer `~/.local/bin/helm` earlier on PATH, or:
 
    ```
-   rm -f ~/.helm/environments/default/proxy-work.json
+   sudo cp "$(command -v helm)" /usr/local/bin/helm
    ```
 
-## Windows that gate each beat
+3. `helm connect` then `helm whoami`. Linked.
+4. Clone the same demo repo on both laptops. Directory **name** is the
+   `project_hint` — keep it identical.
+5. Claude Code signed in on both (Codex also works if wrap is on).
+6. Optional clean slate:
 
-| Signal | Window |
-|---|---|
-| Live teammate overlap notice | 120 minutes |
-| Verified local replay / team receipt retrieval | 24 hours after the original work |
-| Overlapping sessions / Duplicate bucket | rollup window (30 days), needs ≥2 shared path hints |
-| `/usage` rollup | 30 days |
+   ```
+   rm -f ~/.helm/environments/production/proxy-work.json
+   ```
 
-Pre-warm accordingly: A's "original work" should happen 10–60 minutes
-before the stage moment, not seconds and not yesterday.
-
-## Beat 1 — Observe (Laptop A)
+## Beat 0 — Ambient (Laptop A)
 
 ```
 helm wrap claude
 claude
 ```
 
-In Claude Code, run a real task that reads files, e.g.:
+Open the repo. On SessionStart, the host must show a visible line:
+
+```
+Helm · Active for <repo>
+```
+
+If wrap/proxy/hooks were stale, the same turn may also say Helm repaired
+them. Not a message on every later prompt.
+
+**If it fails:** `helm hooks status`. Restart Claude so it rereads
+`ANTHROPIC_BASE_URL`. SessionStart uses `systemMessage` (Claude/Codex)
+or the plugin visible channel (Amp/Pi/OpenCode).
+
+## Beat 1 — Observe (Laptop A)
+
+In Claude, a real task that **reads files**:
 
 > Read src/lib/config.ts and explain how environments resolve.
 
-**Verify before moving on:**
+**Verify:**
 
-- Terminal shows the wrap is active; `helm unwrap claude` is the undo.
-- `/usage` (A's browser): total spend ticked up, the ask appears under
-  the member ("Read src/lib/config.ts and explain…"), live wrapped work
-  shows.
+- Terminal wrap is active. Undo is `helm unwrap claude`.
+- `/usage`: spend ticked up; the ask appears under Dana.
 - `helm audit` prints local observed spend.
 
-**If it fails:** `helm whoami` (linked?), restart the agent after
-wrapping (the base URL is read at start), check `helm proxy` is
-running. Uploads fail open — a quiet dashboard means the POST failed,
-not the wrap.
+**If it fails:** `helm whoami`. Restart the agent after wrapping. Uploads
+fail open — a quiet dashboard is a POST failure, not a dead wrap.
 
-## Beat 2 — Duplicate workloads (Laptop B, within ~1 hour of Beat 1)
+## Beat 2 — Diagnose overlap (Laptop B, within ~1 hour)
 
-On B: `helm wrap claude`, then work in the SAME repo touching **at
-least two of the same files** A touched:
+On B: `helm wrap claude`, same repo, touch **at least two of the same files**:
 
 > Read src/lib/config.ts and src/commands/connect.ts — how does connect
 > store credentials?
 
 **Verify:**
 
-- If within 120 minutes of A's work, B's terminal can print the live
-  teammate notice (Dana, same file).
-- `/usage` Shared work lists the overlapping sessions: both names plus
-  the shared files. Diagnose "Duplicate AI workloads" shows the people
-  count.
+- Within 120 minutes, B can see `Helm · Dana was on src/lib/config.ts …`.
+- `/usage` Shared work lists both people and the shared files.
+- Diagnose "Duplicate AI workloads" shows the people count.
+- Avoidable spend / Saved by Helm does **not** jump from overlap alone.
 
-**If it fails:** the intersection needs ≥2 path hints — make B read two
-of A's files, not one. Both sessions need a `session_key` (any 1.3.10+
-wrap provides it).
+## Beat 3 — Optimize: verified reuse (Laptop A)
 
-## Beat 3 — Different asks do not auto-reuse (Laptop A)
-
-Within 24h of Beat 1, make A's agent redo the same tool work — same
-project, same file, same tool:
+Within 24h of Beat 1, make A's **wrapped** agent redo the **same tool work**
+on the same project, path, and tool. Streaming is fine on 1.3.18+:
 
 > Read src/lib/config.ts again and list its exported functions.
 
-**Verify:** the provider handles the new ask normally. The response must not
-contain `HELM REUSED PRIOR WORK`. `/usage` may diagnose repeated context, but
-avoidable spend must not increase from this overlap alone.
+If the intercepted request is identical (same wrap-bound bytes, same
+tools/paths), Helm must **not** send it to the provider.
 
-## Beat 4 — Team work is retrieval context, not an automatic bypass
+**Verify:**
 
-B never did A's work. Within 24h of Beat 1, ask B's agent for work that
-matches A's cached tool call:
+- Response or stderr contains `HELM REUSED PRIOR WORK`.
+- `helm audit` prints a local reuse. Dollars print only when the original
+  record stored `cost_usd`.
+- `/usage/savings` shows a Verified Saving receipt priced from the
+  original tokens. Header `HELM SAVINGS` appears only after that.
+
+**If it fails:** the lookup needs path hints **and** tool names (a Read
+of a file, not a bare chat). Wrap bind must be on (`/wrap/<token>/…`).
+Different prose with the same Read can still miss exact-hash replay —
+that is a Savings Opportunity, not a Verified Saving.
+
+## Beat 4 — Team work is retrieval, not a silent bypass
+
+B never did A's work. Ask B for A's original task:
 
 > Read src/lib/config.ts and explain how environments resolve.
 
-**Verify:** Helm can surface Dana's receipt through `retrieve_team_work`, while
-B's model request still reaches the provider. The response must not contain a
-team reuse line. This is observed overlap until a future workload identity and
-replayable team artifact prove equivalence.
+**Verify:** Helm can surface Dana's receipt through `retrieve_team_work`.
+B's model request still reaches the provider. No team reuse line. Overlap
+until a future workload-identity replay proves equivalence.
 
 ## Closing screen
 
-End on `/usage`: total spend, the asks people actually made, overlapping
-workloads with names, and honest empty states ("not quantified yet") for
-unverified savings. That honesty is part of the pitch.
+End on `/usage`:
+
+- Observed spend this window
+- Saved by Helm = verified reuse dollars, or "not quantified yet"
+- More identified = still empty until a detector exists
+- The asks people made
+- Overlapping workloads with names
+
+That honesty is the pitch. Autopilot is later. Do not pretend we are there.
 
 ## Stage-day insurance
 
-- Rehearse Beats 1+3 solo first; they need only one laptop.
-- Pre-warm: run Beat 1 an hour before going on stage so Beat 4 is a
-  one-prompt payoff.
-- Have `/usage` already open and signed in on both browsers.
-- Fallback seeder for a dead network is **not built yet** — the
-  existing `DemoWorkspaceSeeder` predates the spend product. Until one
-  exists, the fallback is screenshots of a successful rehearsal.
+- Rehearse Beats 0–1 and 3 solo first.
+- Pre-warm Beat 1 an hour before Beat 4.
+- Have `/usage` signed in on both browsers.
 - Do not upgrade the CLI or deploy web on demo day.
+- Fallback seeder (`UsageDemoSeeder`) still seeds **no** reuses. Savings
+  tiles stay "not quantified yet" in the fallback. Screenshots of a live
+  Beat 3 are the backup.

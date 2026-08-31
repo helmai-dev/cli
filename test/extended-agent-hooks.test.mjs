@@ -55,6 +55,7 @@ test("Kilo integration captures the supported OpenCode-compatible lifecycle", ()
   assert.match(HELM_KILO_PLUGIN, /\["learn"\]/);
   assert.match(HELM_KILO_PLUGIN, /--format", "plugin/);
   assert.match(HELM_KILO_PLUGIN, /systemMessage/);
+  assert.match(HELM_KILO_PLUGIN, /SessionStart/);
 });
 
 test("Amp and Pi show a visible Helm line when there is no model context", () => {
@@ -62,6 +63,8 @@ test("Amp and Pi show a visible Helm line when there is no model context", () =>
   assert.match(HELM_PI_EXTENSION, /display: true/);
   assert.match(HELM_AMP_PLUGIN, /--format", "plugin/);
   assert.match(HELM_PI_EXTENSION, /--format", "plugin/);
+  assert.match(HELM_AMP_PLUGIN, /SessionStart/);
+  assert.match(HELM_PI_EXTENSION, /SessionStart/);
 });
 
 test("managed integration files never overwrite unrelated user files", () => {
