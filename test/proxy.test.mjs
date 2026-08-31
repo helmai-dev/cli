@@ -1565,7 +1565,7 @@ test("wrap reuses the same project, path, and tool when the ask and tool ids dif
     });
   });
   const proxy = await listenProxy(
-    { host: "127.0.0.1", port: 0 },
+    { host: "127.0.0.1", port: 0, enableTeamStore: true },
     {
       anthropicUpstream: provider.url,
       openaiUpstream: provider.url,
@@ -1582,6 +1582,10 @@ test("wrap reuses the same project, path, and tool when the ask and tool ids dif
       sendReuses: async (body) => {
         helmPosts.push({ kind: "reuses", body });
         return { accepted: 1 };
+      },
+      sendExcerpt: async (body) => {
+        helmPosts.push({ kind: "excerpt", body });
+        return { accepted: true };
       },
       environment: "default",
     },
@@ -1619,6 +1623,9 @@ test("wrap reuses the same project, path, and tool when the ask and tool ids dif
     assert.ok(logs.some((line) => line.includes("REUSED PRIOR WORK")));
     assert.equal(readWorkCache(cachePath).reuses.length, 1);
     assert.equal(helmPosts.filter((post) => post.kind === "reuses").length, 1);
+    const skipExcerpts = helmPosts.filter((post) => post.kind === "excerpt");
+    assert.equal(skipExcerpts.length, 2);
+    assert.equal(skipExcerpts[1].body.excerpt.prompt_excerpt, "different ask");
   } finally {
     await proxy.close();
     await provider.close();

@@ -460,6 +460,7 @@ async function handleProxyRequest(
         upstreamStatus: 200,
         storeCache: false,
         workKey,
+        parsed,
         reuses,
       });
       return;
@@ -703,30 +704,42 @@ async function reportAfterResponse(input: {
           },
         }),
       );
-      // Bounded excerpt for the team store. Prompt is the last user ask only;
-      // tool bytes are the same entries already cached locally.
-      if (
-        input.hooks.enableTeamStore === true &&
-        (input.hooks.linked ?? hasLinkedAccount(loadCredentials()))
-      ) {
-        excerpt = {
-          device_ulid: input.hooks.deviceUlid ?? loadMachineIdentity()?.ulid ?? null,
-          excerpt: excerptUploadFromParts({
-            workKey: input.workKey,
-            sessionKey,
-            prompt: lastUserPromptFromRequestBody(input.parsed),
-            payload,
-            costUsd: null,
-            model: input.model !== "unknown" ? input.model : null,
-            inputTokens: input.usage ? input.usage.input_tokens : null,
-            outputTokens: input.usage ? input.usage.output_tokens : null,
-            cacheWriteTokens: input.usage ? input.usage.cache_write_tokens : null,
-            cacheReadTokens: input.usage ? input.usage.cache_read_tokens : null,
-            occurredAt: input.now,
-            environment: input.hooks.environment ?? getActiveEnvironment(),
-          }),
-        };
-      }
+    } catch {
+    }
+  }
+
+  // Receipt excerpt: last user ask plus tool bytes already on the request.
+  // Wrap skip still posts this so Usage "Working now" / latest ask refresh
+  // without storing a second local work record.
+  if (
+    input.hooks.enableTeamStore === true &&
+    (input.hooks.linked ?? hasLinkedAccount(loadCredentials())) &&
+    input.workKey
+  ) {
+    try {
+      const payload = payloadFromToolResults({
+        results: toolResultsFromRequestBody(input.parsed),
+        cwd: input.cwd,
+        homeDir: input.homeDir,
+        occurredAt: input.now.toISOString(),
+      });
+      excerpt = {
+        device_ulid: input.hooks.deviceUlid ?? loadMachineIdentity()?.ulid ?? null,
+        excerpt: excerptUploadFromParts({
+          workKey: input.workKey,
+          sessionKey,
+          prompt: lastUserPromptFromRequestBody(input.parsed),
+          payload,
+          costUsd: null,
+          model: input.model !== "unknown" ? input.model : null,
+          inputTokens: input.usage ? input.usage.input_tokens : null,
+          outputTokens: input.usage ? input.usage.output_tokens : null,
+          cacheWriteTokens: input.usage ? input.usage.cache_write_tokens : null,
+          cacheReadTokens: input.usage ? input.usage.cache_read_tokens : null,
+          occurredAt: input.now,
+          environment: input.hooks.environment ?? getActiveEnvironment(),
+        }),
+      };
     } catch {
     }
   }
