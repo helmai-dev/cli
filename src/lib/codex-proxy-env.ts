@@ -32,16 +32,6 @@ function joinSections(sections: TomlSection[]): string {
     .replace(/\n+$/, "\n");
 }
 
-function setKey(body: string, key: string, value: string): string {
-  const line = `${key} = ${JSON.stringify(value)}`;
-  const pattern = new RegExp(`^${key}\\s*=.*$`, "m");
-  if (pattern.test(body)) {
-    return body.replace(pattern, line);
-  }
-  const trimmed = body.replace(/\s+$/, "");
-  return trimmed === "" ? line : `${trimmed}\n${line}`;
-}
-
 function readKey(body: string, key: string): string | null {
   const match = body.match(new RegExp(`^${key}\\s*=\\s*(.*)$`, "m"));
   if (!match || match[1] === undefined) {
@@ -59,15 +49,28 @@ function readKey(body: string, key: string): string | null {
   return raw === "" ? null : raw;
 }
 
-export function applyCodexOpenAiBaseUrl(toml: string, baseUrl: string): string {
+export function reservedOpenaiProviderPresent(toml: string): boolean {
+  return splitSections(toml).some((section) => section.header === OPENAI_PROVIDER_HEADER);
+}
+
+/**
+ * Codex treats `openai` as a built-in provider id. Writing
+ * `[model_providers.openai]` is ignored on 0.151 and is a hard config error
+ * on current Codex. Helm must never add that table. ChatGPT login talks to
+ * chatgpt.com, not api.openai.com; a loopback wrap URL would 401.
+ */
+export function stripReservedOpenaiProvider(toml: string): string {
   const sections = splitSections(toml);
-  const existing = sections.find((section) => section.header === OPENAI_PROVIDER_HEADER);
-  if (existing) {
-    existing.body = setKey(existing.body, "base_url", baseUrl);
-    return joinSections(sections);
+  const next = sections.filter((section) => section.header !== OPENAI_PROVIDER_HEADER);
+  if (next.length === sections.length) {
+    return toml;
   }
-  sections.push({ header: OPENAI_PROVIDER_HEADER, body: `base_url = ${JSON.stringify(baseUrl)}` });
-  return joinSections(sections);
+  return joinSections(next);
+}
+
+/** @deprecated Helm wrap must not set this reserved table. Strips it instead. */
+export function applyCodexOpenAiBaseUrl(toml: string, _baseUrl?: string): string {
+  return stripReservedOpenaiProvider(toml);
 }
 
 export function openaiBaseUrlFromToml(toml: string): string | null {

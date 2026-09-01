@@ -12,6 +12,8 @@ test("Codex merge installs all lifecycle hooks and is idempotent", () => {
   assert.equal(codexHooksInstalled(once), true);
   assert.equal(once.description, "keep me");
   assert.equal(once.hooks.SessionStart[0].hooks[0].command, "helm inject --format codex");
+  assert.equal(once.hooks.SessionStart[0].hooks[0].timeout, 3);
+  assert.equal(once.hooks.UserPromptSubmit[0].hooks[0].timeout, 3);
   assert.equal(once.hooks.PostToolUse[0].hooks[0].command, "helm observe");
   assert.equal(once.hooks.Stop[0].hooks[0].command, "helm learn --format codex");
   assert.equal(once.hooks.SessionEnd[0].hooks[0].timeout, 3);

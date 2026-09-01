@@ -4,6 +4,7 @@
  * uploaded; web tools are forwarded to POST /mcp.
  */
 
+import * as fs from "node:fs";
 import {
   encodeMcpMessage,
   McpReadBuffer,
@@ -29,6 +30,7 @@ export async function mcpCommand(runtime: McpRuntime = liveMcpRuntime()): Promis
       });
   };
 
+  process.stdin.resume();
   process.stdin.on("data", (chunk: Buffer | string) => {
     const bytes = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
     for (const message of buffer.append(bytes)) {
@@ -45,5 +47,7 @@ export async function mcpCommand(runtime: McpRuntime = liveMcpRuntime()): Promis
 }
 
 function writeMcpResponse(response: JsonRpcResponse): void {
-  process.stdout.write(encodeMcpMessage(response));
+  // Piped stdout is block-buffered. Codex waits on initialize/tools/list
+  // until startup_timeout_sec, so a 16KB buffer hang looks like a 30s timeout.
+  fs.writeSync(1, encodeMcpMessage(response));
 }

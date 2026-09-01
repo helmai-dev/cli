@@ -9,7 +9,7 @@
 class Helm < Formula
   desc "Laptop intercept between Claude Code / Codex and model providers"
   homepage "https://tryhelm.ai"
-  version "1.3.20",
+  version "1.3.21",
   license "MIT"
 
   livecheck do
@@ -55,8 +55,9 @@ class Helm < Formula
 
   def caveats
     <<~EOS
-      helm wrap claude and helm wrap codex point laptop Claude Code / Codex
-      at a loopback proxy on this machine. Prompts stay on-device.
+      helm wrap claude points Claude Code at a loopback proxy on this
+      machine. helm wrap codex does not rewrite Codex's reserved
+      [model_providers.openai] table. Prompts stay on-device.
 
       This does not intercept Cursor cloud VMs.
 

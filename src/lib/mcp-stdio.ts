@@ -54,17 +54,17 @@ export function decodeMcpMessages(buffer: Buffer): { messages: unknown[]; rest: 
 }
 
 function shiftContentLength(buffer: Buffer): { message: unknown; rest: Buffer } | null {
-  const headerEnd = indexOfHeaderDelimiter(buffer);
-  if (headerEnd < 0) {
+  const delimiter = findHeaderDelimiter(buffer);
+  if (!delimiter) {
     return null;
   }
-  const header = buffer.subarray(0, headerEnd).toString("utf8");
+  const header = buffer.subarray(0, delimiter.at).toString("utf8");
   const match = /content-length:\s*(\d+)/i.exec(header);
   if (!match) {
     return null;
   }
   const length = Number(match[1]);
-  const bodyStart = headerEnd + 4;
+  const bodyStart = delimiter.at + delimiter.size;
   if (buffer.length < bodyStart + length) {
     return null;
   }
@@ -72,7 +72,8 @@ function shiftContentLength(buffer: Buffer): { message: unknown; rest: Buffer } 
   return { message: JSON.parse(body), rest: buffer.subarray(bodyStart + length) };
 }
 
-function indexOfHeaderDelimiter(buffer: Buffer): number {
+/** Prefer CRLF (MCP spec). Also accept LF-only so Codex/rmcp clients that write `\n\n` do not hang. */
+function findHeaderDelimiter(buffer: Buffer): { at: number; size: number } | null {
   for (let i = 0; i < buffer.length - 3; i += 1) {
     if (
       buffer[i] === 13 &&
@@ -80,10 +81,15 @@ function indexOfHeaderDelimiter(buffer: Buffer): number {
       buffer[i + 2] === 13 &&
       buffer[i + 3] === 10
     ) {
-      return i;
+      return { at: i, size: 4 };
     }
   }
-  return -1;
+  for (let i = 0; i < buffer.length - 1; i += 1) {
+    if (buffer[i] === 10 && buffer[i + 1] === 10) {
+      return { at: i, size: 2 };
+    }
+  }
+  return null;
 }
 
 function shiftNewlineJson(buffer: Buffer): { message: unknown; rest: Buffer } | null {

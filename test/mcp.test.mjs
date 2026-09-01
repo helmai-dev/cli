@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -513,6 +513,53 @@ test("Content-Length framing round-trips an MCP message", () => {
   assert.deepEqual(second, [{ jsonrpc: "2.0", id: 1, method: "ping" }]);
 });
 
+test("Content-Length framing accepts LF-only header delimiters", () => {
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" });
+  const framed = Buffer.from(`Content-Length: ${Buffer.byteLength(body)}\n\n${body}`);
+  const { messages, rest } = decodeMcpMessages(framed);
+  assert.deepEqual(messages, [{ jsonrpc: "2.0", id: 1, method: "initialize" }]);
+  assert.equal(rest.length, 0);
+});
+
+test("helm mcp answers a piped LF Content-Length initialize within 2s", async () => {
+  const body = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "codex", version: "0.151.0" },
+    },
+  });
+  const frame = Buffer.from(`Content-Length: ${Buffer.byteLength(body)}\n\n${body}`);
+  const child = spawn(process.execPath, [cli, "mcp"], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const output = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error("helm mcp did not answer initialize"));
+    }, 2000);
+    let buf = Buffer.alloc(0);
+    child.stdout.on("data", (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      if (buf.includes("protocolVersion")) {
+        clearTimeout(timer);
+        resolve(buf.toString("utf8"));
+      }
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.stdin.write(frame);
+  });
+  child.kill();
+  assert.match(output, /protocolVersion/);
+  assert.match(output, /Content-Length:/);
+});
+
 test("unlinked error text is the public connect instruction", () => {
   assert.equal(UNLINKED_MCP_MESSAGE, "Not connected. Run `helm connect` first.");
 });
@@ -549,6 +596,7 @@ test("codex TOML section edit replaces stale entries and preserves neighbors", (
   assert.ok(merged.includes("/new/helm"));
   assert.ok(!merged.includes("/old/path/helm"));
   assert.ok(merged.includes("[profiles.fast]"));
+  assert.match(merged, /startup_timeout_sec = 5\.0/);
   // Our section moves to the end; the neighbor keeps its body.
   assert.ok(merged.trimEnd().endsWith("model = \"gpt-5-mini\""));
 
@@ -569,6 +617,23 @@ test("codex TOML section edit replaces stale entries and preserves neighbors", (
     args: ["mcp"],
   });
   assert.ok(escaped.includes("\"C:\\\\Program Files\\\\helm\\\\helm.exe\""));
+
+  const adjacent = [
+    "[mcp_servers.helm]",
+    "command = \"/old/helm\"",
+    "args = [\"mcp\"]",
+    "[notice]",
+    "hide_rate_limit_model_nudge = true",
+    "[projects.\"/Users/josh/Sync\"]",
+    "trust_level = \"trusted\"",
+  ].join("\n");
+  const adjacentMerged = mergeHelmCodexMcpServer(adjacent, { command: "/new/helm", args: ["mcp"] });
+  assert.ok(adjacentMerged.includes("/new/helm"));
+  assert.match(adjacentMerged, /\[notice\]/);
+  assert.match(adjacentMerged, /\[projects\."\/Users\/josh\/Sync"\]/);
+  const adjacentRemoved = removeHelmCodexMcpServer(adjacentMerged);
+  assert.match(adjacentRemoved.next, /\[notice\]/);
+  assert.match(adjacentRemoved.next, /\[projects\."\/Users\/josh\/Sync"\]/);
 });
 
 test("read_room_messages forwards room arguments to the web tool, sanitized", async () => {

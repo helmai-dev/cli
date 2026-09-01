@@ -4,7 +4,7 @@ import { hasLinkedAccount } from "../lib/account-link.js";
 import { loadCredentials } from "../lib/config.js";
 import { inspectProxyHealth, proxyVersion } from "../lib/proxy-server.js";
 import { readProxyState, readWrapRecord, type WrapAgent } from "../lib/proxy-state.js";
-import { openaiBaseUrlFromToml } from "../lib/codex-proxy-env.js";
+import { reservedOpenaiProviderPresent } from "../lib/codex-proxy-env.js";
 import { ANTHROPIC_BASE_URL } from "../lib/claude-proxy-env.js";
 import { readClaudeSettings } from "../lib/claude-settings.js";
 import { loadWebProjects } from "../lib/web-projects.js";
@@ -42,16 +42,23 @@ function wrapCheck(agent: WrapAgent): DoctorCheck {
       detail: "not wrapped (ok if you have not opted in)",
     };
   }
-  const pointing =
-    agent === "claude"
-      ? claudePointsAt(record.proxy_url)
-      : openaiBaseUrlFromToml(readCodexConfigFile() ?? "") === record.proxy_url;
+  if (agent === "claude") {
+    const pointing = claudePointsAt(record.proxy_url);
+    return {
+      name: "wrap claude",
+      ok: pointing,
+      detail: pointing
+        ? record.proxy_url
+        : `record says ${record.proxy_url} but the agent config does not`,
+    };
+  }
+  const reserved = reservedOpenaiProviderPresent(readCodexConfigFile() ?? "");
   return {
-    name: `wrap ${agent}`,
-    ok: pointing,
-    detail: pointing
-      ? record.proxy_url
-      : `record says ${record.proxy_url} but the agent config does not`,
+    name: "wrap codex",
+    ok: !reserved,
+    detail: reserved
+      ? "reserved [model_providers.openai] override is present — this breaks Codex ChatGPT login"
+      : "not intercepting — ChatGPT login cannot use a /v1 wrap",
   };
 }
 

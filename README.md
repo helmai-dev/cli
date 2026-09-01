@@ -1,10 +1,12 @@
 # Helm
 
 Helm sits between coding agents and model providers on this laptop.
-`helm wrap claude` or `helm wrap codex` starts a loopback proxy and
-points that agent at it. When linked, Helm Web gets usage, fingerprints,
-and bounded receipt excerpts: the last user ask and tool-result bytes
-already present on the request. Full transcripts never leave the machine.
+`helm wrap claude` starts a loopback proxy and points Claude Code at it.
+`helm wrap codex` declines intercept when Codex is signed in with ChatGPT
+and strips leftover `[model_providers.openai]` so the CLI can start.
+When linked, Helm Web gets usage, fingerprints, and bounded receipt
+excerpts: the last user ask and tool-result bytes already present on
+the request. Full transcripts never leave the machine.
 
 Helm Web ([tryhelm.ai](https://tryhelm.ai)) owns the account, team, and
 persisted usage. This CLI is the local layer: the live intercept, the
@@ -129,8 +131,8 @@ and their output streams back into the Helm canvas.
 | `helm scan` | Report local Claude Code and Codex usage and sync it to the team dashboard (requires a linked account) |
 | `helm audit` | Observed API-equivalent spend from local transcripts, plus realized provider-cache savings. `--team <id>` prints the Helm Web team rollup after `helm connect`. `shared_projects` and `shared_paths` print as observed overlap when the rollup includes them. `avoidable_spend` and `diagnose_buckets` print as observed Diagnose when the rollup includes them. Optional `--users` / `--teams` add an unshared-replay ceiling on the local path. Does not compute identified savings. |
 | `helm proxy` | Loopback model proxy on 127.0.0.1 (port 8787 or a free port). Passes Anthropic Messages and OpenAI-compatible chat through with the client's own auth headers. A wrap-bound request matching a recent project/path/tool record with a stored provider body may replay it. `--daemon` backgrounds it. |
-| `helm wrap claude\|codex` | Start the proxy if needed and point that agent at it (`ANTHROPIC_BASE_URL` or Codex/OpenAI base URL). Undo with `helm unwrap`. Does not touch Kubernetes Helm. |
-| `helm unwrap claude\|codex` | Restore the agent's previous provider URL |
+| `helm wrap claude\|codex` | Start the proxy if needed. Claude Code is pointed at it via `ANTHROPIC_BASE_URL`. Codex ChatGPT login is left on the official backend; Helm strips reserved `[model_providers.openai]` instead of writing it. Undo with `helm unwrap`. Does not touch Kubernetes Helm. |
+| `helm unwrap claude\|codex` | Restore Claude's previous provider URL; for Codex, remove Helm's wrap record without restoring a stale `config.toml` snapshot |
 | `helm map <project-id> [path]` | Register a local checkout for a project |
 | `helm daemon start` | Start the background agent-runner daemon (`--foreground` runs it in-process for supervisors) |
 | `helm daemon stop` | Stop the daemon |
@@ -172,10 +174,12 @@ review before they become shared Context Memory; rejected candidates never enter
 retrieval. Repository remotes are matched automatically, so normal usage does not
 require `helm map` or another per-project CLI step.
 
-`helm wrap claude` or `helm wrap codex` starts `helm proxy` if needed and
-points that agent at it. Claude Code honors `ANTHROPIC_BASE_URL` in
-`~/.claude/settings.json`. Codex honors the OpenAI-compatible `base_url` in
-`~/.codex/config.toml`. `helm unwrap` restores the previous value. The
+`helm wrap claude` or `helm wrap codex` starts `helm proxy` if needed.
+Claude Code honors `ANTHROPIC_BASE_URL` in `~/.claude/settings.json`.
+Codex ChatGPT login cannot use a reserved `[model_providers.openai]`
+override — Helm strips that table so Codex can start, and leaves ChatGPT
+auth on the official Codex backend. `helm unwrap` removes Helm's wrap
+record without restoring a stale snapshot of `config.toml`. The
 proxy forwards the client's own provider tokens; Helm does not need those
 keys. On each request it can see the prompt locally, then POST usage events,
 fingerprints, and on a wrap reuse the metadata in `POST /api/usage/reuses`.

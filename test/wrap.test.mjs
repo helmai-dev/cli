@@ -9,11 +9,14 @@ import { fileURLToPath } from "node:url";
 import {
   applyCodexOpenAiBaseUrl,
   openaiBaseUrlFromToml,
+  reservedOpenaiProviderPresent,
+  stripReservedOpenaiProvider,
 } from "../dist/lib/codex-proxy-env.js";
 import {
   mergeClaudeProxyEnv,
   restoreClaudeProxyEnv,
 } from "../dist/lib/claude-proxy-env.js";
+import { detectCodexAuthMode } from "../dist/lib/codex-auth.js";
 import {
   agentIsPointingAtProxy,
   parseWrapAgent,
@@ -30,12 +33,15 @@ function memoryRuntime(seed = {}) {
     wraps: { ...(seed.wraps ?? {}) },
     k8sHelm: seed.k8sHelm ?? { "repositories.yaml": "apiVersion: v1\nrepositories: []\n" },
     k8sWrites: 0,
+    proxyCalls: 0,
+    codexAuth: seed.codexAuth ?? "none",
   };
 
   return {
     state,
     runtime: {
       async ensureProxy() {
+        state.proxyCalls += 1;
         return {
           host: "127.0.0.1",
           port: 8787,
@@ -66,6 +72,9 @@ function memoryRuntime(seed = {}) {
       },
       clearWrap(agent) {
         delete state.wraps[agent];
+      },
+      readCodexAuth() {
+        return state.codexAuth;
       },
       readK8sHelm(filename) {
         return state.k8sHelm[filename];
@@ -101,25 +110,35 @@ test("claude wrap writes ANTHROPIC_BASE_URL and unwrap restores the previous val
   assert.equal(cleared.env, undefined);
 });
 
-test("codex wrap sets the OpenAI-compatible base URL and unwrap restores the file", () => {
+test("codex wrap strips reserved [model_providers.openai] and leaves the rest of the file", () => {
   const original = [
-    "model = \"gpt-5\"",
+    "model = \"gpt-5.6-sol\"",
+    "approval_policy = \"never\"",
+    "",
+    "[projects.\"/Users/josh/Code/helm-cli\"]",
+    "trust_level = \"trusted\"",
+    "",
+    "[mcp_servers.helm]",
+    "command = \"/Users/josh/.local/bin/helm\"",
+    "args = [\"mcp\"]",
+    "",
     "[model_providers.openai]",
-    "base_url = \"https://api.openai.com/v1\"",
-    "wire_api = \"chat\"",
+    "base_url = \"http://127.0.0.1:56532/wrap/cc435b175160777c5820886d900ee90c/v1\"",
     "",
   ].join("\n");
   const wrapped = applyCodexOpenAiBaseUrl(original, "http://127.0.0.1:8787/v1");
-  assert.equal(openaiBaseUrlFromToml(wrapped), "http://127.0.0.1:8787/v1");
-  assert.match(wrapped, /wire_api = "chat"/);
-  assert.match(wrapped, /model = "gpt-5"/);
-  assert.equal(openaiBaseUrlFromToml(original), "https://api.openai.com/v1");
+  assert.equal(reservedOpenaiProviderPresent(wrapped), false);
+  assert.equal(openaiBaseUrlFromToml(wrapped), null);
+  assert.match(wrapped, /model = "gpt-5.6-sol"/);
+  assert.match(wrapped, /\[projects\."\/Users\/josh\/Code\/helm-cli"\]/);
+  assert.match(wrapped, /\[mcp_servers.helm\]/);
+  assert.equal(wrapped.includes("[model_providers.openai]"), false);
+  assert.equal(stripReservedOpenaiProvider(wrapped), wrapped);
 });
 
 test("wrap then unwrap restores agent settings through the command helpers", async () => {
   const { state, runtime } = memoryRuntime({
     claude: { env: { ANTHROPIC_BASE_URL: "https://old.example" } },
-    codex: "[model_providers.openai]\nbase_url = \"https://api.openai.com/v1\"\n",
   });
 
   const wrapped = await wrapAgent("claude", runtime);
@@ -130,11 +149,6 @@ test("wrap then unwrap restores agent settings through the command helpers", asy
   assert.equal(unwrapped.restored, true);
   assert.equal(state.claude.env.ANTHROPIC_BASE_URL, "https://old.example");
   assert.equal(state.wraps.claude, undefined);
-
-  await wrapAgent("codex", runtime);
-  assert.equal(openaiBaseUrlFromToml(state.codex), `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}/v1`);
-  await unwrapAgent("codex", runtime);
-  assert.equal(openaiBaseUrlFromToml(state.codex), "https://api.openai.com/v1");
 });
 
 test("wrap twice keeps the same bind URL", async () => {
@@ -147,28 +161,107 @@ test("wrap twice keeps the same bind URL", async () => {
   assert.equal(second.proxyUrl, `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}`);
 });
 
-test("a stale wrap record is repaired when the agent config no longer points at Helm", async () => {
+test("ChatGPT Codex wrap declines intercept, strips reserved openai, and does not start the proxy", async () => {
   const { state, runtime } = memoryRuntime({
+    codexAuth: "chatgpt",
     wraps: {
       codex: {
         agent: "codex",
         proxy_url: "http://127.0.0.1:9/wrap/deadbeefdeadbeefdeadbeefdeadbeef/v1",
         wrapped_at: "2026-08-01T00:00:00.000Z",
+        previous: { created_codex_config: false, codex_config_toml: "model = \"gpt-5\"\n" },
+      },
+    },
+    codex: [
+      "model = \"gpt-5\"",
+      "later_edit = true",
+      "[model_providers.openai]",
+      "base_url = \"http://127.0.0.1:9/wrap/deadbeefdeadbeefdeadbeefdeadbeef/v1\"",
+      "",
+    ].join("\n"),
+  });
+  const result = await wrapAgent("codex", runtime);
+  assert.equal(result.declinedReason, "chatgpt-auth");
+  assert.equal(result.repaired, true);
+  assert.equal(state.proxyCalls, 0);
+  assert.equal(state.wraps.codex, undefined);
+  assert.equal(reservedOpenaiProviderPresent(state.codex), false);
+  assert.match(state.codex, /later_edit = true/);
+});
+
+test("strip and unwrap keep adjacent TOML sections that have no blank line between them", async () => {
+  const adjacent = [
+    "[mcp_servers.helm]",
+    "command = \"/Users/josh/.local/bin/helm\"",
+    "args = [\"mcp\"]",
+    "[notice]",
+    "hide_rate_limit_model_nudge = true",
+    "[projects.\"/Users/josh/Sync\"]",
+    "trust_level = \"trusted\"",
+    "[model_providers.openai]",
+    "base_url = \"http://127.0.0.1:56532/wrap/deadbeefdeadbeefdeadbeefdeadbeef/v1\"",
+  ].join("\n");
+  const stripped = stripReservedOpenaiProvider(adjacent);
+  assert.equal(reservedOpenaiProviderPresent(stripped), false);
+  assert.match(stripped, /\[mcp_servers\.helm\]/);
+  assert.match(stripped, /\[notice\]/);
+  assert.match(stripped, /hide_rate_limit_model_nudge/);
+  assert.match(stripped, /\[projects\."\/Users\/josh\/Sync"\]/);
+  assert.equal(stripped.includes("[model_providers.openai]"), false);
+
+  const { state, runtime } = memoryRuntime({
+    wraps: {
+      codex: {
+        agent: "codex",
+        proxy_url: `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}/v1`,
+        wrapped_at: "2026-08-01T00:00:00.000Z",
+        previous: { created_codex_config: false, codex_config_toml: "model = \"ancient\"\n" },
+      },
+    },
+    codex: adjacent + "\n",
+  });
+  const result = await unwrapAgent("codex", runtime);
+  assert.equal(result.restored, true);
+  assert.match(state.codex, /\[mcp_servers\.helm\]/);
+  assert.match(state.codex, /\[notice\]/);
+  assert.match(state.codex, /\[projects\."\/Users\/josh\/Sync"\]/);
+  assert.equal(state.codex.includes("ancient"), false);
+  assert.equal(reservedOpenaiProviderPresent(state.codex), false);
+});
+
+test("detectCodexAuthMode treats ChatGPT tokens and API keys as distinct", () => {
+  assert.equal(detectCodexAuthMode({ OPENAI_API_KEY: null, tokens: { access_token: "tok" } }), "chatgpt");
+  assert.equal(detectCodexAuthMode({ OPENAI_API_KEY: "sk-test", tokens: { access_token: "tok" } }), "apikey");
+  assert.equal(detectCodexAuthMode({ OPENAI_API_KEY: null, tokens: null }), "none");
+});
+
+test("Codex unwrap does not restore a stale full config.toml snapshot", async () => {
+  const { state, runtime } = memoryRuntime({
+    wraps: {
+      codex: {
+        agent: "codex",
+        proxy_url: `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}/v1`,
+        wrapped_at: "2026-08-01T00:00:00.000Z",
         previous: {
-          created_codex_config: true,
-          codex_config_toml: null,
+          created_codex_config: false,
+          codex_config_toml: "model = \"ancient\"\n",
         },
       },
     },
-    codex: "model = \"gpt-5\"\n",
+    codex: [
+      "model = \"gpt-5.6-sol\"",
+      "added_after_wrap = true",
+      "[model_providers.openai]",
+      `base_url = "http://127.0.0.1:8787/wrap/${WRAP_TOKEN}/v1"`,
+      "",
+    ].join("\n"),
   });
-  assert.equal(agentIsPointingAtProxy("codex", runtime, `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}/v1`), false);
-  const result = await wrapAgent("codex", runtime);
-  assert.equal(result.alreadyWrapped, false);
-  assert.equal(result.repaired, true);
-  assert.equal(openaiBaseUrlFromToml(state.codex), `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}/v1`);
-  assert.equal(state.wraps.codex.previous.created_codex_config, true);
-  assert.equal(state.wraps.codex.previous.codex_config_toml, null);
+  const result = await unwrapAgent("codex", runtime);
+  assert.equal(result.restored, true);
+  assert.equal(state.wraps.codex, undefined);
+  assert.equal(reservedOpenaiProviderPresent(state.codex), false);
+  assert.match(state.codex, /added_after_wrap = true/);
+  assert.equal(state.codex.includes("ancient"), false);
 });
 
 test("wrap without a proxy token keeps the bare proxy URL", async () => {

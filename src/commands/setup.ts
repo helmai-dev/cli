@@ -114,7 +114,7 @@ export async function setupCommand(): Promise<void> {
     console.log("Create a Helm Web account first, then link this CLI:");
     console.log(`  ${registerUrl}`);
     console.log("  helm wrap claude    point Claude Code at the local Helm proxy");
-    console.log("  helm wrap codex     point Codex at the local Helm proxy");
+    console.log("  helm wrap codex     decline ChatGPT intercept; strip leftover [model_providers.openai]");
     console.log("  helm connect        link this machine to that account");
     console.log("  helm hooks install  enable team context in supported coding agents");
     console.log("  helm scan           report + sync your AI usage\n");
@@ -125,7 +125,7 @@ export async function setupCommand(): Promise<void> {
     console.log(chalk.cyan.bold("\n  ⎈ Helm Setup\n"));
     console.log(
       chalk.gray(
-        "  Point Claude Code or Codex at Helm on this laptop, then connect and scan.\n" +
+        "  Point Claude Code at Helm on this laptop (Codex ChatGPT login cannot be wrapped), then connect and scan.\n" +
           "  Each step asks first; nothing is silent. Linked wraps send only bounded receipt excerpts.\n",
       ),
     );

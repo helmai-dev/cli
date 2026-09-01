@@ -378,7 +378,9 @@ if (process.env.HELM_PROXY_MODE === "1") {
 } else if (process.env.HELM_DAEMON_MODE === "1") {
   import("./lib/daemon-loop-web.js").then((m) => m.runWebDaemonLoop());
 } else {
-  checkForUpdate();
+  if (!process.argv.includes("mcp")) {
+    checkForUpdate();
+  }
   program.parseAsync().then(
     async () => {
       // Let piped stdout drain before exiting — process.exit() drops

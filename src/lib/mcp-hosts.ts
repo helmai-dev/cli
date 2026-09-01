@@ -251,6 +251,8 @@ function helmCodexSectionBody(entry: McpServerEntry): string {
     CODEX_SECTION_HEADER,
     `command = ${escapeTomlString(command)}`,
     `args = [${args.map((arg) => escapeTomlString(String(arg))).join(", ")}]`,
+    "startup_timeout_sec = 5.0",
+    "",
     "",
   ].join("\n");
 }
