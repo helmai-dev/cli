@@ -32,11 +32,11 @@ function writeExecutable(filePath, contents) {
   chmodSync(filePath, 0o755);
 }
 
-function createFixture() {
+function createFixture({ payload = "#!/bin/sh\necho 1.3.9\n" } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), "helm-install-sh-"));
   const payloadDir = path.join(root, "payload");
   mkdirSync(payloadDir);
-  writeExecutable(path.join(payloadDir, "helm"), "#!/bin/sh\necho 1.3.9\n");
+  writeExecutable(path.join(payloadDir, "helm"), payload);
 
   const archive = path.join(root, "helm.tar.gz");
   execFileSync("tar", ["-czf", archive, "helm"], { cwd: payloadDir });
@@ -368,4 +368,29 @@ test("Homebrew formula version matches package.json and requires proxy plus wrap
   assert.match(formula, /does not intercept Cursor cloud VMs/);
   assert.doesNotMatch(formula, /shared_context_savings_usd/);
   assert.doesNotMatch(formula, /prompt cach/i);
+});
+
+test("a downloaded binary that cannot exec is not installed", () => {
+  // Mirrors the macOS Gatekeeper failure: the binary downloads fine but the
+  // kernel SIGKILLs it (exit 137), so `helm setup` dies instantly. The
+  // installer must refuse to publish it rather than print "Installed ...".
+  const fixture = createFixture({ payload: "#!/bin/sh\nexit 137\n" });
+  try {
+    const installDir = path.join(fixture.root, "local-bin");
+    mkdirSync(installDir);
+
+    const result = runInstall({ fixture, installDir });
+    const output = combinedOutput(result);
+    const installedBin = path.join(installDir, "helm");
+
+    assert.notEqual(result.status, 0, `expected a non-zero exit:\n${output}`);
+    assert.equal(existsSync(installedBin), false, `nothing should be installed:\n${output}`);
+    assert.match(output, /will not run here/, output);
+    assert.doesNotMatch(output, /^Installed helm/m, output);
+
+    const leftovers = readdirSync(installDir).filter((entry) => entry.includes(".tmp."));
+    assert.deepEqual(leftovers, [], `staged temp files left behind: ${leftovers.join(", ")}`);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
 });

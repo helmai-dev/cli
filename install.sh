@@ -319,9 +319,44 @@ install_binary() {
     chmod 0755 "$staged"
     if [[ "$platform" == "darwin" ]]; then
       xattr -dr com.apple.quarantine "$staged" 2>/dev/null || true
-      codesign --remove-signature "$staged" 2>/dev/null || true
+      # The shipped Bun binary already carries a linker-signed ad-hoc signature
+      # the kernel accepts, so re-signing is a repair, not a requirement. Never
+      # strip first: on Apple Silicon an unsigned binary is SIGKILLed at exec
+      # ("Killed: 9"), so a strip that succeeds followed by a sign that fails
+      # leaves a binary that cannot run. `--force --sign -` replaces the
+      # signature in one step and leaves the working original if it fails.
       codesign --force --sign - "$staged" 2>/dev/null || true
     fi
+
+    # Never publish a binary that cannot exec. A code signature macOS rejects
+    # surfaces only at run time, and swallowing that here is exactly what turns
+    # a bad signature into "Installed ..." followed by Killed: 9.
+    local staged_status=0
+    "$staged" --version >/dev/null 2>&1 || staged_status=$?
+    if [[ "$staged_status" -ne 0 ]]; then
+      if [[ "$platform" == "darwin" ]]; then
+        # Last resort: full strip and re-sign, then re-verify before it counts.
+        codesign --remove-signature "$staged" 2>/dev/null || true
+        codesign --force --sign - "$staged" 2>/dev/null || true
+        staged_status=0
+        "$staged" --version >/dev/null 2>&1 || staged_status=$?
+      fi
+    fi
+    if [[ "$staged_status" -ne 0 ]]; then
+      rm -f "$staged"
+      echo ""
+      echo "Downloaded $HELM_BIN_NAME v$resolved_version but it will not run here (exit $staged_status)."
+      if [[ "$platform" == "darwin" && "$staged_status" -eq 137 ]]; then
+        echo "macOS killed it, which means the code signature was rejected."
+        echo "Check what codesign reports, then re-run the installer:"
+        echo ""
+        echo "  codesign --force --sign - \"$dest\""
+      fi
+      echo ""
+      echo "Nothing was installed to $dest."
+      return 1
+    fi
+
     mv -f "$staged" "$dest" || { rm -f "$staged"; return 1; }
   else
     echo ""

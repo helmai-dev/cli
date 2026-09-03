@@ -1,7 +1,9 @@
 /**
- * MCP stdio framing. Claude Code and Cursor speak the official SDK's
- * Content-Length messages. Newline-delimited JSON is accepted too so
- * tests and simpler hosts can drive the same parser.
+ * MCP stdio framing. The transport is newline-delimited JSON, so that is what
+ * we write. Content-Length headers were an early draft the spec dropped, and
+ * hosts that never supported them (Codex/rmcp) treat the header as garbage and
+ * hang until their startup timeout. Both framings are still accepted on read so
+ * any host that writes Content-Length keeps working.
  */
 
 export interface JsonRpcRequest {
@@ -26,8 +28,9 @@ export interface JsonRpcFailure {
 export type JsonRpcResponse = JsonRpcSuccess | JsonRpcFailure;
 
 export function encodeMcpMessage(message: unknown): Buffer {
-  const body = Buffer.from(JSON.stringify(message), "utf8");
-  return Buffer.concat([Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "utf8"), body]);
+  // JSON.stringify never emits a raw newline, so a single trailing \n is a
+  // complete delimiter for one message.
+  return Buffer.from(`${JSON.stringify(message)}\n`, "utf8");
 }
 
 export function decodeMcpMessages(buffer: Buffer): { messages: unknown[]; rest: Buffer } {

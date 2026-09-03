@@ -500,7 +500,20 @@ test("MCP registration points at this helm binary and does not overwrite Kuberne
   assert.deepEqual(claude.mcpServers.helm.args, ["mcp"]);
 });
 
-test("Content-Length framing round-trips an MCP message", () => {
+test("outgoing MCP messages are newline-delimited JSON, not Content-Length", () => {
+  // Codex (rmcp) parses stdout line by line. A `Content-Length:` prefix is not
+  // valid JSON to it, so the client hangs until startup_timeout_sec and reports
+  // "MCP client for `helm` timed out". Claude Code drops the server the same way.
+  const encoded = encodeMcpMessage({ jsonrpc: "2.0", id: 1, method: "ping" });
+  const text = encoded.toString("utf8");
+
+  assert.doesNotMatch(text, /content-length/i, text);
+  assert.equal(text.endsWith("\n"), true, text);
+  assert.equal(text.trimEnd().includes("\n"), false, "one message must be one line");
+  assert.deepEqual(JSON.parse(text), { jsonrpc: "2.0", id: 1, method: "ping" });
+});
+
+test("newline framing round-trips an MCP message", () => {
   const encoded = encodeMcpMessage({ jsonrpc: "2.0", id: 1, method: "ping" });
   const { messages, rest } = decodeMcpMessages(encoded);
   assert.deepEqual(messages, [{ jsonrpc: "2.0", id: 1, method: "ping" }]);
@@ -513,6 +526,13 @@ test("Content-Length framing round-trips an MCP message", () => {
   assert.deepEqual(second, [{ jsonrpc: "2.0", id: 1, method: "ping" }]);
 });
 
+test("Content-Length framing is still accepted on read", () => {
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 7, method: "ping" });
+  const framed = Buffer.from(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`, "utf8");
+  const { messages } = decodeMcpMessages(framed);
+  assert.deepEqual(messages, [{ jsonrpc: "2.0", id: 7, method: "ping" }]);
+});
+
 test("Content-Length framing accepts LF-only header delimiters", () => {
   const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" });
   const framed = Buffer.from(`Content-Length: ${Buffer.byteLength(body)}\n\n${body}`);
@@ -521,7 +541,7 @@ test("Content-Length framing accepts LF-only header delimiters", () => {
   assert.equal(rest.length, 0);
 });
 
-test("helm mcp answers a piped LF Content-Length initialize within 2s", async () => {
+test("helm mcp answers a Content-Length initialize with newline JSON within 2s", async () => {
   const body = JSON.stringify({
     jsonrpc: "2.0",
     id: 1,
@@ -557,7 +577,11 @@ test("helm mcp answers a piped LF Content-Length initialize within 2s", async ()
   });
   child.kill();
   assert.match(output, /protocolVersion/);
-  assert.match(output, /Content-Length:/);
+  // Reads stay lenient, writes are always newline-delimited JSON: this is the
+  // line Codex and Claude Code actually parse.
+  assert.doesNotMatch(output, /Content-Length:/i, output);
+  const line = output.split("\n").find((entry) => entry.includes("protocolVersion"));
+  assert.equal(JSON.parse(line).id, 1);
 });
 
 test("unlinked error text is the public connect instruction", () => {

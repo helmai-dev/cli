@@ -49,5 +49,30 @@ export async function mcpCommand(runtime: McpRuntime = liveMcpRuntime()): Promis
 function writeMcpResponse(response: JsonRpcResponse): void {
   // Piped stdout is block-buffered. Codex waits on initialize/tools/list
   // until startup_timeout_sec, so a 16KB buffer hang looks like a 30s timeout.
-  fs.writeSync(1, encodeMcpMessage(response));
+  const payload = encodeMcpMessage(response);
+
+  // A single writeSync is not enough: on a pipe it returns a SHORT COUNT once
+  // the reader falls behind, so a big tools/list loses its tail and the client
+  // sees a truncated message. Write until every byte is out.
+  let offset = 0;
+  while (offset < payload.length) {
+    try {
+      offset += fs.writeSync(1, payload, offset, payload.length - offset);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EAGAIN" || code === "EWOULDBLOCK") {
+        sleepBriefly();
+        continue;
+      }
+      if (code === "EINTR") {
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+/** Block ~1ms without a hot spin, so an EAGAIN retry cannot burn a core. */
+function sleepBriefly(): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
 }
