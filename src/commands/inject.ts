@@ -25,6 +25,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { fetchHelmWebProjects } from "../lib/api-web.js";
 import { decideAmbientIntervention } from "../lib/ambient-intervention.js";
+import { formatUpdateNotice } from "../lib/update-check.js";
 import { rememberPrompt } from "../lib/ambient-state.js";
 import { getApiUrl, getEnvironmentDir, loadCredentials } from "../lib/config.js";
 import {
@@ -469,6 +470,7 @@ export async function injectCommand(options: InjectOptions = {}): Promise<void> 
       lastHash: lastInjectedHash(normalized.sessionId),
       projectLabel: projectLabelFor(normalized.cwd, projectId),
       sessionAcknowledged: sessionAcknowledged(normalized.sessionId),
+      updateNotice: formatUpdateNotice(),
     });
     if (decided.nextHash && decided.nextHash !== lastInjectedHash(normalized.sessionId)) {
       rememberInjectedHash(normalized.sessionId, decided.nextHash);

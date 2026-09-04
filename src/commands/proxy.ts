@@ -23,6 +23,7 @@ import {
   writeProxyState,
   type ProxyListenState,
 } from "../lib/proxy-state.js";
+import { refreshUpdateCache } from "../lib/update-check.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -262,6 +263,7 @@ export async function runProxyChildFromEnv(): Promise<void> {
       }));
     },
   });
+  startUpdateCacheRefresh();
   process.on("SIGINT", () => {
     clearProxyState();
     void running.close().then(() => process.exit(0));
@@ -274,3 +276,18 @@ export async function runProxyChildFromEnv(): Promise<void> {
 }
 
 export { waitForHealthy };
+
+const UPDATE_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * The proxy is the only Helm process that outlives a hook, so it is the only
+ * one whose version check reliably finishes: a hook calls process.exit() and
+ * kills the request mid-flight. Refresh here, and SessionStart reads the cache
+ * synchronously with no network on the first-turn path.
+ */
+function startUpdateCacheRefresh(): void {
+  void refreshUpdateCache();
+  const timer = setInterval(() => void refreshUpdateCache(), UPDATE_REFRESH_INTERVAL_MS);
+  // The HTTP server already holds the process open; this timer must not.
+  timer.unref();
+}

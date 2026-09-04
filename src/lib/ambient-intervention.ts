@@ -7,7 +7,7 @@
  */
 import * as crypto from "node:crypto";
 
-export type AmbientActionKind = "active" | "overlap" | "context" | "repair";
+export type AmbientActionKind = "active" | "overlap" | "context" | "repair" | "update";
 
 export interface AmbientAction {
   readonly kind: AmbientActionKind;
@@ -30,6 +30,12 @@ export interface AmbientDecisionInput {
   readonly lastHash: string | null;
   readonly projectLabel: string | null;
   readonly sessionAcknowledged: boolean;
+  /**
+   * "Update available: 1.3.21 -> 1.3.22 ..." when a newer Helm exists. Read
+   * from cache by the caller so this module stays pure; shown once, on the
+   * SessionStart that acknowledges the session, so resume/compact cannot nag.
+   */
+  readonly updateNotice?: string | null;
 }
 
 export function helmVisibleLine(summary: string): string {
@@ -68,6 +74,14 @@ export function decideAmbientIntervention(input: AmbientDecisionInput): AmbientI
     const summary = `Active${where}${synced}`;
     actions.push({ kind: "active", summary });
     pushUniqueVisible(visible, summary);
+
+    // The stderr banner the CLI writes is swallowed by every agent host, so a
+    // stale Helm never tells anyone. This line is the one the human sees.
+    const update = input.updateNotice?.trim();
+    if (update) {
+      actions.push({ kind: "update", summary: update });
+      pushUniqueVisible(visible, update);
+    }
   }
 
   for (const repair of input.repairs) {

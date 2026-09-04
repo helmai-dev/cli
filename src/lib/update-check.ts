@@ -58,6 +58,47 @@ export function isUpdateCheckSuppressed(env: NodeJS.ProcessEnv = process.env): b
     return env.HELM_SUPPRESS_UPDATE_CHECK === '1';
 }
 
+/**
+ * Cached-only read of whether a newer Helm exists. Never touches the network,
+ * so a SessionStart hook can call it without adding latency to the first turn.
+ * The long-lived proxy keeps the cache fresh (see refreshUpdateCache).
+ */
+export function readAvailableUpdate(): { current: string; latest: string } | null {
+    if (isUpdateCheckSuppressed()) return null;
+    try {
+        const cache = loadCache();
+        const current = getOwnVersion();
+        if (!cache?.latest_version) return null;
+        if (!isNewerVersion(current, cache.latest_version)) return null;
+        return { current, latest: cache.latest_version };
+    } catch {
+        return null;
+    }
+}
+
+/** One visible line for the conversation, or null when already current. */
+export function formatUpdateNotice(): string | null {
+    const available = readAvailableUpdate();
+    if (!available) return null;
+    return `Update available: ${available.current} \u2192 ${available.latest} \u00b7 run \`helm update\``;
+}
+
+/**
+ * Awaitable cache refresh for long-lived processes. `checkForUpdate` fires the
+ * same fetch without awaiting it, which is fine for a human at a terminal but
+ * loses the race in a short-lived hook: process.exit() kills the request before
+ * it lands, so the cache never advances. The proxy has a real event loop and
+ * can simply wait for it.
+ */
+export async function refreshUpdateCache(): Promise<void> {
+    if (isUpdateCheckSuppressed()) return;
+    try {
+        await fetchLatestVersion({ announce: false });
+    } catch {
+        // A missed refresh is not worth a log line; the next tick retries.
+    }
+}
+
 export function checkForUpdate(): void {
     if (isUpdateCheckSuppressed()) return;
     try {
@@ -93,7 +134,7 @@ export function checkForUpdate(): void {
  * what install.sh consumes — so the check reads releases.json from the repo's
  * latest release and falls back to npm for older installs.
  */
-async function fetchLatestVersion(): Promise<void> {
+async function fetchLatestVersion({ announce = true }: { announce?: boolean } = {}): Promise<void> {
     const latest = (await fetchFromGitHub()) ?? (await fetchFromNpm());
     if (!latest) return;
 
@@ -102,8 +143,9 @@ async function fetchLatestVersion(): Promise<void> {
         latest_version: latest,
     });
 
-    // Show the message now if there's an update
-    if (isNewerVersion(getOwnVersion(), latest)) {
+    // Show the message now if there's an update. The proxy refreshes silently:
+    // its stderr is not a human's terminal.
+    if (announce && isNewerVersion(getOwnVersion(), latest)) {
         process.stderr.write(
             `[helm] Update available: ${getOwnVersion()} -> ${latest}. Run "helm update" to update.\n`,
         );

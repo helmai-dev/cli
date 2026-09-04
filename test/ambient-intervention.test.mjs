@@ -285,3 +285,51 @@ test("withBudget returns the fallback without rejecting slow work", async () => 
   const slow = new Promise((resolve) => setTimeout(() => resolve(["late"]), 50));
   assert.deepEqual(await withBudget(slow, 5, []), []);
 });
+
+const UPDATE = "Update available: 1.3.21 \u2192 1.3.22 \u00b7 run `helm update`";
+
+test("SessionStart shows the update notice where the human can actually see it", () => {
+  // The CLI's stderr banner is swallowed by every agent host, so a stale Helm
+  // never tells anyone it is stale. This line is the visible surface.
+  const decided = decide({
+    eventName: "SessionStart",
+    sessionAcknowledged: false,
+    updateNotice: UPDATE,
+  });
+  assert.equal(decided.visibleMessage, `Helm \u00b7 Active for helm-cli\nHelm \u00b7 ${UPDATE}`);
+  assert.deepEqual(
+    decided.actions.map((action) => action.kind),
+    ["active", "update"],
+  );
+});
+
+test("an already-acknowledged SessionStart does not re-nag about the update", () => {
+  const decided = decide({
+    eventName: "SessionStart",
+    sessionAcknowledged: true,
+    updateNotice: UPDATE,
+  });
+  assert.equal(decided.visibleMessage, null);
+  assert.equal(
+    decided.actions.some((action) => action.kind === "update"),
+    false,
+  );
+});
+
+test("UserPromptSubmit never carries the update notice", () => {
+  const decided = decide({ eventName: "UserPromptSubmit", updateNotice: UPDATE });
+  assert.equal(decided.visibleMessage, null);
+});
+
+test("a current Helm adds no update line", () => {
+  const decided = decide({
+    eventName: "SessionStart",
+    sessionAcknowledged: false,
+    updateNotice: null,
+  });
+  assert.equal(decided.visibleMessage, "Helm \u00b7 Active for helm-cli");
+  assert.deepEqual(
+    decided.actions.map((action) => action.kind),
+    ["active"],
+  );
+});
