@@ -1,4 +1,9 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { hasLinkedAccount } from "./account-link.js";
@@ -6,6 +11,7 @@ import {
   fetchLiveFingerprintOthers,
   sendPromptFacts,
   sendUsageEvents,
+  flushUsageExcerpts,
   sendUsageExcerpt,
   sendUsageReuses,
   sendWorkFingerprints,
@@ -15,7 +21,11 @@ import {
   type UsageReuseUpload,
 } from "./api-web.js";
 import { usageCostUsd } from "./claude-scan.js";
-import { getActiveEnvironment, loadCredentials, loadMachineIdentity } from "./config.js";
+import {
+  getActiveEnvironment,
+  loadCredentials,
+  loadMachineIdentity,
+} from "./config.js";
 import pkg from "../../package.json";
 import {
   buildWorkFingerprint,
@@ -60,6 +70,7 @@ import {
 } from "./prompt-facts.js";
 import {
   excerptUploadFromParts,
+  latestExcerptToolResults,
   lastUserPromptFromRequestBody,
 } from "./proxy-excerpt.js";
 import {
@@ -169,7 +180,10 @@ function promptFactsPathFor(hooks: ProxyHooks): string {
     return hooks.promptFactsPath;
   }
   if (hooks.workCachePath !== undefined) {
-    return path.join(path.dirname(hooks.workCachePath), "proxy-prompt-facts.json");
+    return path.join(
+      path.dirname(hooks.workCachePath),
+      "proxy-prompt-facts.json",
+    );
   }
   return defaultPromptFactsPath();
 }
@@ -178,7 +192,9 @@ function headerNames(req: IncomingMessage): string[] {
   return Object.keys(req.headers);
 }
 
-function forwardRequestHeaders(headers: IncomingMessage["headers"]): Record<string, string> {
+function forwardRequestHeaders(
+  headers: IncomingMessage["headers"],
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     if (value === undefined || HOP_BY_HOP.has(key.toLowerCase())) {
@@ -189,7 +205,9 @@ function forwardRequestHeaders(headers: IncomingMessage["headers"]): Record<stri
   return out;
 }
 
-function forwardResponseHeaders(headers: Headers): Record<string, string | string[]> {
+function forwardResponseHeaders(
+  headers: Headers,
+): Record<string, string | string[]> {
   const out: Record<string, string | string[]> = {};
   headers.forEach((value, key) => {
     if (RESPONSE_STRIP.has(key.toLowerCase())) {
@@ -235,7 +253,11 @@ function lastPathHint(
     }
     const fingerprint = buildWorkFingerprint(
       { provider: "claude-compatible", cwd },
-      { toolName: fact.toolName, pathCandidate: fact.pathCandidate, occurredAt: new Date().toISOString() },
+      {
+        toolName: fact.toolName,
+        pathCandidate: fact.pathCandidate,
+        occurredAt: new Date().toISOString(),
+      },
       homeDir,
     );
     if (fingerprint?.path_hint) {
@@ -309,7 +331,13 @@ async function writeUpstreamBody(input: {
 
 function writeHealth(res: ServerResponse): void {
   res.writeHead(200, { "content-type": "application/json" });
-  res.end(JSON.stringify({ ok: true, service: "helm-proxy", version: proxyVersion() }));
+  res.end(
+    JSON.stringify({
+      ok: true,
+      service: "helm-proxy",
+      version: proxyVersion(),
+    }),
+  );
 }
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
@@ -322,13 +350,19 @@ function replayCachedWork(input: {
   record: WorkRecord;
   wantsStream: boolean;
   notice: string;
-}): { kind: "json"; body: Record<string, unknown> } | { kind: "stream"; body: string } | null {
+}):
+  | { kind: "json"; body: Record<string, unknown> }
+  | { kind: "stream"; body: string }
+  | null {
   if (input.wantsStream) {
     if (input.record.stream_body === null) {
       return null;
     }
     const comment = input.notice.replace(/\n/g, " ");
-    return { kind: "stream", body: `: ${comment}\n\n${input.record.stream_body}` };
+    return {
+      kind: "stream",
+      body: `: ${comment}\n\n${input.record.stream_body}`,
+    };
   }
   if (input.record.response === null) {
     return null;
@@ -354,7 +388,10 @@ async function handleProxyRequest(
   track: { report: Promise<void> },
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
-  if (req.method === "GET" && (url.pathname === "/health" || url.pathname === "/healthz")) {
+  if (
+    req.method === "GET" &&
+    (url.pathname === "/health" || url.pathname === "/healthz")
+  ) {
     writeHealth(res);
     return;
   }
@@ -367,7 +404,9 @@ async function handleProxyRequest(
     headerNames: headerNames(req),
   });
   if (provider === null) {
-    writeJson(res, 404, { error: { type: "not_found", message: "no provider route for this path" } });
+    writeJson(res, 404, {
+      error: { type: "not_found", message: "no provider route for this path" },
+    });
     return;
   }
 
@@ -393,7 +432,10 @@ async function handleProxyRequest(
   });
 
   let outbound: Buffer = raw;
-  const others = await resolveOthers(hooks, { project_hint: projectHint, path_hint: pathHint });
+  const others = await resolveOthers(hooks, {
+    project_hint: projectHint,
+    path_hint: pathHint,
+  });
   const note = formatTeammateNote(others, now);
   if (parsed !== null) {
     let next = appendInterceptNote(provider, parsed, HELM_WRAP_LINE);
@@ -431,7 +473,11 @@ async function handleProxyRequest(
       }
       let reuses: readonly UsageReuseUpload[] | undefined;
       try {
-        const next = recordReuse({ cache: readWorkCache(cachePath), record: lookup.record, now });
+        const next = recordReuse({
+          cache: readWorkCache(cachePath),
+          record: lookup.record,
+          now,
+        });
         writeWorkCache(cachePath, next);
         const storedReuse = next.reuses[0];
         if (storedReuse) {
@@ -444,8 +490,7 @@ async function handleProxyRequest(
             }),
           ];
         }
-      } catch {
-      }
+      } catch {}
       track.report = reportAfterResponse({
         hooks,
         provider,
@@ -489,7 +534,9 @@ async function handleProxyRequest(
     }
     upstream = await fetch(target, init);
   } catch {
-    writeJson(res, 502, { error: { type: "proxy_error", message: "upstream request failed" } });
+    writeJson(res, 502, {
+      error: { type: "proxy_error", message: "upstream request failed" },
+    });
     return;
   }
 
@@ -507,7 +554,10 @@ async function handleProxyRequest(
   const usage = isEventStream
     ? usageFromSseStream(provider, responseBytes.toString("utf8"))
     : usageFromProviderPayload(provider, parseJsonBody(responseBytes));
-  const resolvedModel = model !== "unknown" ? model : extractJsonModel(parseJsonBody(responseBytes));
+  const resolvedModel =
+    model !== "unknown"
+      ? model
+      : extractJsonModel(parseJsonBody(responseBytes));
   logLine(hooks, provider, resolvedModel, projectHint, pathHint, usage);
   track.report = reportAfterResponse({
     hooks,
@@ -529,7 +579,9 @@ async function handleProxyRequest(
         ? parseJsonBody(responseBytes)
         : null,
     streamBody:
-      isEventStream && responseBytes.length > 0 && responseBytes.length <= MAX_REPLAY_RESPONSE_BYTES
+      isEventStream &&
+      responseBytes.length > 0 &&
+      responseBytes.length <= MAX_REPLAY_RESPONSE_BYTES
         ? responseBytes.toString("utf8")
         : null,
     parsed,
@@ -620,7 +672,10 @@ async function reportAfterResponse(input: {
     });
   }
 
-  const fingerprintProvider = usageProviderFor(input.provider) === "claude" ? "claude-compatible" : "codex";
+  const fingerprintProvider =
+    usageProviderFor(input.provider) === "claude"
+      ? "claude-compatible"
+      : "codex";
 
   // Prompt-inefficiency measurement. Runs after the client already has its
   // response, so it can never slow or fail the user's provider call. Stored
@@ -650,7 +705,8 @@ async function reportAfterResponse(input: {
         writePromptFacts(factsPath, observed.file);
         chainedSessionKey = observed.session.session_key;
         promptFacts = {
-          device_ulid: input.hooks.deviceUlid ?? loadMachineIdentity()?.ulid ?? null,
+          device_ulid:
+            input.hooks.deviceUlid ?? loadMachineIdentity()?.ulid ?? null,
           facts: [
             promptFactsUploadFromMeasurement({
               measurement: observed.measurement,
@@ -664,8 +720,7 @@ async function reportAfterResponse(input: {
           ],
         };
       }
-    } catch {
-    }
+    } catch {}
   }
 
   // One conversation, one session key — for fingerprints, excerpts and the
@@ -694,18 +749,26 @@ async function reportAfterResponse(input: {
             cost_usd: usageRecord ? usageRecord.cost_usd : null,
             input_tokens: input.usage ? input.usage.input_tokens : null,
             output_tokens: input.usage ? input.usage.output_tokens : null,
-            cache_write_tokens: input.usage ? input.usage.cache_write_tokens : null,
-            cache_read_tokens: input.usage ? input.usage.cache_read_tokens : null,
+            cache_write_tokens: input.usage
+              ? input.usage.cache_write_tokens
+              : null,
+            cache_read_tokens: input.usage
+              ? input.usage.cache_read_tokens
+              : null,
             occurred_at: input.now.toISOString(),
             payload,
             request_hash: input.requestHash ?? null,
-            response: isPlainRecord(input.responseBody) ? input.responseBody : null,
-            stream_body: typeof input.streamBody === "string" && input.streamBody !== "" ? input.streamBody : null,
+            response: isPlainRecord(input.responseBody)
+              ? input.responseBody
+              : null,
+            stream_body:
+              typeof input.streamBody === "string" && input.streamBody !== ""
+                ? input.streamBody
+                : null,
           },
         }),
       );
-    } catch {
-    }
+    } catch {}
   }
 
   // Receipt excerpt: last user ask plus tool bytes already on the request.
@@ -718,13 +781,14 @@ async function reportAfterResponse(input: {
   ) {
     try {
       const payload = payloadFromToolResults({
-        results: toolResultsFromRequestBody(input.parsed),
+        results: latestExcerptToolResults(input.parsed),
         cwd: input.cwd,
         homeDir: input.homeDir,
         occurredAt: input.now.toISOString(),
       });
       excerpt = {
-        device_ulid: input.hooks.deviceUlid ?? loadMachineIdentity()?.ulid ?? null,
+        device_ulid:
+          input.hooks.deviceUlid ?? loadMachineIdentity()?.ulid ?? null,
         excerpt: excerptUploadFromParts({
           workKey: input.workKey,
           sessionKey,
@@ -740,12 +804,12 @@ async function reportAfterResponse(input: {
           environment: input.hooks.environment ?? getActiveEnvironment(),
         }),
       };
-    } catch {
-    }
+    } catch {}
   }
   const fingerprints: WorkFingerprintsBody | null = (() => {
     const built = [];
-    for (const fact of input.facts) {
+    const seen = new Set<string>();
+    for (const fact of [...input.facts].reverse()) {
       const fingerprint = buildWorkFingerprint(
         { provider: fingerprintProvider, cwd: input.cwd },
         {
@@ -757,9 +821,17 @@ async function reportAfterResponse(input: {
         input.homeDir,
       );
       if (fingerprint) {
+        const key = JSON.stringify([
+          fingerprint.path_hint,
+          fingerprint.tool_name,
+        ]);
+        if (seen.has(key)) continue;
+        seen.add(key);
         built.push(fingerprint);
+        if (built.length >= 1000) break;
       }
     }
+    built.reverse();
     const first = built[0];
     if (first === undefined) {
       return null;
@@ -783,17 +855,31 @@ async function reportAfterResponse(input: {
   });
 }
 
-export function createProxyServer(hooks: ProxyHooks = {}, track?: { report: Promise<void> }): Server {
+export function createProxyServer(
+  hooks: ProxyHooks = {},
+  track?: { report: Promise<void> },
+): Server {
   const reportTrack = track ?? { report: Promise.resolve() };
-  return createServer((req, res) => {
+  const server = createServer((req, res) => {
     void handleProxyRequest(req, res, hooks, reportTrack).catch(() => {
       if (!res.headersSent) {
-        writeJson(res, 500, { error: { type: "proxy_error", message: "proxy failed" } });
+        writeJson(res, 500, {
+          error: { type: "proxy_error", message: "proxy failed" },
+        });
       } else {
         res.end();
       }
     });
   });
+  if (!hooks.sendExcerpt && hooks.enableTeamStore) {
+    const timer = setInterval(() => {
+      void flushUsageExcerpts().catch(() => {});
+    }, 15_000);
+    timer.unref();
+    server.once("close", () => clearInterval(timer));
+    void flushUsageExcerpts().catch(() => {});
+  }
+  return server;
 }
 
 function listenOn(server: Server, host: string, port: number): Promise<number> {
@@ -825,7 +911,9 @@ export async function listenProxy(
 ): Promise<RunningProxy> {
   const host = options.host ?? DEFAULT_PROXY_HOST;
   if (!isLoopbackBind(host)) {
-    throw new Error("helm proxy only binds loopback (127.0.0.1, ::1, localhost).");
+    throw new Error(
+      "helm proxy only binds loopback (127.0.0.1, ::1, localhost).",
+    );
   }
   const preferred = options.port ?? DEFAULT_PROXY_PORT;
   const track = { report: Promise.resolve() };
@@ -834,7 +922,11 @@ export async function listenProxy(
     normalizeWrapToken(process.env.HELM_PROXY_WRAP_TOKEN) ??
     mintWrapToken();
   const server = createProxyServer(
-    { ...hooks, wrapToken, enableTeamStore: options.enableTeamStore ?? hooks.enableTeamStore },
+    {
+      ...hooks,
+      wrapToken,
+      enableTeamStore: options.enableTeamStore ?? hooks.enableTeamStore,
+    },
     track,
   );
   let port: number;
@@ -865,17 +957,24 @@ export async function listenProxy(
 export async function runProxyProcess(options: {
   host?: string;
   port?: number;
-  onListening?: (info: { host: string; port: number; url: string; wrapToken: string }) => void;
+  onListening?: (info: {
+    host: string;
+    port: number;
+    url: string;
+    wrapToken: string;
+  }) => void;
 }): Promise<RunningProxy> {
-  const running = await listenProxy(
-    {
-      host: options.host ?? process.env.HELM_PROXY_HOST ?? DEFAULT_PROXY_HOST,
-      port: options.port ?? (process.env.HELM_PROXY_PORT ? Number(process.env.HELM_PROXY_PORT) : DEFAULT_PROXY_PORT),
-      // The real proxy daemon opts into bounded receipt uploads after 2xx.
-      // Upload failures never break the provider path.
-      enableTeamStore: true,
-    },
-  );
+  const running = await listenProxy({
+    host: options.host ?? process.env.HELM_PROXY_HOST ?? DEFAULT_PROXY_HOST,
+    port:
+      options.port ??
+      (process.env.HELM_PROXY_PORT
+        ? Number(process.env.HELM_PROXY_PORT)
+        : DEFAULT_PROXY_PORT),
+    // The real proxy daemon opts into bounded receipt uploads after 2xx.
+    // Upload failures never break the provider path.
+    enableTeamStore: true,
+  });
   options.onListening?.({
     host: running.host,
     port: running.port,
@@ -892,24 +991,36 @@ export async function inspectProxyHealth(
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const response = await fetch(`${url.replace(/\/+$/, "")}/health`, { signal: controller.signal });
+    const response = await fetch(`${url.replace(/\/+$/, "")}/health`, {
+      signal: controller.signal,
+    });
     clearTimeout(timer);
     if (!response.ok) {
       return { ok: false, version: null };
     }
     const body: unknown = await response.json();
-    if (!isPlainRecord(body) || body.ok !== true || body.service !== "helm-proxy") {
+    if (
+      !isPlainRecord(body) ||
+      body.ok !== true ||
+      body.service !== "helm-proxy"
+    ) {
       return { ok: false, version: null };
     }
     return {
       ok: true,
-      version: typeof body.version === "string" && body.version !== "" ? body.version : null,
+      version:
+        typeof body.version === "string" && body.version !== ""
+          ? body.version
+          : null,
     };
   } catch {
     return { ok: false, version: null };
   }
 }
 
-export async function isProxyHealthy(url: string, timeoutMs = 400): Promise<boolean> {
+export async function isProxyHealthy(
+  url: string,
+  timeoutMs = 400,
+): Promise<boolean> {
   return (await inspectProxyHealth(url, timeoutMs)).ok;
 }

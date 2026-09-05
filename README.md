@@ -183,8 +183,17 @@ record without restoring a stale snapshot of `config.toml`. The
 proxy forwards the client's own provider tokens; Helm does not need those
 keys. On each request it can see the prompt locally, then POST usage events,
 fingerprints, and on a wrap reuse the metadata in `POST /api/usage/reuses`.
-When linked, it may also POST the bounded last user ask and tool-result bytes
-already on the request as receipt excerpts. It never sends full transcripts,
+When linked, it sends a sanitized last user ask and bounded excerpts from the
+latest tool turn. Earlier tool history is not resent. Excerpt requests stay
+under 256 KiB; tool bodies have a smaller 96 KiB client budget. Helm Web keeps
+queryable receipt metadata in the database and deduplicated tool bodies on its
+private artifact disk. Authenticated artifact downloads stream from storage.
+
+Sanitized excerpts enter a private local outbox before delivery. The proxy and
+daemon retry temporary failures with backoff; `helm doctor` reports pending or
+rejected deliveries. The outbox is limited to 1,000 entries / 32 MiB and never
+silently evicts unacknowledged receipts. Deploy the backend's durable excerpt
+route before releasing this CLI; an older backend leaves receipts queued. It never sends full transcripts,
 system/developer messages, provider credentials, or wrap tokens. A 422, 5xx,
 or offline Helm Web must not break wrap or the local cache.
 Identified savings stay null. `helm wrap` only accepts `claude` and `codex`.

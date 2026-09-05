@@ -17,6 +17,7 @@ import pkg from "../../package.json";
 import {
   claimWorkPackages,
   heartbeatDevice,
+  flushUsageExcerpts,
   isAuthError,
   publishProjectDeviceState,
   reportWorkPackageEvent,
@@ -59,7 +60,8 @@ export function computeMachineFingerprint(): string {
 export async function detectWebRuntimes(): Promise<
   Record<string, { available: boolean; version: string | null }>
 > {
-  const agents: Record<string, { available: boolean; version: string | null }> = {};
+  const agents: Record<string, { available: boolean; version: string | null }> =
+    {};
   for (const binary of ["claude", "codex"]) {
     try {
       const { stdout } = await execFileAsync(binary, ["--version"], {
@@ -71,7 +73,10 @@ export async function detectWebRuntimes(): Promise<
         shell: process.platform === "win32",
         windowsHide: true,
       });
-      agents[binary] = { available: true, version: stdout.trim().split("\n")[0] || null };
+      agents[binary] = {
+        available: true,
+        version: stdout.trim().split("\n")[0] || null,
+      };
     } catch {
       agents[binary] = { available: false, version: null };
     }
@@ -97,20 +102,29 @@ export async function runWebDaemonLoop(): Promise<void> {
 
   const credentials = loadCredentials();
   if (!credentials?.api_key) {
-    log("[web] no linked Helm Web account for this environment — run `helm connect` first");
+    log(
+      "[web] no linked Helm Web account for this environment — run `helm connect` first",
+    );
     cleanupFiles();
     return;
   }
 
   let identity = loadMachineIdentity();
   if (!identity) {
-    identity = { id: 0, ulid: "", name: os.hostname(), fingerprint: computeMachineFingerprint() };
+    identity = {
+      id: 0,
+      ulid: "",
+      name: os.hostname(),
+      fingerprint: computeMachineFingerprint(),
+    };
     saveMachineIdentity(identity);
   }
   const fingerprint = identity.fingerprint;
   const machineName = identity.name || os.hostname();
 
-  log(`[web] daemon started (pid ${process.pid}, device ${machineName}, fp ${fingerprint.slice(0, 12)}…)`);
+  log(
+    `[web] daemon started (pid ${process.pid}, device ${machineName}, fp ${fingerprint.slice(0, 12)}…)`,
+  );
 
   const active = new Map<string, ActiveRun>();
   const stats = { spawned: 0, completed: 0, failed: 0 };
@@ -119,7 +133,8 @@ export async function runWebDaemonLoop(): Promise<void> {
   let heartbeatBackoffMs = HEARTBEAT_INTERVAL_MS;
   let claimBackoffMs = CLAIM_INTERVAL_MS;
   let authFailed = false;
-  let runtimes: Record<string, { available: boolean; version: string | null }> = {};
+  let runtimes: Record<string, { available: boolean; version: string | null }> =
+    {};
   let heartbeatTimer: NodeJS.Timeout | undefined;
   let claimTimer: NodeJS.Timeout | undefined;
   let shuttingDown = false;
@@ -129,7 +144,9 @@ export async function runWebDaemonLoop(): Promise<void> {
   function noteAuthFailure(): void {
     if (!authFailed) {
       authFailed = true;
-      log("[web] authentication expired or revoked — run `helm connect` on this machine to re-link it");
+      log(
+        "[web] authentication expired or revoked — run `helm connect` on this machine to re-link it",
+      );
       writeStatus();
     }
   }
@@ -178,19 +195,28 @@ export async function runWebDaemonLoop(): Promise<void> {
       status,
       machine_id: fingerprint,
       occurred_at: new Date().toISOString(),
-      ...(pkgRow.agent_start?.session_id ? { session_id: pkgRow.agent_start.session_id } : {}),
+      ...(pkgRow.agent_start?.session_id
+        ? { session_id: pkgRow.agent_start.session_id }
+        : {}),
       ...extra,
     };
   }
 
-  async function failPackage(pkgRow: WebWorkPackage, error: string): Promise<void> {
+  async function failPackage(
+    pkgRow: WebWorkPackage,
+    error: string,
+  ): Promise<void> {
     log(`[web] failing work ${pkgRow.id}: ${error}`);
-    await reportWorkPackageEvent(pkgRow.id, eventBody(pkgRow, "failed", "failed", { error })).catch(
-      (err: unknown) => log(`[web] failed-event report error: ${message(err)}`),
+    await reportWorkPackageEvent(
+      pkgRow.id,
+      eventBody(pkgRow, "failed", "failed", { error }),
+    ).catch((err: unknown) =>
+      log(`[web] failed-event report error: ${message(err)}`),
     );
   }
 
   async function heartbeat(): Promise<void> {
+    void flushUsageExcerpts().catch(() => {});
     try {
       runtimes = await detectWebRuntimes();
       const response = await heartbeatDevice({
@@ -220,7 +246,9 @@ export async function runWebDaemonLoop(): Promise<void> {
           status: exists ? "ready" : "missing",
           local_path: project.localPath,
         }).catch((err: unknown) =>
-          log(`[web] device-state publish failed for ${project.projectId}: ${message(err)}`),
+          log(
+            `[web] device-state publish failed for ${project.projectId}: ${message(err)}`,
+          ),
         );
       }
     } catch (err) {
@@ -229,7 +257,9 @@ export async function runWebDaemonLoop(): Promise<void> {
         noteAuthFailure();
       } else {
         heartbeatBackoffMs = Math.min(heartbeatBackoffMs * 2, MAX_BACKOFF_MS);
-        log(`[web] heartbeat failed (retry in ${Math.round(heartbeatBackoffMs / 1000)}s): ${message(err)}`);
+        log(
+          `[web] heartbeat failed (retry in ${Math.round(heartbeatBackoffMs / 1000)}s): ${message(err)}`,
+        );
       }
     } finally {
       writeStatus();
@@ -249,13 +279,17 @@ export async function runWebDaemonLoop(): Promise<void> {
     }
     const runtime = pkgRow.agent_start?.provider ?? "";
     if (!runtimes[runtime]?.available) {
-      await failPackage(pkgRow, `Runtime "${runtime}" is not installed on ${machineName}.`);
+      await failPackage(
+        pkgRow,
+        `Runtime "${runtime}" is not installed on ${machineName}.`,
+      );
       return;
     }
     const mappedCwd = resolveWebProjectPath(pkgRow.project_id);
     const payloadCwd = pkgRow.agent_start?.cwd ?? null;
     const cwd =
-      mappedCwd ?? (payloadCwd && fs.existsSync(payloadCwd) ? payloadCwd : null);
+      mappedCwd ??
+      (payloadCwd && fs.existsSync(payloadCwd) ? payloadCwd : null);
     if (!cwd) {
       await failPackage(
         pkgRow,
@@ -274,14 +308,19 @@ export async function runWebDaemonLoop(): Promise<void> {
     writeStatus();
 
     try {
-      await reportWorkPackageEvent(pkgRow.id, eventBody(pkgRow, "started", "running"));
+      await reportWorkPackageEvent(
+        pkgRow.id,
+        eventBody(pkgRow, "started", "running"),
+      );
       const outcome = await executeAgentStartPackage(pkgRow, { cwd, log });
       if (outcome.status === "succeeded") {
         stats.completed += 1;
         await reportWorkPackageEvent(
           pkgRow.id,
           eventBody(pkgRow, "completed", "succeeded", {
-            ...(outcome.result ? { result: outcome.result.slice(0, 10000) } : {}),
+            ...(outcome.result
+              ? { result: outcome.result.slice(0, 10000) }
+              : {}),
           }),
         );
       } else {
@@ -298,7 +337,9 @@ export async function runWebDaemonLoop(): Promise<void> {
       log(`[web] run ${pkgRow.id} crashed: ${message(err)}`);
       await reportWorkPackageEvent(
         pkgRow.id,
-        eventBody(pkgRow, "failed", "failed", { error: message(err).slice(0, 10000) }),
+        eventBody(pkgRow, "failed", "failed", {
+          error: message(err).slice(0, 10000),
+        }),
       ).catch(() => {});
     } finally {
       active.delete(pkgRow.id);
@@ -333,7 +374,9 @@ export async function runWebDaemonLoop(): Promise<void> {
         noteAuthFailure();
       } else {
         claimBackoffMs = Math.min(claimBackoffMs * 2, MAX_BACKOFF_MS);
-        log(`[web] claim failed (retry in ${Math.round(claimBackoffMs / 1000)}s): ${message(err)}`);
+        log(
+          `[web] claim failed (retry in ${Math.round(claimBackoffMs / 1000)}s): ${message(err)}`,
+        );
       }
     } finally {
       if (!shuttingDown) {
@@ -414,12 +457,18 @@ async function reportOrphanedRuns(
     return;
   }
   // Safety net: never reap runs owned by a daemon that is still alive.
-  if (previous?.pid && previous.pid !== process.pid && isProcessAlive(previous.pid)) {
+  if (
+    previous?.pid &&
+    previous.pid !== process.pid &&
+    isProcessAlive(previous.pid)
+  ) {
     return;
   }
 
   for (const run of runs) {
-    log(`[web] reporting run ${run.workPackageId} orphaned by an ungraceful shutdown`);
+    log(
+      `[web] reporting run ${run.workPackageId} orphaned by an ungraceful shutdown`,
+    );
     await reportWorkPackageEvent(run.workPackageId, {
       work_package_id: run.workPackageId,
       local_work_id: `${fingerprint.slice(0, 12)}-${run.workPackageId}`,

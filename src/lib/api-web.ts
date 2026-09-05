@@ -14,8 +14,15 @@ import type {
   TeamRollupObserved,
 } from "./audit-snapshot.js";
 import type { WorkFingerprintsBody } from "./fingerprints.js";
-import type { SessionChunk, SessionResultBody, SessionUsageBody } from "./web-chunks.js";
-import { getApiUrl, loadCredentials } from "./config.js";
+import type {
+  SessionChunk,
+  SessionResultBody,
+  SessionUsageBody,
+} from "./web-chunks.js";
+import { createHash } from "node:crypto";
+import * as path from "node:path";
+import { UsageExcerptOutbox } from "./usage-excerpt-outbox.js";
+import { getEnvironmentDir, getApiUrl, loadCredentials } from "./config.js";
 
 interface WebApiErrorBody {
   message?: string;
@@ -27,6 +34,7 @@ interface WebApiErrorBody {
  * can distinguish auth failures (401) from transient server trouble. */
 export class WebApiError extends Error {
   readonly status: number;
+  retryAfterMs?: number;
 
   constructor(message: string, status: number) {
     super(message);
@@ -61,7 +69,11 @@ async function request<T>(
     headers["Authorization"] = `Bearer ${credentials.api_key}`;
   }
 
-  const response = await fetch(url, { ...options, headers });
+  const response = await fetch(url, {
+    ...options,
+    signal: options.signal ?? AbortSignal.timeout(10_000),
+    headers,
+  });
   const data = (await response.json().catch(() => ({}))) as T | WebApiErrorBody;
 
   if (!response.ok) {
@@ -74,7 +86,16 @@ async function request<T>(
         }
       }
     }
-    throw new WebApiError(messages.join("\n"), response.status);
+    const failure = new WebApiError(messages.join("\n"), response.status);
+    const retryAfter = response.headers.get("retry-after");
+    if (retryAfter) {
+      const delay = /^\d+$/.test(retryAfter)
+        ? Number(retryAfter) * 1000
+        : Date.parse(retryAfter) - Date.now();
+      if (Number.isFinite(delay))
+        failure.retryAfterMs = Math.max(0, Math.min(86_400_000, delay));
+    }
+    throw failure;
   }
 
   return data as T;
@@ -185,11 +206,16 @@ export interface HelmWebRoomMessagesPage {
   room: HelmWebProjectRoom;
 }
 
-export async function fetchHelmWebProjects(signal?: AbortSignal): Promise<HelmWebProjectSummary[]> {
-  const response = await request<{ data: HelmWebProjectSummary[] }>("/projects", {
-    method: "GET",
-    signal,
-  });
+export async function fetchHelmWebProjects(
+  signal?: AbortSignal,
+): Promise<HelmWebProjectSummary[]> {
+  const response = await request<{ data: HelmWebProjectSummary[] }>(
+    "/projects",
+    {
+      method: "GET",
+      signal,
+    },
+  );
   return response.data;
 }
 
@@ -206,9 +232,12 @@ export async function fetchHelmWebProjectSessions(
 export async function fetchHelmWebSession(
   sessionId: string,
 ): Promise<HelmWebSessionDetail> {
-  return request<HelmWebSessionDetail>(`/sessions/${encodeURIComponent(sessionId)}`, {
-    method: "GET",
-  });
+  return request<HelmWebSessionDetail>(
+    `/sessions/${encodeURIComponent(sessionId)}`,
+    {
+      method: "GET",
+    },
+  );
 }
 
 export async function createHelmWebSessionComment(
@@ -236,7 +265,9 @@ export async function fetchHelmWebSessionComments(
   return response.data;
 }
 
-export async function fetchHelmWebProjectRooms(projectId: string): Promise<HelmWebProjectRoom[]> {
+export async function fetchHelmWebProjectRooms(
+  projectId: string,
+): Promise<HelmWebProjectRoom[]> {
   const response = await request<{ data: HelmWebProjectRoom[] }>(
     `/projects/${encodeURIComponent(projectId)}/rooms`,
     { method: "GET" },
@@ -314,9 +345,17 @@ export async function updateHelmWebSessionSidebar(
     action: "archive" | "unarchive" | "pin" | "unpin" | "reorder_pin";
     pin_order_key?: string | null;
   },
-): Promise<Pick<HelmWebTeamSession, "session_id" | "archived_at" | "pinned_at" | "pin_order_key">> {
+): Promise<
+  Pick<
+    HelmWebTeamSession,
+    "session_id" | "archived_at" | "pinned_at" | "pin_order_key"
+  >
+> {
   const response = await request<{
-    data: Pick<HelmWebTeamSession, "session_id" | "archived_at" | "pinned_at" | "pin_order_key">;
+    data: Pick<
+      HelmWebTeamSession,
+      "session_id" | "archived_at" | "pinned_at" | "pin_order_key"
+    >;
   }>(`/sessions/${encodeURIComponent(sessionId)}/sidebar`, {
     method: "PATCH",
     body: JSON.stringify(input),
@@ -324,7 +363,9 @@ export async function updateHelmWebSessionSidebar(
   return response.data;
 }
 
-export async function fetchHelmWebProjectMessages(projectId: string): Promise<HelmWebProjectMessage[]> {
+export async function fetchHelmWebProjectMessages(
+  projectId: string,
+): Promise<HelmWebProjectMessage[]> {
   const response = await request<{ data: HelmWebProjectMessage[] }>(
     `/projects/${encodeURIComponent(projectId)}/messages`,
     { method: "GET" },
@@ -408,7 +449,9 @@ export interface HelmWebProjectTodoPatch {
   completed?: boolean;
 }
 
-export async function fetchHelmWebProjectTodos(projectId: string): Promise<HelmWebProjectTodo[]> {
+export async function fetchHelmWebProjectTodos(
+  projectId: string,
+): Promise<HelmWebProjectTodo[]> {
   const response = await request<{ data: HelmWebProjectTodo[] }>(
     `/projects/${encodeURIComponent(projectId)}/todos`,
     { method: "GET" },
@@ -439,7 +482,10 @@ export async function updateHelmWebProjectTodo(
   return response.data;
 }
 
-export async function deleteHelmWebProjectTodo(projectId: string, todoId: string): Promise<void> {
+export async function deleteHelmWebProjectTodo(
+  projectId: string,
+  todoId: string,
+): Promise<void> {
   await request<unknown>(
     `/projects/${encodeURIComponent(projectId)}/todos/${encodeURIComponent(todoId)}`,
     { method: "DELETE" },
@@ -500,11 +546,14 @@ export async function sendAmbientLearningCandidate(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 1500);
   try {
-    return await request(`/projects/${encodeURIComponent(projectId)}/learning-candidates`, {
-      method: "POST",
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
+    return await request(
+      `/projects/${encodeURIComponent(projectId)}/learning-candidates`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      },
+    );
   } finally {
     clearTimeout(timer);
   }
@@ -538,13 +587,17 @@ export async function authorizeHelmWebBroadcast(input: {
   };
   if (!response.ok || typeof data.auth !== "string") {
     throw new WebApiError(
-      typeof data.message === "string" ? data.message : `Broadcast auth failed: ${response.status}`,
+      typeof data.message === "string"
+        ? data.message
+        : `Broadcast auth failed: ${response.status}`,
       response.status,
     );
   }
   return {
     auth: data.auth,
-    ...(typeof data.channel_data === "string" ? { channel_data: data.channel_data } : {}),
+    ...(typeof data.channel_data === "string"
+      ? { channel_data: data.channel_data }
+      : {}),
   };
 }
 
@@ -565,7 +618,9 @@ export type DeviceAuthPollResult =
   | { status: "denied" }
   | { status: "invalid" };
 
-export async function startDeviceAuth(deviceName: string): Promise<DeviceAuthStartResponse> {
+export async function startDeviceAuth(
+  deviceName: string,
+): Promise<DeviceAuthStartResponse> {
   return request<DeviceAuthStartResponse>(
     "/auth/device",
     { method: "POST", body: JSON.stringify({ device_name: deviceName }) },
@@ -574,7 +629,9 @@ export async function startDeviceAuth(deviceName: string): Promise<DeviceAuthSta
 }
 
 /** Hand-rolled fetch: pending/denied come back as non-2xx JSON we must read. */
-export async function pollDeviceAuth(deviceCode: string): Promise<DeviceAuthPollResult> {
+export async function pollDeviceAuth(
+  deviceCode: string,
+): Promise<DeviceAuthPollResult> {
   const apiUrl = getApiUrl();
   const response = await fetch(`${apiUrl}/api/auth/device/token`, {
     method: "POST",
@@ -603,8 +660,13 @@ export async function pollDeviceAuth(deviceCode: string): Promise<DeviceAuthPoll
   return { status: "invalid" };
 }
 
-export async function fetchAuthenticatedUser(): Promise<{ id: number | string; name?: string }> {
-  return request<{ id: number | string; name?: string }>("/user", { method: "GET" });
+export async function fetchAuthenticatedUser(): Promise<{
+  id: number | string;
+  name?: string;
+}> {
+  return request<{ id: number | string; name?: string }>("/user", {
+    method: "GET",
+  });
 }
 
 // --- Device heartbeat + project state ---
@@ -621,7 +683,12 @@ export interface DeviceHeartbeatRequest {
 
 export interface DeviceHeartbeatResponse {
   ok: boolean;
-  device: { id: string; name: string; is_online: boolean; last_seen_at: string | null };
+  device: {
+    id: string;
+    name: string;
+    is_online: boolean;
+    last_seen_at: string | null;
+  };
 }
 
 export async function heartbeatDevice(
@@ -703,8 +770,20 @@ export async function claimWorkPackages(
 export interface WorkPackageEventRequest {
   work_package_id: string;
   local_work_id: string;
-  event: "queued" | "claimed" | "started" | "completed" | "failed" | "cancelled";
-  status: "queued" | "claimed" | "running" | "succeeded" | "failed" | "cancelled";
+  event:
+    | "queued"
+    | "claimed"
+    | "started"
+    | "completed"
+    | "failed"
+    | "cancelled";
+  status:
+    | "queued"
+    | "claimed"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "cancelled";
   machine_id: string;
   occurred_at?: string;
   session_id?: string;
@@ -716,10 +795,13 @@ export async function reportWorkPackageEvent(
   workPackageId: string,
   body: WorkPackageEventRequest,
 ): Promise<void> {
-  await request<{ ok: boolean }>(`/daemon/work-packages/${workPackageId}/events`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
+  await request<{ ok: boolean }>(
+    `/daemon/work-packages/${workPackageId}/events`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
 }
 
 // --- Usage ledger ---
@@ -776,7 +858,9 @@ export interface UsageEventsBody {
   events: UsageEventUpload[];
 }
 
-export async function sendUsageEvents(body: UsageEventsBody): Promise<{ accepted: number }> {
+export async function sendUsageEvents(
+  body: UsageEventsBody,
+): Promise<{ accepted: number }> {
   return request<{ accepted: number }>("/usage/events", {
     method: "POST",
     body: JSON.stringify(body),
@@ -867,6 +951,14 @@ export async function sendUsageExcerpt(
   body: UsageExcerptUploadBody,
   requester: WebRequester = request,
 ): Promise<{ accepted: boolean }> {
+  if (requester === request) {
+    const outbox = excerptOutbox();
+    if (!outbox)
+      throw new WebApiError("Not connected. Run helm connect first.", 401);
+    outbox.enqueue(body);
+    void flushUsageExcerpts().catch(() => {});
+    return { accepted: false };
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), USAGE_EXCERPT_TIMEOUT_MS);
   try {
@@ -878,6 +970,57 @@ export async function sendUsageExcerpt(
   } finally {
     clearTimeout(timer);
   }
+}
+
+function excerptOutbox(): UsageExcerptOutbox | null {
+  const credentials = loadCredentials();
+  if (!credentials?.api_key) return null;
+  const scope = createHash("sha256")
+    .update(
+      JSON.stringify([
+        getApiUrl(),
+        credentials.user_id,
+        credentials.organization_id,
+        credentials.user_id ? null : credentials.api_key,
+      ]),
+    )
+    .digest("hex");
+  return new UsageExcerptOutbox(
+    path.join(getEnvironmentDir(), "excerpt-outbox", scope),
+  );
+}
+
+export function usageExcerptDeliveryStatus(): {
+  pending: number;
+  rejected: number;
+  bytes: number;
+} {
+  return excerptOutbox()?.status() ?? { pending: 0, rejected: 0, bytes: 0 };
+}
+
+export async function flushUsageExcerpts(): Promise<number> {
+  const outbox = excerptOutbox();
+  if (!outbox) return 0;
+  // Pin credentials and destination for this flush even if the active environment changes.
+  const credentials = loadCredentials();
+  const base = getApiUrl();
+  return outbox.flush(async (body) => {
+    if (
+      base !== getApiUrl() ||
+      credentials?.api_key !== loadCredentials()?.api_key
+    )
+      throw new WebApiError("Account changed", 401);
+    const result = await request<{ accepted: boolean }>(
+      "/usage/excerpts/durable",
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(5_000),
+      },
+    );
+    if (result.accepted !== true)
+      throw new Error("Excerpt was not acknowledged.");
+  });
 }
 
 // --- Prompt-inefficiency measurements ---
@@ -960,7 +1103,10 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function parseRows<T>(value: unknown, parseRow: (item: unknown) => T | null): T[] | undefined {
+function parseRows<T>(
+  value: unknown,
+  parseRow: (item: unknown) => T | null,
+): T[] | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -978,23 +1124,38 @@ function parseRows<T>(value: unknown, parseRow: (item: unknown) => T | null): T[
 }
 
 function parseNamedPerson(value: unknown): SharedPathPerson | null {
-  if (!isRecord(value) || typeof value.id !== "string" || typeof value.name !== "string") {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    typeof value.name !== "string"
+  ) {
     return null;
   }
   return { id: value.id, name: value.name };
 }
 
 function parseSharedProjectRow(value: unknown): SharedProjectOverlap | null {
-  if (!isRecord(value) || typeof value.label !== "string" || !isFiniteNumber(value.cost_usd)) {
+  if (
+    !isRecord(value) ||
+    typeof value.label !== "string" ||
+    !isFiniteNumber(value.cost_usd)
+  ) {
     return null;
   }
-  const people = parseRows(value.people, (person): SharedProjectPerson | null => {
-    const named = parseNamedPerson(person);
-    if (named === null || !isRecord(person) || !isFiniteNumber(person.cost_usd)) {
-      return null;
-    }
-    return { ...named, cost_usd: person.cost_usd };
-  });
+  const people = parseRows(
+    value.people,
+    (person): SharedProjectPerson | null => {
+      const named = parseNamedPerson(person);
+      if (
+        named === null ||
+        !isRecord(person) ||
+        !isFiniteNumber(person.cost_usd)
+      ) {
+        return null;
+      }
+      return { ...named, cost_usd: person.cost_usd };
+    },
+  );
   if (people === undefined || people.length === 0) {
     return null;
   }
@@ -1064,16 +1225,25 @@ function parseDiagnoseBucket(value: unknown): DiagnoseBucket | null {
 
 export function teamUsageFromEnvelope(payload: unknown): TeamRollupObserved {
   if (!isRecord(payload) || !isRecord(payload.data)) {
-    throw new WebApiError("Team usage response was not a { data } envelope.", 502);
+    throw new WebApiError(
+      "Team usage response was not a { data } envelope.",
+      502,
+    );
   }
   const data = payload.data;
   if (!isRecord(data.totals) || typeof data.totals.cost_usd !== "number") {
     throw new WebApiError("Team usage rollup is missing totals.cost_usd.", 502);
   }
-  const shared_projects = parseRows(data.shared_projects, parseSharedProjectRow);
+  const shared_projects = parseRows(
+    data.shared_projects,
+    parseSharedProjectRow,
+  );
   const shared_paths = parseRows(data.shared_paths, parseSharedPathRow);
   const avoidable_spend = parseOptionalFinite(data.avoidable_spend);
-  const diagnose_buckets = parseRows(data.diagnose_buckets, parseDiagnoseBucket);
+  const diagnose_buckets = parseRows(
+    data.diagnose_buckets,
+    parseDiagnoseBucket,
+  );
   const rollup = data as unknown as TeamRollupObserved;
   if (shared_projects === undefined) {
     delete rollup.shared_projects;
@@ -1104,7 +1274,9 @@ export async function getTeamUsage(
   days: number,
   requester: WebRequester = request,
 ): Promise<TeamRollupObserved> {
-  const payload = await requester<unknown>(teamUsageEndpoint(teamId, days), { method: "GET" });
+  const payload = await requester<unknown>(teamUsageEndpoint(teamId, days), {
+    method: "GET",
+  });
   return teamUsageFromEnvelope(payload);
 }
 
@@ -1119,7 +1291,10 @@ export async function sendWorkFingerprints(
   requester: WebRequester = request,
 ): Promise<unknown> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), WORK_FINGERPRINT_TIMEOUT_MS);
+  const timer = setTimeout(
+    () => controller.abort(),
+    WORK_FINGERPRINT_TIMEOUT_MS,
+  );
   try {
     return await requester<unknown>(WORK_FINGERPRINTS_ENDPOINT, {
       method: "POST",
@@ -1163,10 +1338,18 @@ function parseLiveOverlapPerson(value: unknown): LiveOverlapPerson | null {
   ) {
     return null;
   }
-  if (value.name === "" || value.project_hint === "" || value.occurred_at === "") {
+  if (
+    value.name === "" ||
+    value.project_hint === "" ||
+    value.occurred_at === ""
+  ) {
     return null;
   }
-  if (value.path_hint === undefined || value.path_hint === null || value.path_hint === "") {
+  if (
+    value.path_hint === undefined ||
+    value.path_hint === null ||
+    value.path_hint === ""
+  ) {
     return {
       name: value.name,
       project_hint: value.project_hint,
@@ -1213,7 +1396,10 @@ export async function fetchLiveFingerprintOthers(
   requester: WebRequester = request,
 ): Promise<LiveOverlapPerson[]> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LIVE_FINGERPRINT_TIMEOUT_MS);
+  const timer = setTimeout(
+    () => controller.abort(),
+    LIVE_FINGERPRINT_TIMEOUT_MS,
+  );
   try {
     const payload = await requester<unknown>(
       liveFingerprintsQuery(query.project_hint, query.path_hints ?? []),
@@ -1236,7 +1422,9 @@ export async function sendSessionChunk(chunk: SessionChunk): Promise<void> {
   });
 }
 
-export async function sendSessionResult(body: SessionResultBody): Promise<void> {
+export async function sendSessionResult(
+  body: SessionResultBody,
+): Promise<void> {
   await request<{ ok: boolean }>("/session/result", {
     method: "POST",
     body: JSON.stringify(body),

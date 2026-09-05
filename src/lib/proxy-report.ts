@@ -48,14 +48,17 @@ export function promptFactsUploadFromMeasurement(input: {
     session_key: input.sessionKey,
     turn_index: m.turn_index,
     provider: input.provider,
-    model: input.model !== null && input.model !== "unknown" ? input.model : null,
+    model:
+      input.model !== null && input.model !== "unknown" ? input.model : null,
     input_tokens: m.input_tokens,
     output_tokens: m.output_tokens,
     cache_write_tokens: m.cache_write_tokens,
     cache_read_tokens: m.cache_read_tokens,
     repeated_prefix_tokens_apportioned: m.repeated_prefix_tokens_apportioned,
-    repeated_rebilled_tokens_apportioned: m.repeated_rebilled_tokens_apportioned,
-    duplicate_attachment_tokens_apportioned: m.duplicate_attachment_tokens_apportioned,
+    repeated_rebilled_tokens_apportioned:
+      m.repeated_rebilled_tokens_apportioned,
+    duplicate_attachment_tokens_apportioned:
+      m.duplicate_attachment_tokens_apportioned,
     duplicate_attachment_count: m.duplicate_attachment_count,
     occurred_at: input.occurredAt.toISOString(),
     environment: input.environment,
@@ -66,7 +69,11 @@ export function usageReuseFromStored(input: {
   reuse: WorkReuse;
   record: Pick<
     WorkRecord,
-    "model" | "input_tokens" | "output_tokens" | "cache_write_tokens" | "cache_read_tokens"
+    | "model"
+    | "input_tokens"
+    | "output_tokens"
+    | "cache_write_tokens"
+    | "cache_read_tokens"
   >;
   sessionKey: string | null;
   environment: string;
@@ -76,7 +83,10 @@ export function usageReuseFromStored(input: {
     project_hint: input.reuse.project_hint,
     path_hints: [...input.reuse.path_hints],
     tool_names: [...input.reuse.tool_names],
-    session_key: input.sessionKey !== null && input.sessionKey !== "" ? input.sessionKey : null,
+    session_key:
+      input.sessionKey !== null && input.sessionKey !== ""
+        ? input.sessionKey
+        : null,
     model: record.model,
     input_tokens: record.input_tokens,
     output_tokens: record.output_tokens,
@@ -88,9 +98,20 @@ export function usageReuseFromStored(input: {
   };
 }
 
-export async function reportProxiedRequest(input: ProxyReportDeps): Promise<void> {
+export async function reportProxiedRequest(
+  input: ProxyReportDeps,
+): Promise<void> {
   if (!input.linked) {
     return;
+  }
+  if (input.excerpt && input.sendExcerpt) {
+    try {
+      await input.sendExcerpt(input.excerpt);
+    } catch {
+      process.stderr.write(
+        "[helm] Excerpt delivery could not be recorded. Run helm doctor.\n",
+      );
+    }
   }
   if (input.usage) {
     try {
@@ -100,14 +121,12 @@ export async function reportProxiedRequest(input: ProxyReportDeps): Promise<void
         device_ulid: input.deviceUlid,
         events,
       });
-    } catch {
-    }
+    } catch {}
   }
   if (input.fingerprints) {
     try {
       await input.sendFingerprints(input.fingerprints);
-    } catch {
-    }
+    } catch {}
   }
   const firstReuse = input.reuses?.[0];
   const sendReuses = input.sendReuses;
@@ -117,14 +136,7 @@ export async function reportProxiedRequest(input: ProxyReportDeps): Promise<void
         device_ulid: input.deviceUlid,
         reuses: [firstReuse, ...(input.reuses ?? []).slice(1)],
       });
-    } catch {
-    }
-  }
-  if (input.excerpt && input.sendExcerpt) {
-    try {
-      await input.sendExcerpt(input.excerpt);
-    } catch {
-    }
+    } catch {}
   }
   // A 404 from a Helm Web that predates the detector route, or a 422 from an
   // older contract, is expected and silent. The measurement is already stored
@@ -132,7 +144,6 @@ export async function reportProxiedRequest(input: ProxyReportDeps): Promise<void
   if (input.promptFacts && input.sendPromptFacts) {
     try {
       await input.sendPromptFacts(input.promptFacts);
-    } catch {
-    }
+    } catch {}
   }
 }
