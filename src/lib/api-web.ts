@@ -1,3 +1,4 @@
+import type { HookActivity, HookHost } from "./hook-evidence.js";
 /**
  * API client for the helm-web backend (Laravel + Sanctum). Sibling of the
  * legacy Admiral client in api.ts — helm-web routes live under /api (no
@@ -47,6 +48,30 @@ export function isAuthError(err: unknown): boolean {
   return err instanceof WebApiError && err.status === 401;
 }
 
+export async function readBoundedContextResponse(
+  response: Response,
+): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) return {};
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > 32_768) {
+        await reader.cancel();
+        throw new Error("Context response exceeds byte budget");
+      }
+      chunks.push(value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function request<T>(
   endpoint: string,
   options: RequestInit = {},
@@ -74,7 +99,11 @@ async function request<T>(
     signal: options.signal ?? AbortSignal.timeout(10_000),
     headers,
   });
-  const data = (await response.json().catch(() => ({}))) as T | WebApiErrorBody;
+  const data = (
+    endpoint.startsWith("/usage/workloads/context?")
+      ? await readBoundedContextResponse(response)
+      : await response.json().catch(() => ({}))
+  ) as T | WebApiErrorBody;
 
   if (!response.ok) {
     const error = data as WebApiErrorBody;
@@ -917,10 +946,75 @@ export interface UsageExcerptToolEntry {
   readonly content: string;
 }
 
+// --- Workload lifecycle envelope (2026-09-05 evidence contract) ---
+
+export type WorkloadInterceptStatus =
+  | "forwarded"
+  | "reused"
+  | "upstream_error"
+  | "network_error";
+
+export type HelmLookupStatus = "hit" | "miss" | "skipped" | "error";
+
+export type HelmSharedLookupStatus = HelmLookupStatus | "timeout";
+
+export const HELM_ACTIVITY_VERSION = 1;
+export const HELM_CONTEXT_MAX_BYTES = 8_192;
+export const HELM_CONTEXT_MAX_SOURCES = 3;
+export const HELM_OVERLAP_MAX_PEOPLE = 20;
+
+/**
+ * What Helm itself did around one intercepted request. Fixed vocabulary only:
+ * no free-text error messages, no arbitrary keys, no dollars. `reused` and
+ * `replay.source_request_id` attribute a replay to its origin request; they
+ * do not claim a Verified Saving.
+ */
+export interface HelmActivity {
+  readonly version: typeof HELM_ACTIVITY_VERSION;
+  readonly local_lookup: {
+    readonly status: HelmLookupStatus;
+    readonly duration_ms: number;
+  };
+  readonly shared_lookup: {
+    readonly status: HelmSharedLookupStatus;
+    readonly duration_ms: number;
+    readonly candidate_count: number;
+  };
+  readonly overlap_check: {
+    readonly status: HelmSharedLookupStatus;
+    readonly duration_ms: number;
+    readonly people_count: number;
+  };
+  readonly context: {
+    readonly applied: boolean;
+    readonly bytes: number;
+    readonly source_excerpt_ids: readonly string[];
+  };
+  readonly replay: {
+    readonly source_request_id: string | null;
+  };
+}
+
+/** Lifecycle fields carried on a new-contract envelope. All or none. */
+export interface WorkloadLifecycle {
+  /** Stable per intercepted request and every retry of its delivery. */
+  readonly request_id: string;
+  readonly provider: "anthropic" | "openai";
+  readonly status: WorkloadInterceptStatus;
+  readonly upstream_status: number | null;
+  readonly duration_ms: number;
+  readonly cli_version: string;
+  readonly helm_activity: HelmActivity;
+}
+
 /**
  * Bounded excerpt upload per wrapped 2xx: last user ask plus tool-result
  * bytes already on the request. Never whole transcripts, system messages,
  * credentials, or wrap tokens (2026-08-21 excerpt lock).
+ *
+ * Lifecycle fields are optional so bodies queued by an older CLI still parse;
+ * a body that carries `request_id` carries the whole lifecycle set and is
+ * routed to the workloads route instead of the legacy excerpt route.
  */
 export interface UsageExcerptUploadBody {
   readonly device_ulid: string | null;
@@ -940,22 +1034,62 @@ export interface UsageExcerptUploadBody {
     readonly cache_read_tokens: number | null;
     readonly occurred_at: string;
     readonly environment: string | null;
+    readonly request_id?: string;
+    readonly provider?: "anthropic" | "openai" | null;
+    readonly status?: WorkloadInterceptStatus | "observed";
+    readonly upstream_status?: number | null;
+    readonly duration_ms?: number;
+    readonly cli_version?: string;
+    readonly helm_activity?: HelmActivity | null;
+    readonly event_id?: string;
+    readonly capture_source?: "hook" | "proxy";
+    readonly host?: HookHost;
+    readonly hook_activity?: HookActivity | null;
   };
 }
 
 export const USAGE_EXCERPTS_ENDPOINT = "/usage/excerpts";
 
+export const USAGE_EXCERPTS_DURABLE_ENDPOINT = "/usage/excerpts/durable";
+
+export const USAGE_WORKLOADS_DURABLE_ENDPOINT = "/usage/workloads/durable";
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * New-contract envelopes (a `request_id`) go to the workloads route, which
+ * dedupes on user/device/request_id and accepts empty path/tool lists. Bodies
+ * queued by an older CLI keep the legacy route and its content hash.
+ */
+export function durableExcerptEndpoint(body: UsageExcerptUploadBody): string {
+  if (
+    body.excerpt.capture_source === "hook" &&
+    typeof body.excerpt.event_id === "string" &&
+    UUID_PATTERN.test(body.excerpt.event_id)
+  )
+    return "/usage/observations/durable";
+  const requestId = body.excerpt.request_id;
+  return typeof requestId === "string" && UUID_PATTERN.test(requestId)
+    ? USAGE_WORKLOADS_DURABLE_ENDPOINT
+    : USAGE_EXCERPTS_DURABLE_ENDPOINT;
+}
+
 export const USAGE_EXCERPT_TIMEOUT_MS = 1200;
+
+export function enqueueUsageExcerpt(body: UsageExcerptUploadBody): void {
+  const outbox = excerptOutbox();
+  if (!outbox)
+    throw new WebApiError("Not connected. Run helm connect first.", 401);
+  outbox.enqueue(body);
+}
 
 export async function sendUsageExcerpt(
   body: UsageExcerptUploadBody,
   requester: WebRequester = request,
 ): Promise<{ accepted: boolean }> {
   if (requester === request) {
-    const outbox = excerptOutbox();
-    if (!outbox)
-      throw new WebApiError("Not connected. Run helm connect first.", 401);
-    outbox.enqueue(body);
+    enqueueUsageExcerpt(body);
     void flushUsageExcerpts().catch(() => {});
     return { accepted: false };
   }
@@ -1010,8 +1144,10 @@ export async function flushUsageExcerpts(): Promise<number> {
       credentials?.api_key !== loadCredentials()?.api_key
     )
       throw new WebApiError("Account changed", 401);
+    // A 404 from a Helm Web that predates the workloads route is not a
+    // rejection: the outbox keeps the entry pending with backoff.
     const result = await request<{ accepted: boolean }>(
-      "/usage/excerpts/durable",
+      durableExcerptEndpoint(body),
       {
         method: "POST",
         body: JSON.stringify(body),
@@ -1021,6 +1157,192 @@ export async function flushUsageExcerpts(): Promise<number> {
     if (result.accepted !== true)
       throw new Error("Excerpt was not acknowledged.");
   });
+}
+
+// --- Shared prior-work context (bounded, before forwarding) ---
+
+export const WORKLOAD_CONTEXT_ENDPOINT = "/usage/workloads/context";
+
+export const WORKLOAD_CONTEXT_MAX_PATHS = 8;
+
+export const WORKLOAD_CONTEXT_MAX_CANDIDATES = 3;
+
+export const WORKLOAD_CONTEXT_MAX_SNIPPETS = 4;
+
+export const WORKLOAD_CONTEXT_SNIPPET_MAX_BYTES = 2_048;
+
+const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+
+export interface WorkloadContextSnippet {
+  readonly tool_name: string;
+  readonly path_hint: string | null;
+  readonly content: string;
+}
+
+/** One teammate (or own) receipt the server judged relevant. Metadata plus
+ * bounded, sanitized tool snippets. Never a prompt, never a provider body. */
+export interface WorkloadContextCandidate {
+  readonly id: string;
+  readonly project_hint: string;
+  readonly path_hints: readonly string[];
+  readonly tool_names: readonly string[];
+  readonly occurred_at: string;
+  readonly author_name: string | null;
+  readonly tool_excerpts: readonly WorkloadContextSnippet[];
+}
+
+export interface WorkloadContextLookup {
+  readonly status: HelmSharedLookupStatus;
+  readonly candidates: readonly WorkloadContextCandidate[];
+}
+
+export function workloadContextQuery(
+  projectHint: string,
+  pathHints: readonly string[],
+): string {
+  const params = new URLSearchParams();
+  params.set("project_hint", projectHint);
+  for (const hint of pathHints.slice(0, WORKLOAD_CONTEXT_MAX_PATHS)) {
+    if (hint !== "") {
+      params.append("path_hints[]", hint);
+    }
+  }
+  return `${WORKLOAD_CONTEXT_ENDPOINT}?${params.toString()}`;
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) {
+    return value;
+  }
+  const buffer = Buffer.from(value, "utf8").subarray(0, maxBytes);
+  // toString drops a trailing partial code point as U+FFFD; strip it.
+  return buffer.toString("utf8").replace(/�+$/u, "");
+}
+
+function stringList(
+  value: unknown,
+  maxItems: number,
+  maxChars: number,
+): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item === "string" && item !== "" && item.length <= maxChars) {
+      out.push(item);
+      if (out.length >= maxItems) break;
+    }
+  }
+  return out;
+}
+
+function snippetsFromPayload(value: unknown): WorkloadContextSnippet[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const out: WorkloadContextSnippet[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry))
+      continue;
+    const row = entry as Record<string, unknown>;
+    if (typeof row.content !== "string" || row.content === "") continue;
+    out.push({
+      tool_name:
+        typeof row.tool_name === "string" && row.tool_name !== ""
+          ? row.tool_name.slice(0, 255)
+          : "unknown",
+      path_hint:
+        typeof row.path_hint === "string" && row.path_hint !== ""
+          ? row.path_hint.slice(0, 1000)
+          : null,
+      content: truncateUtf8(row.content, WORKLOAD_CONTEXT_SNIPPET_MAX_BYTES),
+    });
+    if (out.length >= WORKLOAD_CONTEXT_MAX_SNIPPETS) break;
+  }
+  return out;
+}
+
+/** Defensive parse of `{ excerpts: [...] }`. Unknown ids, oversized lists and
+ * extra keys are dropped rather than trusted. */
+export function workloadContextFromEnvelope(
+  payload: unknown,
+): WorkloadContextCandidate[] {
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    Array.isArray(payload)
+  ) {
+    return [];
+  }
+  const rows = (payload as Record<string, unknown>).excerpts;
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+  const out: WorkloadContextCandidate[] = [];
+  for (const entry of rows) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry))
+      continue;
+    const row = entry as Record<string, unknown>;
+    if (typeof row.id !== "string" || !ULID_PATTERN.test(row.id)) continue;
+    if (
+      typeof row.occurred_at !== "string" ||
+      !Number.isFinite(Date.parse(row.occurred_at))
+    )
+      continue;
+    out.push({
+      id: row.id,
+      project_hint:
+        typeof row.project_hint === "string"
+          ? row.project_hint.slice(0, 255)
+          : "",
+      path_hints: stringList(row.path_hints, WORKLOAD_CONTEXT_MAX_PATHS, 1000),
+      tool_names: stringList(row.tool_names, WORKLOAD_CONTEXT_MAX_PATHS, 255),
+      occurred_at: row.occurred_at,
+      author_name:
+        typeof row.author_name === "string" && row.author_name.trim() !== ""
+          ? row.author_name.trim().slice(0, 80)
+          : null,
+      tool_excerpts: snippetsFromPayload(row.tool_excerpts),
+    });
+    if (out.length >= WORKLOAD_CONTEXT_MAX_CANDIDATES) break;
+  }
+  return out;
+}
+
+/**
+ * Bounded shared prior-work lookup. Outcome vocabulary only: a route the
+ * server does not have yet is `skipped`, an aborted deadline is `timeout`,
+ * anything else that fails is `error`. The caller owns the deadline so the
+ * overlap check and this lookup share one preflight budget.
+ */
+export async function fetchWorkloadContext(
+  query: { project_hint: string; path_hints: readonly string[] },
+  options: { signal?: AbortSignal } = {},
+  requester: WebRequester = request,
+): Promise<WorkloadContextLookup> {
+  const signal = options.signal;
+  try {
+    const payload = await requester<unknown>(
+      workloadContextQuery(query.project_hint, query.path_hints),
+      { method: "GET", signal },
+    );
+    if (!isRecord(payload) || !Array.isArray(payload.excerpts))
+      return { status: "error", candidates: [] };
+    const candidates = workloadContextFromEnvelope(payload);
+    return { status: candidates.length > 0 ? "hit" : "miss", candidates };
+  } catch (error) {
+    if (signal?.aborted) {
+      return { status: "timeout", candidates: [] };
+    }
+    if (
+      error instanceof WebApiError &&
+      (error.status === 404 || error.status === 405)
+    ) {
+      return { status: "skipped", candidates: [] };
+    }
+    return { status: "error", candidates: [] };
+  }
 }
 
 // --- Prompt-inefficiency measurements ---
@@ -1389,6 +1711,38 @@ export function liveOverlapFromEnvelope(payload: unknown): LiveOverlapPerson[] {
     }
   }
   return others;
+}
+
+export async function fetchLiveFingerprintOutcome(
+  query: { project_hint: string; path_hints?: readonly string[] },
+  options: { signal?: AbortSignal } = {},
+  requester: WebRequester = request,
+): Promise<{ status: HelmSharedLookupStatus; others: LiveOverlapPerson[] }> {
+  try {
+    const payload = await requester<unknown>(
+      liveFingerprintsQuery(query.project_hint, query.path_hints ?? []),
+      {
+        method: "GET",
+        signal: options.signal,
+      },
+    );
+    if (
+      !isRecord(payload) ||
+      !(
+        Array.isArray(payload.others) ||
+        (isRecord(payload.data) && Array.isArray(payload.data.others))
+      )
+    ) {
+      return { status: "error", others: [] };
+    }
+    const others = liveOverlapFromEnvelope(payload).slice(0, 20);
+    return { status: others.length ? "hit" : "miss", others };
+  } catch (error) {
+    if (options.signal?.aborted) return { status: "timeout", others: [] };
+    if (error instanceof WebApiError && [404, 405].includes(error.status))
+      return { status: "skipped", others: [] };
+    return { status: "error", others: [] };
+  }
 }
 
 export async function fetchLiveFingerprintOthers(

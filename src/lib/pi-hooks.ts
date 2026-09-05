@@ -32,6 +32,7 @@ export default function (pi: ExtensionAPI) {
         cwd,
         encoding: "utf-8",
         input: JSON.stringify({
+          provider: "pi",
           session_id: sessionId,
           cwd,
           hook_event_name: first ? "SessionStart" : "UserPromptSubmit",

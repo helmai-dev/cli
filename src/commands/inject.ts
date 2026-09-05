@@ -1,3 +1,13 @@
+import { sanitizeCaptureText } from "../lib/capture-sanitization.js";
+import { pathHintsFromPrompt } from "../lib/fingerprints.js";
+import {
+  readBoundedHookInput,
+  emptyHookActivity,
+  recordHookEvidence,
+  lookupHookPriorWork,
+  utf8Prefix,
+  finalizeHookActivity,
+} from "../lib/hook-evidence.js";
 /**
  * `helm inject` — coding-agent hook handler for team-context injection.
  * Reads the hook payload from stdin, resolves the cwd to a mapped helm-web
@@ -15,7 +25,8 @@
  * perturbs the prompt-cache prefix.
  *
  * On UserPromptSubmit, a linked machine also GETs live teammate overlap
- * (project_hint + optional path_hint only; the prompt stays local). A
+ * (project_hint + optional path_hint only). The context-pack query and
+ * observed activity use sanitized, bounded ask excerpts. A
  * non-empty `others` list adds one short notice on the same output channel
  * as the pack. Pack-hash dedupe never swallows that notice. Fail-open.
  */
@@ -27,7 +38,11 @@ import { fetchHelmWebProjects } from "../lib/api-web.js";
 import { decideAmbientIntervention } from "../lib/ambient-intervention.js";
 import { formatUpdateNotice } from "../lib/update-check.js";
 import { rememberPrompt } from "../lib/ambient-state.js";
-import { getApiUrl, getEnvironmentDir, loadCredentials } from "../lib/config.js";
+import {
+  getApiUrl,
+  getEnvironmentDir,
+  loadCredentials,
+} from "../lib/config.js";
 import {
   formatInterventionOutput,
   type HostOutput,
@@ -122,35 +137,54 @@ export function normalizeHookPayload(
     payload.input?.message,
     payload.message,
   ];
-  const prompt = promptCandidates.find((candidate) =>
-    typeof candidate === "string" && candidate.trim() !== ""
-  )?.trim() ?? null;
-  const output = explicitOutput ??
+  const prompt =
+    promptCandidates
+      .find(
+        (candidate) => typeof candidate === "string" && candidate.trim() !== "",
+      )
+      ?.trim() ?? null;
+  const output =
+    explicitOutput ??
     (typeof payload.cursor_version === "string" ||
-        payload.hook_event_name === "sessionStart" ||
-        payload.hook_event_name === "beforeSubmitPrompt"
+    payload.hook_event_name === "sessionStart" ||
+    payload.hook_event_name === "beforeSubmitPrompt"
       ? "cursor-json"
       : "claude-json");
   return {
-    cwd: payload.cwd ?? payload.workspace_roots?.[0] ?? payload.workspaceRoots?.[0] ?? process.cwd(),
-    sessionId: payload.session_id ?? payload.sessionId ?? payload.conversation_id ?? "unknown-session",
-    eventName: rawEventName ? (eventAliases[rawEventName] ?? rawEventName) : undefined,
+    cwd:
+      payload.cwd ??
+      payload.workspace_roots?.[0] ??
+      payload.workspaceRoots?.[0] ??
+      process.cwd(),
+    sessionId:
+      payload.session_id ??
+      payload.sessionId ??
+      payload.conversation_id ??
+      "unknown-session",
+    eventName: rawEventName
+      ? (eventAliases[rawEventName] ?? rawEventName)
+      : undefined,
     output,
     prompt,
-    query: prompt ?? "Current project decisions, constraints, active work, and relevant team learnings.",
-    provider: payload.provider ??
+    query:
+      sanitizeCaptureText(
+        prompt ??
+          "Current project decisions, constraints, active work, and relevant team learnings.",
+        { maxChars: 1999 },
+      ) ?? "Current project context",
+    provider:
+      payload.provider ??
       (format === "codex"
         ? "codex"
-        :
-      (output === "cursor-json"
-        ? "cursor"
-        : output === "gemini-json"
-          ? "gemini"
-          : output === "copilot-json"
-            ? "copilot"
-            : output === "plugin-json"
-              ? "plugin"
-              : "claude-compatible")),
+        : output === "cursor-json"
+          ? "cursor"
+          : output === "gemini-json"
+            ? "gemini"
+            : output === "copilot-json"
+              ? "copilot"
+              : output === "plugin-json"
+                ? "plugin"
+                : "claude-compatible"),
   };
 }
 
@@ -177,7 +211,9 @@ function emitIntervention(
   output: NormalizedHookPayload["output"],
   eventName?: string,
 ): void {
-  process.stdout.write(formatInterventionOutput(intervention, output, eventName));
+  process.stdout.write(
+    formatInterventionOutput(intervention, output, eventName),
+  );
 }
 
 function emptyIntervention(): ReturnType<typeof decideAmbientIntervention> {
@@ -188,14 +224,6 @@ function emptyIntervention(): ReturnType<typeof decideAmbientIntervention> {
     nextHash: null,
     acknowledgeSession: false,
   };
-}
-
-async function readStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf-8");
 }
 
 export async function resolveProjectId(cwd: string): Promise<string | null> {
@@ -225,7 +253,11 @@ export async function resolveProjectId(cwd: string): Promise<string | null> {
     if (!project) {
       return null;
     }
-    registerWebProject({ projectId: project.id, localPath: repository.root, name: project.name });
+    registerWebProject({
+      projectId: project.id,
+      localPath: repository.root,
+      name: project.name,
+    });
     return project.id;
   } catch {
     return null;
@@ -240,13 +272,24 @@ interface CachedPack {
 }
 
 function cachePath(projectId: string, query: string): string {
-  const queryHash = crypto.createHash("sha256").update(query).digest("hex").slice(0, 24);
-  return path.join(getEnvironmentDir(), "inject-cache", projectId, `${queryHash}.json`);
+  const queryHash = crypto
+    .createHash("sha256")
+    .update(query)
+    .digest("hex")
+    .slice(0, 24);
+  return path.join(
+    getEnvironmentDir(),
+    "inject-cache",
+    projectId,
+    `${queryHash}.json`,
+  );
 }
 
 function readCache(projectId: string, query: string): CachedPack | null {
   try {
-    return JSON.parse(fs.readFileSync(cachePath(projectId, query), "utf-8")) as CachedPack;
+    return JSON.parse(
+      fs.readFileSync(cachePath(projectId, query), "utf-8"),
+    ) as CachedPack;
   } catch {
     return null;
   }
@@ -262,35 +305,39 @@ function writeCache(projectId: string, query: string, payload: unknown): void {
   }
 }
 
-async function fetchContextPack(projectId: string, query: string): Promise<unknown | null> {
+async function fetchContextPack(
+  projectId: string,
+  query: string,
+): Promise<{ payload: unknown | null; failed: boolean }> {
   const credentials = loadCredentials();
   if (!credentials?.api_key) {
-    return null;
+    return { payload: null, failed: false };
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(`${getApiUrl()}/api/projects/${projectId}/context-pack`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Authorization: `Bearer ${credentials.api_key}`,
+    const response = await fetch(
+      `${getApiUrl()}/api/projects/${projectId}/context-pack`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          Authorization: `Bearer ${credentials.api_key}`,
+        },
+        body: JSON.stringify({
+          query,
+          purpose: "ambient_pre_prompt",
+          token_budget: 900,
+          limit: 6,
+        }),
+        signal: controller.signal,
       },
-      body: JSON.stringify({
-        query,
-        purpose: "ambient_pre_prompt",
-        token_budget: 900,
-        limit: 6,
-      }),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      return null;
-    }
-    return await response.json();
+    );
+    if (!response.ok) return { payload: null, failed: true };
+    return { payload: await response.json(), failed: false };
   } catch {
-    return null;
+    return { payload: null, failed: true };
   } finally {
     clearTimeout(timer);
   }
@@ -302,7 +349,11 @@ export function renderContextPack(payload: unknown): string | null {
     return null;
   }
   const root = payload as Record<string, unknown>;
-  const candidates = [root.items, root.memories, (root.data as Record<string, unknown>)?.items];
+  const candidates = [
+    root.items,
+    root.memories,
+    (root.data as Record<string, unknown>)?.items,
+  ];
   let items: Array<Record<string, unknown>> | null = null;
   for (const candidate of candidates) {
     if (Array.isArray(candidate) && candidate.length > 0) {
@@ -348,7 +399,7 @@ export function renderContextPack(payload: unknown): string | null {
   return [
     "<helm-team-context>",
     "Shared team context from Helm (auto-injected; teammates' agents contribute to and read from the same pool):",
-    body,
+    utf8Prefix(body, 7600),
     "</helm-team-context>",
   ].join("\n");
 }
@@ -398,9 +449,14 @@ function rememberSessionAck(sessionId: string): void {
   }
 }
 
-export function projectLabelFor(cwd: string, projectId: string | null): string | null {
+export function projectLabelFor(
+  cwd: string,
+  projectId: string | null,
+): string | null {
   if (projectId) {
-    const named = loadWebProjects().find((entry) => entry.projectId === projectId)?.name?.trim();
+    const named = loadWebProjects()
+      .find((entry) => entry.projectId === projectId)
+      ?.name?.trim();
     if (named) {
       return named;
     }
@@ -409,12 +465,15 @@ export function projectLabelFor(cwd: string, projectId: string | null): string |
   return base !== "" && base !== "." && base !== "/" ? base : null;
 }
 
-async function collectRepairs(eventName: string | undefined): Promise<string[]> {
+async function collectRepairs(
+  eventName: string | undefined,
+): Promise<string[]> {
   if (eventName !== "SessionStart") {
     return [];
   }
   try {
-    const { reconcileLiveRuntime } = await import("../lib/runtime-reconciler.js");
+    const { reconcileLiveRuntime } =
+      await import("../lib/runtime-reconciler.js");
     const repairs = await reconcileLiveRuntime();
     return repairs.map((repair) => repair.summary);
   } catch {
@@ -422,13 +481,19 @@ async function collectRepairs(eventName: string | undefined): Promise<string[]> 
   }
 }
 
-export async function injectCommand(options: InjectOptions = {}): Promise<void> {
-  let output: NormalizedHookPayload["output"] = "claude-json";
+export async function injectCommand(
+  options: InjectOptions = {},
+): Promise<void> {
+  const startedAt = Date.now();
+  let output: NormalizedHookPayload["output"] =
+    requestedOutput(options.format) ?? "claude-json";
   try {
-    const raw = await readStdin();
+    const raw = await readBoundedHookInput();
     const payload = (raw ? JSON.parse(raw) : {}) as HookPayload;
     const normalized = normalizeHookPayload(payload, options.format);
     output = normalized.output;
+    const activity = emptyHookActivity("context_emitted");
+    const priorWork = lookupHookPriorWork(normalized);
     const liveNotice = maybeLiveOverlapNotice({
       eventName: normalized.eventName,
       prompt: normalized.prompt,
@@ -451,18 +516,23 @@ export async function injectCommand(options: InjectOptions = {}): Promise<void> 
       const cached = readCache(projectId, normalized.query);
       if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
         pack = cached.payload;
+        activity.context_source = "cache";
       } else {
-        pack = await fetchContextPack(projectId, normalized.query);
+        const fetched = await fetchContextPack(projectId, normalized.query);
+        pack = fetched.payload;
+        activity.context_source = fetched.failed ? null : "remote";
+        activity.context_status = fetched.failed ? "error" : "empty";
         if (pack != null) {
           writeCache(projectId, normalized.query, pack);
         } else if (cached) {
           pack = cached.payload; // stale beats nothing, never blocks
+          activity.context_source = "stale_cache";
         }
       }
       rendered = renderContextPack(pack);
     }
 
-    const decided = decideAmbientIntervention({
+    let decided = decideAmbientIntervention({
       renderedPack: rendered,
       overlapNotice: await liveNotice,
       repairs: await repairs,
@@ -472,13 +542,43 @@ export async function injectCommand(options: InjectOptions = {}): Promise<void> 
       sessionAcknowledged: sessionAcknowledged(normalized.sessionId),
       updateNotice: formatUpdateNotice(),
     });
-    if (decided.nextHash && decided.nextHash !== lastInjectedHash(normalized.sessionId)) {
+    if (
+      decided.nextHash &&
+      decided.nextHash !== lastInjectedHash(normalized.sessionId)
+    ) {
       rememberInjectedHash(normalized.sessionId, decided.nextHash);
     }
     if (decided.acknowledgeSession) {
       rememberSessionAck(normalized.sessionId);
     }
+    const shared = await priorWork;
+    if (shared.text) {
+      decided = {
+        ...decided,
+        modelContext: [decided.modelContext, shared.text]
+          .filter(Boolean)
+          .join("\n\n"),
+      };
+    }
+    const completedActivity = finalizeHookActivity(activity, {
+      rendered,
+      modelContext: decided.modelContext,
+      actions: decided.actions.map((action) => action.kind),
+      shared,
+      hasProject: Boolean(projectId),
+    });
     emitIntervention(decided, output, normalized.eventName);
+    recordHookEvidence({
+      cwd: normalized.cwd,
+      sessionId: normalized.sessionId,
+      host: normalized.provider,
+      prompt: normalized.prompt,
+      paths: normalized.prompt
+        ? pathHintsFromPrompt(normalized.prompt, normalized.cwd)
+        : [],
+      startedAt,
+      activity: completedActivity,
+    });
   } catch {
     // Fail-open: a broken Helm must never break the user's harness.
     emitIntervention(emptyIntervention(), output);

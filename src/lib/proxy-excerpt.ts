@@ -113,10 +113,17 @@ export function latestExcerptToolResults(
     (message: unknown) =>
       isPlainRecord(message) && message.role === "assistant",
   );
-  return toolResultsFromRequestBody({ messages: [...references, ...messages] });
+  return toolResultsFromRequestBody({
+    messages: [...references, ...messages],
+  }).filter(
+    (result) =>
+      !/(?:^|[\\/])(?:\.env(?:\.[^\\/]*)?|id_rsa|id_ed25519|credentials(?:\.[^\\/]*)?)(?:$|[\\/])/i.test(
+        result.pathCandidate ?? "",
+      ),
+  );
 }
 
-function toolEntriesFromPayload(
+export function toolEntriesFromPayload(
   payload: ToolResultPayload | null,
 ): ToolResultEntry[] | null {
   const entries: ToolResultEntry[] = [];
@@ -164,7 +171,7 @@ export function excerptUploadFromParts(
       input.sessionKey !== null && input.sessionKey !== ""
         ? input.sessionKey.slice(0, 64)
         : null,
-    prompt_excerpt: sanitizeCaptureText(input.prompt, {
+    prompt_excerpt: sanitizeCaptureText(input.prompt ?? "", {
       maxChars: PROMPT_EXCERPT_MAX_CHARS - 1,
     }),
     tool_excerpts: toolEntriesFromPayload(input.payload),
@@ -179,7 +186,7 @@ export function excerptUploadFromParts(
   };
   while (
     Buffer.byteLength(JSON.stringify(excerpt), "utf8") >
-    EXCERPT_REQUEST_BUDGET_BYTES - 1024
+    EXCERPT_REQUEST_BUDGET_BYTES - 4096
   ) {
     if (excerpt.path_hints.length > 1) excerpt.path_hints.shift();
     else if (excerpt.tool_names.length > 1) excerpt.tool_names.shift();

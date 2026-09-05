@@ -41,6 +41,7 @@ import { listenProxy } from "../dist/lib/proxy-server.js";
 import { reportProxiedRequest, usageReuseFromStored } from "../dist/lib/proxy-report.js";
 import {
   hashWorkloadKey,
+  hashProviderRequest,
   lookupWork,
   parseWorkCache,
   readWorkCache,
@@ -972,12 +973,20 @@ test("wrap bind is a proxy token in the URL wrap already writes", () => {
   assert.equal(WRAP_BIND_HEADER, "x-helm-wrap-token");
 });
 
-test("lookup matches project, path, and tool and requires a replayable provider response", () => {
-  const key = { project_hint: "billing", path_hints: ["src/Foo.php"], tool_names: ["Read"] };
-  const record = {
+test("lookup requires an exact provider request signature and rejects legacy overlap-only cache", () => {
+  const key = {
     project_hint: "billing",
     path_hints: ["src/Foo.php"],
     tool_names: ["Read"],
+  };
+  const signature = hashProviderRequest({
+    provider: "anthropic",
+    upstreamTarget: "https://api.anthropic.com/v1/messages",
+    model: "claude-sonnet-4-20250514",
+    body: "actual provider request",
+  });
+  const record = {
+    ...key,
     session_key: "abc",
     model: "claude-sonnet-4-20250514",
     cost_usd: 0.0123,
@@ -986,45 +995,42 @@ test("lookup matches project, path, and tool and requires a replayable provider 
     cache_write_tokens: 0,
     cache_read_tokens: 0,
     occurred_at: NOW.toISOString(),
-    payload: { kind: "tool_results", results: [{ tool_name: "Read", path_hint: "src/Foo.php", content: TOOL_RESULT }] },
+    payload: null,
     request_hash: hashWorkloadKey(key),
-    response: { id: "msg_cached", content: [{ type: "text", text: "cached answer" }] },
+    request_signature: signature,
+    request_id: "123e4567-e89b-42d3-a456-426614174000",
+    response: {
+      id: "msg_cached",
+      content: [{ type: "text", text: "cached answer" }],
+    },
   };
   const cache = { kind: WORK_CACHE_KIND, records: [record], reuses: [] };
-  const hit = lookupWork({ cache, key, now: NOW });
+  const hit = lookupWork({ cache, key, now: NOW, requestSignature: signature });
   assert.equal(hit.kind, "reuse");
   assert.equal(hit.record.cost_usd, 0.0123);
-
+  assert.equal(lookupWork({ cache, key, now: NOW }).kind, "forward");
+  assert.equal(
+    lookupWork({ cache, key, now: NOW, requestSignature: "a".repeat(64) }).kind,
+    "forward",
+  );
   assert.equal(
     lookupWork({
-      cache,
-      key: { project_hint: "billing", path_hints: ["src/Bar.php"], tool_names: ["Read"] },
+      cache: { ...cache, records: [{ ...record, request_signature: null }] },
+      key,
       now: NOW,
+      requestSignature: signature,
     }).kind,
     "forward",
   );
   assert.equal(
     lookupWork({
-      cache,
-      key: { project_hint: "billing", path_hints: ["src/Foo.php"], tool_names: ["Grep"] },
-      now: NOW,
-    }).kind,
-    "forward",
-  );
-  assert.equal(
-    lookupWork({
-      cache,
+      cache: {
+        ...cache,
+        records: [{ ...record, response: null, stream_body: null }],
+      },
       key,
       now: NOW,
-    }).kind,
-    "reuse",
-    "a different ask of the same project/path/tool still reuses",
-  );
-  assert.equal(
-    lookupWork({
-      cache: { kind: WORK_CACHE_KIND, records: [{ ...record, response: null, stream_body: null }], reuses: [] },
-      key,
-      now: NOW,
+      requestSignature: signature,
     }).reason,
     "no_replay",
   );
@@ -1175,14 +1181,9 @@ test("first proxied request stores a work record and injects the wrap line", asy
     assert.equal(cache.records[0].cache_read_tokens, 0);
     assert.equal(cache.records[0].payload.kind, "tool_results");
     assert.equal(cache.records[0].payload.results[0].content, TOOL_RESULT);
-    assert.equal(
-      cache.records[0].request_hash,
-      hashWorkloadKey({
-        project_hint: "billing",
-        path_hints: ["src/Foo.php"],
-        tool_names: ["Read"],
-      }),
-    );
+    assert.equal(cache.records[0].request_hash, null);
+    assert.match(cache.records[0].request_signature, /^[a-f0-9]{64}$/);
+    assert.match(cache.records[0].request_id, /^[a-f0-9-]{36}$/);
     const cacheText = fs.readFileSync(cachePath, "utf8");
     assert.equal(cacheText.includes(SECRET), false);
     assert.equal(cacheText.includes("\"prompt\""), false);
@@ -1329,7 +1330,8 @@ test("an identical streaming request replays stored SSE and records a reuse", as
   const sse =
     'data: {"type":"message_start","message":{"id":"msg_stream","usage":{"input_tokens":11,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}\n\n' +
     'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"ok"}}\n\n' +
-    'data: {"type":"message_delta","usage":{"output_tokens":7}}\n\n';
+    'data: {"type":"message_delta","usage":{"output_tokens":7}}\n\n' +
+    'data: {"type":"message_stop"}\n\n';
   const provider = await listenMock((req, res) => {
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
@@ -1545,7 +1547,7 @@ test("matching project/path/tool without the wrap bind forwards and does not ret
   }
 });
 
-test("wrap reuses the same project, path, and tool when the ask and tool ids differ", async () => {
+test("wrap forwards when the ask and tool ids differ despite matching project/path/tool", async () => {
   const cachePath = tempWorkCachePath();
   const logs = [];
   const providerHits = [];
@@ -1617,12 +1619,12 @@ test("wrap reuses the same project, path, and tool when the ask and tool ids dif
     const reused = await second.json();
     await proxy.reported;
 
-    assert.equal(providerHits.length, 1);
-    assert.equal(reused.id, "helm_reuse");
-    assert.equal(reused.usage.input_tokens, 0);
-    assert.ok(logs.some((line) => line.includes("REUSED PRIOR WORK")));
-    assert.equal(readWorkCache(cachePath).reuses.length, 1);
-    assert.equal(helmPosts.filter((post) => post.kind === "reuses").length, 1);
+    assert.equal(providerHits.length, 2);
+    assert.equal(reused.id, "msg_workload");
+    assert.equal(reused.usage.input_tokens, 11);
+    assert.equal(logs.some((line) => line.includes("REUSED PRIOR WORK")), false);
+    assert.equal(readWorkCache(cachePath).reuses.length, 0);
+    assert.equal(helmPosts.filter((post) => post.kind === "reuses").length, 0);
     const skipExcerpts = helmPosts.filter((post) => post.kind === "excerpt");
     assert.equal(skipExcerpts.length, 2);
     assert.equal(skipExcerpts[1].body.excerpt.prompt_excerpt, "different ask");

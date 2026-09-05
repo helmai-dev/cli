@@ -373,7 +373,9 @@ program
 
 // When spawned as the background daemon or proxy, run that loop directly and
 // skip Commander.js (avoids Bun compiled-binary arg issues).
-if (process.env.HELM_PROXY_MODE === "1") {
+if (process.env.HELM_EXCERPT_SYNC_MODE === "1") {
+  import("./lib/excerpt-sync.js").then((m) => m.runExcerptSyncWorker()).catch(() => {});
+} else if (process.env.HELM_PROXY_MODE === "1") {
   import("./commands/proxy.js").then((m) => m.runProxyChildFromEnv());
 } else if (process.env.HELM_DAEMON_MODE === "1") {
   import("./lib/daemon-loop-web.js").then((m) => m.runWebDaemonLoop());

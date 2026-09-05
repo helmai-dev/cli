@@ -99,3 +99,32 @@ test("only the latest tool turn is submitted and references retain tool names", 
   parsed.messages.push({ role: "user", content: "Next task" });
   assert.deepEqual(latestExcerptToolResults(parsed), []);
 });
+
+test("sensitive paths outside the project are excluded before relativization", () => {
+  const results = latestExcerptToolResults({
+    messages: [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "private-read",
+            name: "Read",
+            input: { file_path: "/outside/.env.production" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "private-read",
+            content: "bare secret values",
+          },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(results, []);
+});

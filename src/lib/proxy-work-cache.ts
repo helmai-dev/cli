@@ -37,6 +37,10 @@ export interface WorkRecord {
   readonly payload: ToolResultPayload | null;
   /** SHA-256 of project_hint + sorted path_hints + sorted tool_names. Lookup does not require this to match. */
   readonly request_hash: string | null;
+  /** Exact outbound provider request signature. Legacy records have none. */
+  readonly request_signature?: string | null;
+  /** Original intercepted request whose response may be replayed. */
+  readonly request_id?: string | null;
   /** Prior provider response. Present only for non-streaming JSON responses. */
   readonly response: Record<string, unknown> | null;
   /** Prior SSE bytes. Present only for streaming responses that fit the replay budget. */
@@ -97,12 +101,95 @@ function uniqueStrings(values: readonly string[]): string[] {
   return out;
 }
 
-function setsOverlap(left: readonly string[], right: readonly string[]): boolean {
-  if (left.length === 0 || right.length === 0) {
-    return false;
+/** Hash the exact bytes sent upstream; only the digest is persisted. */
+export function hashProviderRequest(input: {
+  provider: "anthropic" | "openai";
+  upstreamTarget: string;
+  model: string | null;
+  body: string | Uint8Array;
+  method?: string;
+  headers?: Record<string, string>;
+}): string {
+  const headers = Object.entries(input.headers ?? {})
+    .map(([name, value]) => [name.toLowerCase(), value] as const)
+    .sort(([leftName, leftValue], [rightName, rightValue]) =>
+      leftName < rightName
+        ? -1
+        : leftName > rightName
+          ? 1
+          : leftValue < rightValue
+            ? -1
+            : leftValue > rightValue
+              ? 1
+              : 0,
+    );
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        "helm.provider-request.v2",
+        input.provider,
+        input.upstreamTarget,
+        input.model,
+        input.method ?? "POST",
+        headers,
+      ]),
+    )
+    .update("\0")
+    .update(input.body)
+    .digest("hex");
+}
+
+function containsToolCall(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsToolCall);
+  if (!isPlainRecord(value)) return false;
+  if (
+    typeof value.type === "string" &&
+    /(?:tool_use|tool_call|function_call|input_json_delta)/.test(value.type)
+  )
+    return true;
+  if (
+    value.stop_reason === "tool_use" ||
+    value.finish_reason === "tool_calls" ||
+    value.finish_reason === "function_call"
+  )
+    return true;
+  if (
+    (value.tool_calls != null &&
+      (!Array.isArray(value.tool_calls) || value.tool_calls.length > 0)) ||
+    value.function_call != null
+  )
+    return true;
+  return Object.values(value).some(containsToolCall);
+}
+
+function safeStream(body: string): boolean {
+  let hasData = false;
+  let completed = false;
+  for (const frame of body.split(/\r?\n\r?\n/)) {
+    const data = frame
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n");
+    if (!data) continue;
+    if (data === "[DONE]") {
+      completed = true;
+      continue;
+    }
+    try {
+      const parsed: unknown = JSON.parse(data);
+      if (!isPlainRecord(parsed) || containsToolCall(parsed)) return false;
+      hasData = true;
+      if (
+        parsed.type === "message_stop" ||
+        parsed.type === "response.completed"
+      )
+        completed = true;
+    } catch {
+      return false;
+    }
   }
-  const rightSet = new Set(right);
-  return left.some((value) => rightSet.has(value));
+  return hasData && completed;
 }
 
 export function workKeyFromFacts(input: {
@@ -150,7 +237,11 @@ export function emptyWorkCache(): WorkCacheFile {
 }
 
 function parseToolResultEntry(value: unknown): ToolResultEntry | null {
-  if (!isPlainRecord(value) || typeof value.tool_name !== "string" || value.tool_name === "") {
+  if (
+    !isPlainRecord(value) ||
+    typeof value.tool_name !== "string" ||
+    value.tool_name === ""
+  ) {
     return null;
   }
   if (typeof value.content !== "string" || value.content === "") {
@@ -161,13 +252,20 @@ function parseToolResultEntry(value: unknown): ToolResultEntry | null {
   }
   return {
     tool_name: value.tool_name,
-    path_hint: typeof value.path_hint === "string" && value.path_hint !== "" ? value.path_hint : null,
+    path_hint:
+      typeof value.path_hint === "string" && value.path_hint !== ""
+        ? value.path_hint
+        : null,
     content: value.content,
   };
 }
 
 function parsePayload(value: unknown): ToolResultPayload | null {
-  if (!isPlainRecord(value) || value.kind !== "tool_results" || !Array.isArray(value.results)) {
+  if (
+    !isPlainRecord(value) ||
+    value.kind !== "tool_results" ||
+    !Array.isArray(value.results)
+  ) {
     return null;
   }
   const results: ToolResultEntry[] = [];
@@ -184,7 +282,11 @@ function parsePayload(value: unknown): ToolResultPayload | null {
 }
 
 function parseRecord(value: unknown): WorkRecord | null {
-  if (!isPlainRecord(value) || typeof value.project_hint !== "string" || value.project_hint === "") {
+  if (
+    !isPlainRecord(value) ||
+    typeof value.project_hint !== "string" ||
+    value.project_hint === ""
+  ) {
     return null;
   }
   if (!Array.isArray(value.path_hints) || !Array.isArray(value.tool_names)) {
@@ -193,35 +295,51 @@ function parseRecord(value: unknown): WorkRecord | null {
   if (typeof value.session_key !== "string" || value.session_key === "") {
     return null;
   }
-  if (typeof value.occurred_at !== "string" || !Number.isFinite(Date.parse(value.occurred_at))) {
+  if (
+    typeof value.occurred_at !== "string" ||
+    !Number.isFinite(Date.parse(value.occurred_at))
+  ) {
     return null;
   }
-  const path_hints = value.path_hints.filter((item): item is string => typeof item === "string" && item !== "");
-  const tool_names = value.tool_names.filter((item): item is string => typeof item === "string" && item !== "");
+  const path_hints = value.path_hints.filter(
+    (item): item is string => typeof item === "string" && item !== "",
+  );
+  const tool_names = value.tool_names.filter(
+    (item): item is string => typeof item === "string" && item !== "",
+  );
   const cost_usd =
-    typeof value.cost_usd === "number" && Number.isFinite(value.cost_usd) ? value.cost_usd : null;
+    typeof value.cost_usd === "number" && Number.isFinite(value.cost_usd)
+      ? value.cost_usd
+      : null;
   const input_tokens =
-    typeof value.input_tokens === "number" && Number.isFinite(value.input_tokens)
+    typeof value.input_tokens === "number" &&
+    Number.isFinite(value.input_tokens)
       ? Math.floor(value.input_tokens)
       : null;
   const output_tokens =
-    typeof value.output_tokens === "number" && Number.isFinite(value.output_tokens)
+    typeof value.output_tokens === "number" &&
+    Number.isFinite(value.output_tokens)
       ? Math.floor(value.output_tokens)
       : null;
   const cache_write_tokens =
-    typeof value.cache_write_tokens === "number" && Number.isFinite(value.cache_write_tokens)
+    typeof value.cache_write_tokens === "number" &&
+    Number.isFinite(value.cache_write_tokens)
       ? Math.floor(value.cache_write_tokens)
       : null;
   const cache_read_tokens =
-    typeof value.cache_read_tokens === "number" && Number.isFinite(value.cache_read_tokens)
+    typeof value.cache_read_tokens === "number" &&
+    Number.isFinite(value.cache_read_tokens)
       ? Math.floor(value.cache_read_tokens)
       : null;
   const model =
-    typeof value.model === "string" && value.model !== "" && value.model !== "unknown"
+    typeof value.model === "string" &&
+    value.model !== "" &&
+    value.model !== "unknown"
       ? value.model
       : null;
   const request_hash =
-    typeof value.request_hash === "string" && /^[0-9a-f]{64}$/.test(value.request_hash)
+    typeof value.request_hash === "string" &&
+    /^[0-9a-f]{64}$/.test(value.request_hash)
       ? value.request_hash
       : null;
   return {
@@ -238,8 +356,23 @@ function parseRecord(value: unknown): WorkRecord | null {
     occurred_at: value.occurred_at,
     payload: parsePayload(value.payload),
     request_hash,
+    request_signature:
+      typeof value.request_signature === "string" &&
+      /^[0-9a-f]{64}$/.test(value.request_signature)
+        ? value.request_signature
+        : null,
+    request_id:
+      typeof value.request_id === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        value.request_id,
+      )
+        ? value.request_id
+        : null,
     response: isPlainRecord(value.response) ? value.response : null,
-    stream_body: typeof value.stream_body === "string" && value.stream_body !== "" ? value.stream_body : null,
+    stream_body:
+      typeof value.stream_body === "string" && value.stream_body !== ""
+        ? value.stream_body
+        : null,
   };
 }
 
@@ -247,7 +380,10 @@ function parseReuse(value: unknown): WorkReuse | null {
   if (!isPlainRecord(value) || typeof value.reused_at !== "string") {
     return null;
   }
-  if (typeof value.project_hint !== "string" || typeof value.original_occurred_at !== "string") {
+  if (
+    typeof value.project_hint !== "string" ||
+    typeof value.original_occurred_at !== "string"
+  ) {
     return null;
   }
   if (!Array.isArray(value.path_hints) || !Array.isArray(value.tool_names)) {
@@ -260,8 +396,12 @@ function parseReuse(value: unknown): WorkReuse | null {
   return {
     reused_at: value.reused_at,
     project_hint: value.project_hint,
-    path_hints: value.path_hints.filter((item): item is string => typeof item === "string"),
-    tool_names: value.tool_names.filter((item): item is string => typeof item === "string"),
+    path_hints: value.path_hints.filter(
+      (item): item is string => typeof item === "string",
+    ),
+    tool_names: value.tool_names.filter(
+      (item): item is string => typeof item === "string",
+    ),
     avoided_usd,
     original_occurred_at: value.original_occurred_at,
   };
@@ -272,12 +412,46 @@ export function parseWorkCache(value: unknown): WorkCacheFile {
     return emptyWorkCache();
   }
   const records = Array.isArray(value.records)
-    ? value.records.map(parseRecord).filter((record): record is WorkRecord => record !== null)
+    ? value.records
+        .map(parseRecord)
+        .filter((record): record is WorkRecord => record !== null)
     : [];
   const reuses = Array.isArray(value.reuses)
-    ? value.reuses.map(parseReuse).filter((reuse): reuse is WorkReuse => reuse !== null)
+    ? value.reuses
+        .map(parseReuse)
+        .filter((reuse): reuse is WorkReuse => reuse !== null)
     : [];
   return { kind: WORK_CACHE_KIND, records, reuses };
+}
+
+/** Read diagnostics for honest lookup telemetry; an absent cache is a normal miss. */
+export function readWorkCacheResult(filePath: string): {
+  cache: WorkCacheFile;
+  error: boolean;
+} {
+  try {
+    const raw: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (
+      !isPlainRecord(raw) ||
+      raw.kind !== WORK_CACHE_KIND ||
+      !Array.isArray(raw.records) ||
+      !Array.isArray(raw.reuses)
+    ) {
+      return { cache: emptyWorkCache(), error: true };
+    }
+    const cache = parseWorkCache(raw);
+    if (
+      cache.records.length !== raw.records.length ||
+      cache.reuses.length !== raw.reuses.length
+    ) {
+      return { cache: emptyWorkCache(), error: true };
+    }
+    return { cache, error: false };
+  } catch (error) {
+    const missing =
+      error instanceof Error && "code" in error && error.code === "ENOENT";
+    return { cache: emptyWorkCache(), error: !missing };
+  }
 }
 
 export function readWorkCache(filePath: string): WorkCacheFile {
@@ -304,9 +478,16 @@ export function lookupWork(input: {
   key: WorkKey | null;
   now: Date;
   windowMs?: number;
+  requestSignature?: string | null;
 }): WorkLookup {
-  if (input.key === null || input.key.tool_names.length === 0 || input.key.path_hints.length === 0) {
+  if (input.key === null) {
     return { kind: "forward", reason: "no_facts" };
+  }
+  if (
+    !input.requestSignature ||
+    !/^[0-9a-f]{64}$/.test(input.requestSignature)
+  ) {
+    return { kind: "forward", reason: "no_hit" };
   }
   const windowMs = input.windowMs ?? WORK_CACHE_WINDOW_MS;
   const nowMs = input.now.getTime();
@@ -315,17 +496,23 @@ export function lookupWork(input: {
     if (record.project_hint !== input.key.project_hint) {
       continue;
     }
-    if (!setsOverlap(record.path_hints, input.key.path_hints)) {
-      continue;
-    }
-    if (!setsOverlap(record.tool_names, input.key.tool_names)) {
+    if (
+      record.request_signature !== input.requestSignature ||
+      !record.request_id ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        record.request_id,
+      )
+    ) {
       continue;
     }
     const then = Date.parse(record.occurred_at);
     if (!Number.isFinite(then) || nowMs - then > windowMs || nowMs < then) {
       continue;
     }
-    if (latest === null || Date.parse(record.occurred_at) >= Date.parse(latest.occurred_at)) {
+    if (
+      latest === null ||
+      Date.parse(record.occurred_at) >= Date.parse(latest.occurred_at)
+    ) {
       latest = record;
     }
   }
@@ -333,7 +520,11 @@ export function lookupWork(input: {
     return { kind: "forward", reason: "no_hit" };
   }
   const hasReplay = latest.response != null || Boolean(latest.stream_body);
-  if (!hasReplay) {
+  if (
+    !hasReplay ||
+    (latest.response != null && containsToolCall(latest.response)) ||
+    (latest.stream_body && !safeStream(latest.stream_body))
+  ) {
     return { kind: "forward", reason: "no_replay" };
   }
   return { kind: "reuse", record: latest };
@@ -357,7 +548,9 @@ export interface WorkReuseSummary {
 
 /** Count stored reuses. Dollars are the sum of avoided_usd that already exist.
  * Null when no reuse stored a cost. Does not invent a rate. */
-export function summarizeWorkReuses(cache: WorkCacheFile): WorkReuseSummary | null {
+export function summarizeWorkReuses(
+  cache: WorkCacheFile,
+): WorkReuseSummary | null {
   if (cache.reuses.length === 0) {
     return null;
   }
@@ -430,13 +623,17 @@ export function replayResponseBody(input: {
   response: Record<string, unknown>;
   notice: string;
 }): Record<string, unknown> | null {
+  if (containsToolCall(input.response)) return null;
   const response = structuredClone(input.response);
   if (input.provider === "anthropic") {
     if (!Array.isArray(response.content)) {
       return null;
     }
     response.id = "helm_reuse";
-    response.content = [{ type: "text", text: input.notice }, ...response.content];
+    response.content = [
+      { type: "text", text: input.notice },
+      ...response.content,
+    ];
     response.usage = { input_tokens: 0, output_tokens: 0 };
     return response;
   }
@@ -444,7 +641,10 @@ export function replayResponseBody(input: {
     return null;
   }
   const choice = response.choices[0];
-  if (!isPlainRecord(choice.message) || typeof choice.message.content !== "string") {
+  if (
+    !isPlainRecord(choice.message) ||
+    typeof choice.message.content !== "string"
+  ) {
     return null;
   }
   response.id = "helm_reuse";

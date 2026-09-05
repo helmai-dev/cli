@@ -35,6 +35,7 @@ export default function (amp: PluginAPI) {
         cwd: workspace,
         encoding: "utf-8",
         input: JSON.stringify({
+          provider: "amp",
           session_id: sessionId,
           cwd: workspace,
           hook_event_name: first ? "SessionStart" : "UserPromptSubmit",
