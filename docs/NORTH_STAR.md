@@ -60,3 +60,5 @@ Updated 2026-08-21. The excerpt lock in `helm-web docs/slice-6-readable-excerpts
 3. Are we sending bounded excerpts / fingerprints / cost / model / path — never whole transcripts or credentials?
 4. Did we invent a savings dollar?
 5. Does every savings number trace to a stored measurement, paired with a shipped-work signal?
+
+How to evaluate GTM / distribution shape: [`docs/GTM.md`](GTM.md).
