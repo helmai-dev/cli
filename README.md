@@ -176,6 +176,10 @@ require `helm map` or another per-project CLI step.
 
 `helm wrap claude` or `helm wrap codex` starts `helm proxy` if needed.
 Claude Code honors `ANTHROPIC_BASE_URL` in `~/.claude/settings.json`.
+Wrap also sets `ENABLE_TOOL_SEARCH=true`: Claude Code otherwise loads every
+MCP tool schema up front when `ANTHROPIC_BASE_URL` is not Anthropic, which
+can fill the context window before the first turn. The proxy forwards
+`tool_reference` blocks and `anthropic-beta` headers unchanged.
 Codex ChatGPT login cannot use a reserved `[model_providers.openai]`
 override — Helm strips that table so Codex can start, and leaves ChatGPT
 auth on the official Codex backend. `helm unwrap` removes Helm's wrap

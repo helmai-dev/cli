@@ -10,6 +10,7 @@ import {
   stripReservedOpenaiProvider,
 } from "../lib/codex-proxy-env.js";
 import {
+  claudeToolSearchEnabled,
   mergeClaudeProxyEnv,
   restoreClaudeProxyEnv,
 } from "../lib/claude-proxy-env.js";
@@ -154,20 +155,32 @@ export async function wrapAgent(agent: WrapAgent, runtime: WrapRuntime): Promise
   const existing = runtime.readWrap(agent);
   const proxy = await runtime.ensureProxy();
   const proxyUrl = proxyUrlFor(agent, proxy.host, proxy.port, proxy.wrapToken);
-  if (existing && agentIsPointingAtProxy(agent, runtime, proxyUrl)) {
+  if (
+    existing &&
+    agentIsPointingAtProxy(agent, runtime, proxyUrl) &&
+    claudeToolSearchEnabled(runtime.readClaudeSettings())
+  ) {
     return { agent, proxyUrl, alreadyWrapped: true, repaired: false };
   }
 
   const merged = mergeClaudeProxyEnv(runtime.readClaudeSettings(), proxyUrl);
   runtime.writeClaudeSettings(merged.settings);
+  const previous = {
+    ...(existing?.previous ?? {
+      claude_env_anthropic_base_url: merged.previous,
+      claude_had_env_key: merged.previous !== undefined,
+    }),
+  };
+  if (previous.claude_tool_search_managed !== true) {
+    previous.claude_env_enable_tool_search = merged.previousToolSearch;
+    previous.claude_had_tool_search_key = merged.previousToolSearch !== undefined;
+    previous.claude_tool_search_managed = true;
+  }
   runtime.writeWrap({
     agent,
     proxy_url: proxyUrl,
     wrapped_at: existing?.wrapped_at ?? new Date().toISOString(),
-    previous: existing?.previous ?? {
-      claude_env_anthropic_base_url: merged.previous,
-      claude_had_env_key: merged.previous !== undefined,
-    },
+    previous,
   });
   return { agent, proxyUrl, alreadyWrapped: false, repaired: existing !== null };
 }
@@ -182,7 +195,13 @@ export async function unwrapAgent(agent: WrapAgent, runtime: WrapRuntime): Promi
     const previous = record.previous.claude_had_env_key
       ? record.previous.claude_env_anthropic_base_url
       : undefined;
-    runtime.writeClaudeSettings(restoreClaudeProxyEnv(runtime.readClaudeSettings(), previous));
+    runtime.writeClaudeSettings(restoreClaudeProxyEnv(runtime.readClaudeSettings(), {
+      anthropicBaseUrl: previous,
+      toolSearch: record.previous.claude_had_tool_search_key
+        ? record.previous.claude_env_enable_tool_search
+        : undefined,
+      restoreToolSearch: record.previous.claude_tool_search_managed === true,
+    }));
     runtime.clearWrap(agent);
     return { agent, restored: true };
   }
@@ -240,11 +259,13 @@ export async function wrapCommand(rawAgent: string, options: { undo?: boolean } 
   if (result.repaired) {
     console.log(chalk.green(`\n  ✓ Repaired ${agent} wrap through Helm`));
     console.log(chalk.gray(`    ${envName}=${result.proxyUrl}`));
+    console.log(chalk.gray(`    ENABLE_TOOL_SEARCH=true`));
     console.log(chalk.gray(`    Restart any running ${agent} session.\n`));
     return;
   }
   console.log(chalk.green(`\n  ✓ ${agent} now sends model requests through Helm`));
   console.log(chalk.gray(`    ${envName}=${result.proxyUrl}`));
+  console.log(chalk.gray(`    ENABLE_TOOL_SEARCH=true`));
   console.log(chalk.gray(`    Restart any running ${agent} session.`));
   console.log(chalk.gray(`    Undo: helm unwrap ${agent}\n`));
 }
