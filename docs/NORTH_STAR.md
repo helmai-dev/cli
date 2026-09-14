@@ -62,3 +62,6 @@ Updated 2026-08-21. The excerpt lock in `helm-web docs/slice-6-readable-excerpts
 5. Does every savings number trace to a stored measurement, paired with a shipped-work signal?
 
 How to evaluate GTM / distribution shape: [`docs/GTM.md`](GTM.md).
+
+
+Also read `docs/HANDOFF.md` — compaction is waste; handoff before compact; `/handoff` / `/handon`.
