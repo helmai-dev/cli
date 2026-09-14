@@ -96,18 +96,45 @@ test("claude wrap writes ANTHROPIC_BASE_URL and unwrap restores the previous val
     "http://127.0.0.1:8787",
   );
   assert.equal(previous.settings.env.ANTHROPIC_BASE_URL, "http://127.0.0.1:8787");
+  assert.equal(previous.settings.env.ENABLE_TOOL_SEARCH, "true");
   assert.equal(previous.settings.env.KEEP, "yes");
   assert.equal(previous.settings.model, "opus");
   assert.equal(previous.previous, "https://corp.example/anthropic");
+  assert.equal(previous.previousToolSearch, undefined);
 
-  const restored = restoreClaudeProxyEnv(previous.settings, previous.previous);
+  const restored = restoreClaudeProxyEnv(previous.settings, {
+    anthropicBaseUrl: previous.previous,
+    toolSearch: previous.previousToolSearch,
+    restoreToolSearch: true,
+  });
   assert.equal(restored.env.ANTHROPIC_BASE_URL, "https://corp.example/anthropic");
   assert.equal(restored.env.KEEP, "yes");
+  assert.equal(restored.env.ENABLE_TOOL_SEARCH, undefined);
 
   const fresh = mergeClaudeProxyEnv({}, "http://127.0.0.1:8787");
   assert.equal(fresh.previous, undefined);
-  const cleared = restoreClaudeProxyEnv(fresh.settings, fresh.previous);
+  assert.equal(fresh.settings.env.ENABLE_TOOL_SEARCH, "true");
+  const cleared = restoreClaudeProxyEnv(fresh.settings, {
+    anthropicBaseUrl: fresh.previous,
+    toolSearch: fresh.previousToolSearch,
+    restoreToolSearch: true,
+  });
   assert.equal(cleared.env, undefined);
+});
+
+test("claude wrap restores a prior ENABLE_TOOL_SEARCH value on unwrap", () => {
+  const merged = mergeClaudeProxyEnv(
+    { env: { ENABLE_TOOL_SEARCH: "auto" } },
+    "http://127.0.0.1:8787",
+  );
+  assert.equal(merged.previousToolSearch, "auto");
+  const restored = restoreClaudeProxyEnv(merged.settings, {
+    anthropicBaseUrl: merged.previous,
+    toolSearch: merged.previousToolSearch,
+    restoreToolSearch: true,
+  });
+  assert.equal(restored.env.ENABLE_TOOL_SEARCH, "auto");
+  assert.equal(restored.env.ANTHROPIC_BASE_URL, undefined);
 });
 
 test("codex wrap strips reserved [model_providers.openai] and leaves the rest of the file", () => {
@@ -144,11 +171,34 @@ test("wrap then unwrap restores agent settings through the command helpers", asy
   const wrapped = await wrapAgent("claude", runtime);
   assert.equal(wrapped.proxyUrl, `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}`);
   assert.equal(state.claude.env.ANTHROPIC_BASE_URL, `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}`);
+  assert.equal(state.claude.env.ENABLE_TOOL_SEARCH, "true");
 
   const unwrapped = await unwrapAgent("claude", runtime);
   assert.equal(unwrapped.restored, true);
   assert.equal(state.claude.env.ANTHROPIC_BASE_URL, "https://old.example");
+  assert.equal(state.claude.env.ENABLE_TOOL_SEARCH, undefined);
   assert.equal(state.wraps.claude, undefined);
+});
+
+test("existing Claude wrap without ENABLE_TOOL_SEARCH is repaired", async () => {
+  const proxyUrl = `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}`;
+  const { state, runtime } = memoryRuntime({
+    claude: { env: { ANTHROPIC_BASE_URL: proxyUrl } },
+    wraps: {
+      claude: {
+        agent: "claude",
+        proxy_url: proxyUrl,
+        wrapped_at: "2026-08-01T00:00:00.000Z",
+        previous: { claude_had_env_key: false },
+      },
+    },
+  });
+  const result = await wrapAgent("claude", runtime);
+  assert.equal(result.alreadyWrapped, false);
+  assert.equal(result.repaired, true);
+  assert.equal(state.claude.env.ENABLE_TOOL_SEARCH, "true");
+  assert.equal(state.wraps.claude.previous.claude_tool_search_managed, true);
+  assert.equal(state.wraps.claude.previous.claude_had_tool_search_key, false);
 });
 
 test("wrap twice keeps the same bind URL", async () => {
@@ -270,6 +320,26 @@ test("wrap without a proxy token keeps the bare proxy URL", async () => {
   const wrapped = await wrapAgent("claude", runtime);
   assert.equal(wrapped.proxyUrl, "http://127.0.0.1:8787");
   assert.equal(state.claude.env.ANTHROPIC_BASE_URL, "http://127.0.0.1:8787");
+  assert.equal(state.claude.env.ENABLE_TOOL_SEARCH, "true");
+});
+
+test("unwrap of a pre-tool-search wrap record leaves ENABLE_TOOL_SEARCH alone", async () => {
+  const proxyUrl = `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}`;
+  const { state, runtime } = memoryRuntime({
+    claude: { env: { ANTHROPIC_BASE_URL: proxyUrl, ENABLE_TOOL_SEARCH: "true" } },
+    wraps: {
+      claude: {
+        agent: "claude",
+        proxy_url: proxyUrl,
+        wrapped_at: "2026-08-01T00:00:00.000Z",
+        previous: { claude_had_env_key: false },
+      },
+    },
+  });
+  const result = await unwrapAgent("claude", runtime);
+  assert.equal(result.restored, true);
+  assert.equal(state.claude.env.ENABLE_TOOL_SEARCH, "true");
+  assert.equal(state.claude.env.ANTHROPIC_BASE_URL, undefined);
 });
 
 test("unwrap is a no-op when the agent was never wrapped", async () => {

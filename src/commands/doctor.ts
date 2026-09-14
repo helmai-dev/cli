@@ -10,7 +10,7 @@ import {
   type WrapAgent,
 } from "../lib/proxy-state.js";
 import { reservedOpenaiProviderPresent } from "../lib/codex-proxy-env.js";
-import { ANTHROPIC_BASE_URL } from "../lib/claude-proxy-env.js";
+import { ANTHROPIC_BASE_URL, claudeToolSearchEnabled } from "../lib/claude-proxy-env.js";
 import { readClaudeSettings } from "../lib/claude-settings.js";
 import { loadWebProjects } from "../lib/web-projects.js";
 import {
@@ -49,12 +49,15 @@ function wrapCheck(agent: WrapAgent): DoctorCheck {
   }
   if (agent === "claude") {
     const pointing = claudePointsAt(record.proxy_url);
+    const toolSearch = claudeToolSearchEnabled(readClaudeSettings());
     return {
       name: "wrap claude",
-      ok: pointing,
-      detail: pointing
-        ? record.proxy_url
-        : `record says ${record.proxy_url} but the agent config does not`,
+      ok: pointing && toolSearch,
+      detail: !pointing
+        ? `record says ${record.proxy_url} but the agent config does not`
+        : !toolSearch
+          ? "proxy URL set; ENABLE_TOOL_SEARCH missing — SessionStart will restore"
+          : record.proxy_url,
     };
   }
   const reserved = reservedOpenaiProviderPresent(readCodexConfigFile() ?? "");

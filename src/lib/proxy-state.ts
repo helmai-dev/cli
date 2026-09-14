@@ -20,6 +20,9 @@ export interface WrapRecord {
   previous: {
     claude_env_anthropic_base_url?: string;
     claude_had_env_key?: boolean;
+    claude_env_enable_tool_search?: string;
+    claude_had_tool_search_key?: boolean;
+    claude_tool_search_managed?: boolean;
     codex_config_toml?: string | null;
     created_codex_config?: boolean;
   };
@@ -121,6 +124,17 @@ export function readWrapRecord(agent: WrapAgent): WrapRecord | null {
             ? previous.claude_env_anthropic_base_url
             : undefined,
         claude_had_env_key: previous.claude_had_env_key === true,
+        claude_env_enable_tool_search:
+          typeof previous.claude_env_enable_tool_search === "string"
+            ? previous.claude_env_enable_tool_search
+            : undefined,
+        claude_had_tool_search_key:
+          previous.claude_had_tool_search_key === true
+            ? true
+            : previous.claude_had_tool_search_key === false
+              ? false
+              : undefined,
+        claude_tool_search_managed: previous.claude_tool_search_managed === true,
         codex_config_toml:
           typeof previous.codex_config_toml === "string"
             ? previous.codex_config_toml
