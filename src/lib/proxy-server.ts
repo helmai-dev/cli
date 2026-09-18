@@ -11,6 +11,7 @@ import * as path from "node:path";
 import { hasLinkedAccount } from "./account-link.js";
 import {
   fetchLiveFingerprintOutcome,
+  askToolContextDecisions,
   fetchWorkloadContext,
   type WorkloadContextLookup,
   type WorkloadContextCandidate,
@@ -24,9 +25,17 @@ import {
   sendWorkFingerprints,
   type LiveOverlapPerson,
   type PromptFactsBody,
+  type ToolContextCatalogItem,
+  type ToolContextDecision,
   type UsageExcerptUploadBody,
   type UsageReuseUpload,
 } from "./api-web.js";
+import { dropSpentToolResults, restoreToolResultText } from "./jev-tool-drop.js";
+import {
+  defaultToolResultStorePath,
+  readToolResultStore,
+  writeToolResultStore,
+} from "./tool-result-store.js";
 import { usageCostUsd } from "./claude-scan.js";
 import {
   getActiveEnvironment,
@@ -147,6 +156,11 @@ export interface ProxyHooks {
   log?: (line: string) => void;
   workCachePath?: string;
   promptFactsPath?: string;
+  toolResultStorePath?: string;
+  askToolContextDecisions?: (
+    goal: string,
+    tools: readonly ToolContextCatalogItem[],
+  ) => Promise<readonly ToolContextDecision[] | null>;
   wrapToken?: string | null;
 }
 
@@ -333,6 +347,24 @@ async function writeUpstreamBody(input: {
   return Buffer.concat(chunks);
 }
 
+function toolContextAsk(
+  hooks: ProxyHooks,
+):
+  | ((
+      goal: string,
+      tools: readonly ToolContextCatalogItem[],
+    ) => Promise<readonly ToolContextDecision[] | null>)
+  | undefined {
+  if (hooks.askToolContextDecisions) {
+    return hooks.askToolContextDecisions;
+  }
+  const linked = hooks.linked ?? defaultLinked();
+  if (!linked) {
+    return undefined;
+  }
+  return async (goal, tools) => askToolContextDecisions({ goal, tools });
+}
+
 function writeHealth(res: ServerResponse): void {
   res.writeHead(200, { "content-type": "application/json" });
   res.end(
@@ -398,6 +430,24 @@ async function handleProxyRequest(
   ) {
     writeHealth(res);
     return;
+  }
+  if (req.method === "GET") {
+    const stored = /^\/helm\/tool-result\/([0-9a-f]{64})$/i.exec(url.pathname);
+    if (stored) {
+      const store = readToolResultStore(
+        hooks.toolResultStorePath ?? defaultToolResultStorePath(),
+      );
+      const text = restoreToolResultText(store, stored[1].toLowerCase());
+      if (text === null) {
+        writeJson(res, 404, {
+          error: { type: "not_found", message: "stored tool result not found" },
+        });
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+      res.end(text);
+      return;
+    }
   }
 
   const raw = await readRequestBody(req);
@@ -495,6 +545,17 @@ async function handleProxyRequest(
           source_excerpt_ids: reference.ids,
         };
       }
+    }
+    const storePath = hooks.toolResultStorePath ?? defaultToolResultStorePath();
+    const dropped = await dropSpentToolResults({
+      body: next,
+      store: readToolResultStore(storePath),
+      ask: toolContextAsk(hooks),
+      now,
+    });
+    if (dropped.dropped > 0) {
+      next = dropped.body;
+      writeToolResultStore(storePath, dropped.store);
     }
     outbound = Buffer.from(JSON.stringify(next), "utf8");
   }

@@ -64,4 +64,6 @@ Updated 2026-08-21. The excerpt lock in `helm-web docs/slice-6-readable-excerpts
 How to evaluate GTM / distribution shape: [`docs/GTM.md`](GTM.md).
 
 
-Also read `docs/HANDOFF.md` — compaction is waste; handoff before compact; `/handoff` / `/handon`.
+Also read `docs/HANDOFF.md` — compaction is waste; drop spent tool results on wrap first; handoff before compact; `/handoff` / `/handon`.
+
+Also read `docs/JEV.md` — Jev on the wrap path; originals stored in Helm; TypeSafe key stays on Helm Web.
