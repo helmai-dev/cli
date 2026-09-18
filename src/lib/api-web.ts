@@ -1407,6 +1407,75 @@ export async function sendPromptFacts(
   }
 }
 
+export const TOOL_CONTEXT_DECISIONS_ENDPOINT = "/usage/tool-context-decisions";
+
+export const TOOL_CONTEXT_DECISIONS_TIMEOUT_MS = 1500;
+
+export interface ToolContextCatalogItem {
+  readonly id: string;
+  readonly tool: string;
+  readonly input_preview: string;
+  readonly result_chars: number;
+  readonly result_head: string;
+  readonly result_tail: string;
+}
+
+export interface ToolContextDecision {
+  readonly id: string;
+  readonly keep_result: boolean;
+  readonly noul: number | null;
+}
+
+export interface ToolContextDecisionsBody {
+  readonly goal: string;
+  readonly tools: readonly ToolContextCatalogItem[];
+}
+
+/**
+ * Ask Helm Web / Jev which spent tool results can leave the live request.
+ * Fail-open: 401/404/422/timeout/network become `null` so the wrap forwards
+ * the original body. The catalog is previews only — never full results.
+ */
+export async function askToolContextDecisions(
+  body: ToolContextDecisionsBody,
+  requester: WebRequester = request,
+): Promise<ToolContextDecision[] | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TOOL_CONTEXT_DECISIONS_TIMEOUT_MS);
+  try {
+    const response = await requester<{ decisions?: unknown }>(
+      TOOL_CONTEXT_DECISIONS_ENDPOINT,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      },
+    );
+    if (!Array.isArray(response.decisions)) {
+      return null;
+    }
+    const decisions: ToolContextDecision[] = [];
+    for (const raw of response.decisions) {
+      if (!isRecord(raw) || typeof raw.id !== "string" || raw.id === "") {
+        continue;
+      }
+      const noul = isFiniteNumber(raw.noul) ? raw.noul : null;
+      const keep =
+        typeof raw.keep_result === "boolean"
+          ? raw.keep_result
+          : noul === null
+            ? true
+            : noul >= 0.35;
+      decisions.push({ id: raw.id, keep_result: keep, noul });
+    }
+    return decisions;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export type WebRequester = <T>(
   endpoint: string,
   options?: RequestInit,

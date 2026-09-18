@@ -57,6 +57,11 @@ export function getProxyPromptFactsPath(): string {
   return envFile("proxy-prompt-facts.json");
 }
 
+/** Reversible originals for tool results dropped from a live wrap request. */
+export function getProxyToolResultStorePath(): string {
+  return envFile("tool-results.json");
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
