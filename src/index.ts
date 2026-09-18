@@ -197,6 +197,16 @@ program
   });
 
 program
+  .command("handoff-now", { hidden: true })
+  .description(
+    "Spike hook (hold merge): typed Jev Noul/Choice in → /handoff out. Rejects keep/drop compaction. Not installed by helm hooks.",
+  )
+  .action(async () => {
+    const { handoffNowCommand } = await import("./commands/handoff-now.js");
+    await handoffNowCommand();
+  });
+
+program
   .command("map")
   .description("Register a local checkout for a helm-web project on this machine")
   .argument("<projectId>", "helm-web project id")

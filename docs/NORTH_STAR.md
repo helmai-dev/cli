@@ -65,3 +65,5 @@ How to evaluate GTM / distribution shape: [`docs/GTM.md`](GTM.md).
 
 
 Also read `docs/HANDOFF.md` — compaction is waste; handoff before compact; `/handoff` / `/handon`.
+
+Jev spike (hold merge, not product): [`docs/JEV.md`](JEV.md). Detector only; not compaction.

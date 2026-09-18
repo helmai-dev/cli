@@ -20,7 +20,7 @@ User-visible shape (Vic / Amp): `/handoff` (write the handoff) and `/handon` (re
 
 - Not a dashboard plugin or teammate-notice feature. Architecture / `helm proxy` wrap stays the product (`docs/GTM.md`).
 - Not a collect-slice item (#24 / #37 stay separate).
-- Not a fake full compaction detector in this doc alone. Ship the DNA first; wire detection + `/handoff` / `/handon` as the next CLI engineering step when ready.
+- Not a smarter summary and not auto-compact. Jev (if used) is only the *detect* step: typed Noul/Choice “handoff now?” → `/handoff`. It must not drop or keep tool results so a thread can survive. Spike wiring: [`docs/JEV.md`](JEV.md) (hold merge).
 
 ## Evaluate a change
 
