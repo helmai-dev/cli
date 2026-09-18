@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist/index.js");
 
 import {
+  HANDOFF_NOW_CHOICE_QUESTION,
   HANDOFF_NOW_NOUL_THRESHOLD,
   HANDOFF_NOW_QUESTIONS,
   askHandoffNow,
@@ -64,6 +70,14 @@ test("Choice continue does not hand off", () => {
   assert.equal(result.decision.trigger, null);
 });
 
+test("Choice values other than handoff_now or continue are invalid", () => {
+  const result = decideHandoffNow({
+    handoff_now: { type: "choice", choice: "drop_result" },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "invalid_answers");
+});
+
 test("rejects fast-jev-compaction keep/drop noul questions", () => {
   const result = decideHandoffNow({
     call_t1: { type: "noul", noul: 0.1 },
@@ -102,10 +116,17 @@ test("Helm's Jev questions are only the handoff-now detector", () => {
   assert.deepEqual(names, ["handoff_now"]);
   const question = HANDOFF_NOW_QUESTIONS.handoff_now;
   assert.equal(question.type === "noul" || question.type === "choice", true);
-  const blob = JSON.stringify(HANDOFF_NOW_QUESTIONS);
+  const blob = JSON.stringify({
+    noul: HANDOFF_NOW_QUESTIONS,
+    choice: HANDOFF_NOW_CHOICE_QUESTION,
+  });
   assert.equal(/keepCall|keepResult|drop_result|drop_call|call_t|result_t/.test(blob), false);
   assert.match(blob, /handoff/i);
   assert.equal(/dashboard|plugin marketplace|compactMessages/i.test(blob), false);
+  assert.deepEqual(Object.keys(HANDOFF_NOW_CHOICE_QUESTION.criteria), [
+    "handoff_now",
+    "continue",
+  ]);
 });
 
 test("askHandoffNow sends detector questions and maps a yes into /handoff", async () => {
@@ -167,4 +188,9 @@ test("malformed hook payload fail-opens to silence", () => {
   assert.equal(parseHandoffNowHookPayload(null), null);
   assert.equal(parseHandoffNowHookPayload({ session_id: "s" }), null);
   assert.equal(formatHandoffNowHookOutput(resolveHandoffNowHook(null)), "");
+});
+
+test("handoff-now stays off helm --help", () => {
+  const help = execFileSync(process.execPath, [cli, "--help"], { encoding: "utf8" });
+  assert.equal(/handoff-now|Jev|jev-handoff/i.test(help), false);
 });

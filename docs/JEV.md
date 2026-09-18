@@ -34,14 +34,27 @@ Choice / Noul answers
         ▼
  decideHandoffNow()     ← rejects call_t* / result_t* / keepCall / keepResult
         │                 / drop_result / drop_call
-        ▼
-  /handoff  or  silence
+        ├─ handoff  →  /handoff
+        ├─ continue →  silence
+        └─ refuse   →  “will not drop or keep tool results”
 ```
 
-- `src/lib/jev-handoff-now.ts` — `HANDOFF_NOW_QUESTIONS`, `askHandoffNow(asker, state)`, `decideHandoffNow`.
+- `src/lib/jev-handoff-now.ts` — `HANDOFF_NOW_QUESTIONS` (Noul ask path), `HANDOFF_NOW_CHOICE_QUESTION` (ingest-only), `askHandoffNow(asker, state)`, `decideHandoffNow`.
 - `src/commands/handoff-now.ts` — hook parse / format. Yes → tell the agent to `/handoff` then `/handon`. Keep/drop payload → refuse, do not apply.
 
-A host can implement `JevHandoffAsker.ask` (TypeSafe / Jev, ~100ms). This spike does not ship a live client, an API key path, or plugin install.
+`askHandoffNow` sends the Noul question. A Choice answer on the same `handoff_now` key is accepted if it is exactly `handoff_now` or `continue`. Noul is preferred when both fields are present. Noul hands off only when strictly above `0.5` (spike default).
+
+A host can implement `JevHandoffAsker.ask` (TypeSafe / Jev, ~100ms). **State is bounded signals only** — never the session transcript, tool results, or system/developer messages. That is a North Star fail if a later host POSTs the thread the fast-jev-compaction way. This spike does not ship a live client, an API key path, or plugin install.
+
+Sample stdin for the hidden hook:
+
+```json
+{
+  "session_id": "session-1",
+  "cwd": "/repo",
+  "answers": { "handoff_now": { "type": "noul", "noul": 0.82 } }
+}
+```
 
 ## Honesty
 

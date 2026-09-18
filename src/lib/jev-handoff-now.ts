@@ -8,6 +8,7 @@
  * Hold merge. Not a dashboard plugin. See `docs/JEV.md`.
  */
 
+/** Spike default. Handoff only when Noul is strictly above this (0.5 continues). */
 export const HANDOFF_NOW_NOUL_THRESHOLD = 0.5;
 
 export const HANDOFF_NOW_QUESTIONS = {
@@ -65,9 +66,15 @@ export type HandoffNowResult =
       readonly message: string;
     };
 
+/** Bounded detector state only. Never a transcript, tool result, or system prompt. */
+export interface HandoffNowState {
+  readonly signals: string;
+  readonly sessionId?: string;
+}
+
 export interface JevHandoffAsker {
   ask(
-    state: unknown,
+    state: HandoffNowState,
     questions: typeof HANDOFF_NOW_QUESTIONS,
   ): Promise<{ answers: Record<string, JevAnswer> }>;
 }
@@ -171,12 +178,16 @@ export function decideHandoffNow(answers: unknown): HandoffNowResult {
 
   if (typeof answer.choice === "string") {
     const choice = answer.choice;
+    if (choice === "handoff_now") {
+      return { ok: true, decision: handoffDecision("choice", { choice }) };
+    }
+    if (choice === "continue") {
+      return { ok: true, decision: continueDecision("choice", { choice }) };
+    }
     return {
-      ok: true,
-      decision:
-        choice === "handoff_now"
-          ? handoffDecision("choice", { choice })
-          : continueDecision("choice", { choice }),
+      ok: false,
+      error: "invalid_answers",
+      message: "Jev handoff-now Choice must be handoff_now or continue.",
     };
   }
 
@@ -189,7 +200,7 @@ export function decideHandoffNow(answers: unknown): HandoffNowResult {
 
 export async function askHandoffNow(
   asker: JevHandoffAsker,
-  state: { readonly signals: string; readonly sessionId?: string },
+  state: HandoffNowState,
 ): Promise<HandoffNowResult> {
   const response = await asker.ask(state, HANDOFF_NOW_QUESTIONS);
   return decideHandoffNow(response.answers);
