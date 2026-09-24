@@ -13,6 +13,7 @@ import {
 import { sanitizeCaptureText } from "../lib/capture-sanitization.js";
 import {
   pathCandidateFromToolInput,
+  pathHintsFromShellInput,
   reportWorkFingerprint,
 } from "../lib/fingerprints.js";
 
@@ -112,6 +113,16 @@ export async function observeCommand(
     const turn = readAmbientTurn(normalized.sessionId);
     const cwd = turn?.cwd ?? payload.cwd;
     if (cwd) {
+      const explicitPath = relativeHookPath(
+        pathCandidateFromToolInput(normalized.toolInput),
+        cwd,
+      );
+      // Shell calls name their files in the command, not in a path field.
+      const shellPaths = explicitPath
+        ? []
+        : pathHintsFromShellInput(normalized.toolInput, cwd).filter(
+            (hint) => !sensitiveHookPath(hint),
+          );
       recordHookEvidence({
         cwd,
         sessionId: normalized.sessionId,
@@ -119,16 +130,14 @@ export async function observeCommand(
         prompt: turn?.prompt,
         startedAt,
         activity: emptyHookActivity("tool_observed"),
+        ...(shellPaths.length > 0 ? { paths: shellPaths } : {}),
         tool: sensitiveHookPath(
           pathCandidateFromToolInput(normalized.toolInput),
         )
           ? null
           : {
               tool_name: normalized.observation.toolName,
-              path_hint: relativeHookPath(
-                pathCandidateFromToolInput(normalized.toolInput),
-                cwd,
-              ),
+              path_hint: explicitPath ?? shellPaths[0] ?? null,
               content: normalized.observation.outputExcerpt ?? "",
             },
       });

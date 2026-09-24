@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { readAmbientTurn } from "./ambient-state.js";
@@ -151,11 +152,65 @@ function projectHint(cwd: string, homeDir: string): ProjectHint | null {
   if (cwdForCompare === path.parse(cwdForCompare).root.replace(/\\/g, "/")) {
     return null;
   }
-  const hint = path.basename(cwdForCompare);
+  // A dotfiles repo at $HOME (or above it) is not the project.
+  const repo = gitProjectRoot(cwdForCompare);
+  const root =
+    repo === null || repo === homeForCompare || homeForCompare.startsWith(`${repo}/`)
+      ? cwdForCompare
+      : repo;
+  const hint = path.basename(root);
   if (!hint || hint === ".") {
     return null;
   }
   return mintProjectHint(hint);
+}
+
+const projectRoots = new Map<string, string | null>();
+const MAX_ROOT_DEPTH = 40;
+
+/**
+ * The repository a directory belongs to, so a subfolder, a `git worktree`, or
+ * an agent's scratch worktree all name the same project as the main checkout.
+ * A `.git` file is a worktree pointer (`gitdir: <main>/.git/worktrees/<name>`)
+ * and resolves to the main checkout. Null outside git.
+ */
+export function gitProjectRoot(dir: string): string | null {
+  if (projectRoots.has(dir)) {
+    return projectRoots.get(dir) ?? null;
+  }
+  let root: string | null = null;
+  let current = dir;
+  for (let depth = 0; depth < MAX_ROOT_DEPTH; depth++) {
+    const marker = path.join(current, ".git");
+    try {
+      const stat = fs.statSync(marker);
+      if (stat.isDirectory()) {
+        root = current;
+      } else if (stat.isFile()) {
+        const pointer = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(marker, "utf8"))?.[1]?.trim();
+        const gitdir = pointer ? path.resolve(current, pointer) : null;
+        // <main>/.git/worktrees/<name> → <main>; submodules keep their own root.
+        const worktrees = gitdir ? path.dirname(gitdir) : null;
+        root =
+          gitdir && worktrees && path.basename(worktrees) === "worktrees" && path.basename(path.dirname(worktrees)) === ".git"
+            ? path.dirname(path.dirname(worktrees))
+            : current;
+      }
+    } catch {
+      // No .git here; keep walking up.
+    }
+    if (root !== null) {
+      break;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  const normalized = root === null ? null : root.replace(/\\/g, "/").replace(/\/+$/, "");
+  projectRoots.set(dir, normalized);
+  return normalized;
 }
 
 function toolNameHint(toolName: string): string | null {
@@ -244,6 +299,51 @@ export function pathHintsFromPrompt(prompt: string, cwd: string): RelativePathHi
     }
   }
   return hints;
+}
+
+const SHELL_COMMAND_KEYS = ["command", "cmd"] as const;
+
+/**
+ * Files a shell tool call touched, read from its command text (`sed -n 1,80p
+ * src/Foo.php`, `cat app/A.php`). Shell calls carry no file_path field, yet
+ * they are most of an agent's reading. Only tokens that name an existing file
+ * inside cwd count, so refs like `origin/main` or `/dev/null` never become
+ * path hints.
+ */
+export function pathHintsFromShellInput(
+  toolInput: unknown,
+  cwd: string,
+  exists: (absolute: string) => boolean = isExistingFile,
+): RelativePathHint[] {
+  if (!isPlainRecord(toolInput)) {
+    return [];
+  }
+  let command: string | null = null;
+  for (const key of SHELL_COMMAND_KEYS) {
+    const value = toolInput[key];
+    if (typeof value === "string") {
+      command = value;
+      break;
+    }
+    if (Array.isArray(value) && value.every((part) => typeof part === "string")) {
+      command = value.join(" ");
+      break;
+    }
+  }
+  if (command === null || command.length > 8_000) {
+    return [];
+  }
+  return pathHintsFromPrompt(command.replace(/[;&|<>()]/g, " "), cwd).filter((hint) =>
+    exists(path.resolve(cwd, hint)),
+  );
+}
+
+function isExistingFile(absolute: string): boolean {
+  try {
+    return fs.statSync(absolute).isFile();
+  } catch {
+    return false;
+  }
 }
 
 export function buildWorkFingerprint(
