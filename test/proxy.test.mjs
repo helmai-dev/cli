@@ -471,6 +471,8 @@ test("unlinked or failed Helm Web posts fail open", async () => {
 
   await reportProxiedRequest({
     linked: true,
+    // Never ask production Jev from a test.
+    askToolContextDecisions: async () => null,
     deviceUlid: "01TEST",
     usage,
     fingerprints: null,
@@ -521,6 +523,8 @@ test("pass-through happy path forwards auth and body, records usage, never uploa
       now: () => NOW,
       log: () => {},
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
       workCachePath: tempWorkCachePath(),
@@ -620,6 +624,8 @@ test("one proxied request stamps the same session_key on every fingerprint and n
       now: () => NOW,
       log: () => {},
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
       workCachePath: tempWorkCachePath(),
@@ -748,6 +754,8 @@ test("live others can ride along as an on-device system note", async () => {
       now: () => NOW,
       log: () => {},
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       workCachePath: tempWorkCachePath(),
       fetchLiveOthers: async () => [
         { name: "Alex", path_hint: "src/Foo.php", occurred_at: "2026-08-18T16:27:00.000Z" },
@@ -793,6 +801,8 @@ test("SSE responses are flushed to the client as chunks arrive", async () => {
       homeDir: HOME_DIR,
       log: () => {},
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       workCachePath: tempWorkCachePath(),
       sendUsage: async (body) => {
         usagePosts.push(body);
@@ -861,6 +871,8 @@ test("401 from the provider does not mint usage or fingerprints", async () => {
       homeDir: HOME_DIR,
       log: () => {},
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       workCachePath: tempWorkCachePath(),
       sendUsage: async (body) => {
         helmPosts.push(body);
@@ -1129,6 +1141,8 @@ test("first proxied request stores a work record and injects the wrap line", asy
       now: () => NOW,
       log: (line) => logs.push(line),
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
       workCachePath: cachePath,
@@ -1227,6 +1241,8 @@ test("an identical non-streaming request replays the prior provider response", a
       now: () => NOW,
       log: (line) => logs.push(line),
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
       workCachePath: cachePath,
@@ -1351,6 +1367,8 @@ test("an identical streaming request replays stored SSE and records a reuse", as
       now: () => NOW,
       log: (line) => logs.push(line),
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
       workCachePath: cachePath,
@@ -1431,6 +1449,8 @@ test("reuse POST fails open and still writes the local cache", async () => {
       now: () => NOW,
       log: () => {},
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
       workCachePath: cachePath,
@@ -1576,6 +1596,8 @@ test("wrap forwards when the ask and tool ids differ despite matching project/pa
       now: () => NOW,
       log: (line) => logs.push(line),
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
       workCachePath: cachePath,
@@ -1797,6 +1819,8 @@ test("wrapped 2xx POSTs a bounded excerpt to the team store when enabled", async
       now: () => NOW,
       log: () => {},
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
       workCachePath: cachePath,
@@ -1882,6 +1906,8 @@ test("receipt uploads stay fully offline unless enableTeamStore is set", async (
       now: () => NOW,
       log: () => {},
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
       workCachePath: tempWorkCachePath(),
@@ -1934,6 +1960,8 @@ test("team overlap never bypasses the provider without a replayable response", a
       now: () => NOW,
       log: (line) => logs.push(line),
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
       workCachePath: tempWorkCachePath(),

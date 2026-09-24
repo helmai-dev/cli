@@ -493,6 +493,8 @@ test("a 404 from a Helm Web without the route is swallowed like the other upload
   // Must resolve: an older server is a normal outcome, not a failure the user sees.
   await reportProxiedRequest({
     linked: true,
+    // Never ask production Jev from a test.
+    askToolContextDecisions: async () => null,
     deviceUlid: "01TEST",
     usage: null,
     fingerprints: null,
@@ -511,6 +513,8 @@ test("a 404 from a Helm Web without the route is swallowed like the other upload
   // A 422 from an older contract is equally silent.
   await reportProxiedRequest({
     linked: true,
+    // Never ask production Jev from a test.
+    askToolContextDecisions: async () => null,
     deviceUlid: "01TEST",
     usage: null,
     fingerprints: null,
@@ -576,6 +580,8 @@ test("two chained proxied turns measure re-billed repeated context and upload no
       now: () => NOW,
       log: () => {},
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
       workCachePath: path.join(path.dirname(factsPath), "proxy-work.json"),
@@ -688,6 +694,8 @@ test("fingerprints from one conversation report under a single session key", asy
       now: () => NOW,
       log: () => {},
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
       workCachePath: path.join(path.dirname(factsPath), "proxy-work.json"),
@@ -776,6 +784,8 @@ test("a cached prefix reports no waste even though the context was re-sent", asy
       now: () => NOW,
       log: () => {},
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
       workCachePath: path.join(path.dirname(factsPath), "proxy-work.json"),
@@ -856,6 +866,8 @@ test("prompt facts follow the work cache so nothing writes to the real state dir
       now: () => NOW,
       log: () => {},
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
       workCachePath,
@@ -912,6 +924,8 @@ test("a failing measurement never breaks the provider call", async () => {
       now: () => NOW,
       log: () => {},
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01DEVICE",
       fetchLiveOthers: async () => [],
       workCachePath: path.join(path.dirname(tempFactsPath()), "proxy-work.json"),

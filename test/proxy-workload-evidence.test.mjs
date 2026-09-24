@@ -80,6 +80,8 @@ async function fixture(
       cwd: "/Users/team/billing",
       homeDir: "/Users/team",
       linked: true,
+      // Never ask production Jev from a test.
+      askToolContextDecisions: async () => null,
       deviceUlid: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
       enableTeamStore: true,
       environment: "default",
