@@ -453,3 +453,49 @@ test("long provider history stays intact while local cached tool evidence is lat
   assert.equal(serialized.includes(oldMarker), false);
   assert.equal(serialized.includes("synthetic_local_secret"), false);
 });
+
+test("quiet requests carry no savings block", async (t) => {
+  const f = await fixture(t);
+  assert.equal((await f.send(initial())).status, 200);
+  assert.equal("savings" in f.excerpts[0].helm_activity, false);
+});
+
+test("deferred MCP tool schemas are reported as tool-search savings, not dollars", async (t) => {
+  const f = await fixture(t);
+  const schema = (name) => ({
+    name,
+    description: "Search partner accounts in Crossbeam ".repeat(20),
+    input_schema: { type: "object", properties: { q: { type: "string" } } },
+  });
+  const body = {
+    ...initial(),
+    tools: [
+      { name: "Read", input_schema: { type: "object" } },
+      { ...schema("mcp__crossbeam__search"), defer_loading: true },
+      { ...schema("mcp__crossbeam__list"), defer_loading: true },
+    ],
+  };
+  assert.equal((await f.send(body)).status, 200);
+  const savings = f.excerpts[0].helm_activity.savings;
+  assert.equal(savings.tool_search.deferred_tools, 2);
+  assert.ok(savings.tool_search.deferred_tokens > 100);
+  assert.equal(savings.compression, null);
+  assert.equal(savings.tool_drop, null);
+  assert.equal(JSON.stringify(savings).includes("usd"), false);
+  // Helm does not strip deferred tools; the provider request keeps them.
+  assert.equal(f.hits[0].tools.length, 3);
+});
+
+test("newest-turn compression reports saved tokens on the evidence envelope", async (t) => {
+  const f = await fixture(t);
+  const log = Array.from({ length: 60 }, () => "PASS tests/Feature/BillingTest.php   ").join("\n");
+  const body = {
+    ...initial(),
+    messages: [{ role: "user", content: `Why is CI slow?\n${log}\n\n\n\n` }],
+  };
+  assert.equal((await f.send(body)).status, 200);
+  const savings = f.excerpts[0].helm_activity.savings;
+  assert.ok(savings.compression.saved_tokens > 0);
+  assert.equal(typeof savings.compression.tokens_exact, "boolean");
+  assert.equal(savings.tool_search, null);
+});

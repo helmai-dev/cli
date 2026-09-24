@@ -31,6 +31,7 @@ import {
   type UsageReuseUpload,
 } from "./api-web.js";
 import { dropSpentToolResults, restoreToolResultText } from "./jev-tool-drop.js";
+import { buildTrimSavings, deferredToolSchemas } from "./trim-savings.js";
 import {
   defaultToolResultStorePath,
   readToolResultStore,
@@ -576,6 +577,18 @@ async function handleProxyRequest(
   const relativePath = targetPath.startsWith("/") ? targetPath.slice(1) : targetPath;
   const target = new URL(relativePath + url.search, baseWithSlash);
   let outbound: Buffer = raw;
+  let compressionStat: { savedTokens: number; tokensExact: boolean; blocks: number } | null = null;
+  let dropStat: { dropped: number; savedChars: number } | null = null;
+  const calibrationPath = hooks.tokenCalibrationPath;
+  let measuredRatio: number | null = null;
+  try {
+    measuredRatio =
+      calibrationPath !== undefined
+        ? tokensPerByteFor(readTokenCalibration(calibrationPath), model)
+        : null;
+  } catch {
+    measuredRatio = null;
+  }
   const preflight = await resolvePreflight(hooks, {
     project_hint: projectHint,
     path_hints: workKey?.path_hints ?? [],
@@ -613,6 +626,7 @@ async function handleProxyRequest(
     if (dropped.dropped > 0) {
       next = dropped.body;
       writeToolResultStore(storePath, dropped.store);
+      dropStat = { dropped: dropped.dropped, savedChars: dropped.savedChars };
     }
     // Compress only the newest turn so the frozen prefix (provider cache) is
     // never rewritten. Opt-in until validated on real traffic; fail-open.
@@ -622,11 +636,6 @@ async function handleProxyRequest(
       try {
         // State paths are explicit hooks so library/test consumers never write
         // to the real environment dir; the daemon passes the defaults.
-        const calibrationPath = hooks.tokenCalibrationPath;
-        const measuredRatio =
-          calibrationPath !== undefined
-            ? tokensPerByteFor(readTokenCalibration(calibrationPath), model)
-            : null;
         const compressed = compressLastMessage(next, {
           aggressive: process.env.HELM_COMPRESS_AGGRESSIVE === "1",
           model,
@@ -647,6 +656,11 @@ async function handleProxyRequest(
               ? compressed.savedTokens
               : estimateTokens(compressed.savedBytes);
           const tokensExact = compressed.tokensExact && compressed.savedTokens > 0;
+          compressionStat = {
+            savedTokens,
+            tokensExact,
+            blocks: compressed.originals.length,
+          };
           const [inRate] = modelRates(model);
           const savedUsdEst = (savedTokens * inRate) / 1e6;
           const ledgerPath = hooks.compressionLedgerPath;
@@ -677,6 +691,13 @@ async function handleProxyRequest(
     }
     outbound = Buffer.from(JSON.stringify(next), "utf8");
   }
+  const savings = buildTrimSavings({
+    compression: compressionStat,
+    toolDrop: dropStat,
+    deferred: deferredToolSchemas(provider, isPlainRecord(parsed) ? parsed : null),
+    tokensPerByte: measuredRatio,
+  });
+  if (savings !== undefined) activity.savings = savings;
   const sentBytes = outbound.length;
   const requestHash = hashProviderRequest({
     provider,
@@ -763,6 +784,8 @@ async function handleProxyRequest(
         }
       } catch {}
       activity.replay = { source_request_id: lookup.record.request_id ?? null };
+      // Nothing reached the provider; the reuse receipt carries this request.
+      delete activity.savings;
       track.report = reportAfterResponse({
         lifecycle: lifecycle("reused", 200),
         hooks,

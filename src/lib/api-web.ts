@@ -993,6 +993,33 @@ export interface HelmActivity {
   readonly replay: {
     readonly source_request_id: string | null;
   };
+  /**
+   * Context Helm kept out of this request. Tokens only; Helm Web prices them
+   * as an estimate, never as a receipt. Absent when nothing was trimmed, so
+   * a Helm Web that predates this key never sees it on quiet traffic.
+   */
+  readonly savings?: HelmActivitySavings;
+}
+
+export const HELM_SAVINGS_TOKENS_MAX = 10_000_000;
+
+export interface HelmActivitySavings {
+  /** Newest-turn compression. `tokens_exact` only when a real tokenizer ran. */
+  readonly compression: {
+    readonly saved_tokens: number;
+    readonly tokens_exact: boolean;
+    readonly blocks: number;
+  } | null;
+  /** Spent tool results Jev scored out of the live request (estimated tokens). */
+  readonly tool_drop: {
+    readonly dropped_results: number;
+    readonly saved_tokens: number;
+  } | null;
+  /** MCP tool schemas the agent sent with `defer_loading` (estimated tokens). */
+  readonly tool_search: {
+    readonly deferred_tools: number;
+    readonly deferred_tokens: number;
+  } | null;
 }
 
 /** Lifecycle fields carried on a new-contract envelope. All or none. */
