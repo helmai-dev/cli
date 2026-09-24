@@ -143,3 +143,78 @@ test("proxy routes ChatGPT Codex traffic to the Codex backend, API-key traffic t
     await openaiProvider.close();
   }
 });
+
+test("Responses API streams report usage from response.completed", async () => {
+  const { usageFromSseStream } = await import("../dist/lib/proxy-inspect.js");
+  const stream = [
+    'event: response.created',
+    'data: {"type":"response.created","response":{"id":"resp_1","usage":null}}',
+    '',
+    'event: response.output_text.delta',
+    'data: {"type":"response.output_text.delta","delta":"HELM_CODEX_OK"}',
+    '',
+    'event: response.completed',
+    'data: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":17100,"input_tokens_details":{"cached_tokens":16000},"output_tokens":136,"output_tokens_details":{"reasoning_tokens":64},"total_tokens":17236}}}',
+    '',
+  ].join("\n");
+  assert.deepEqual(usageFromSseStream("openai", stream), {
+    input_tokens: 17100,
+    output_tokens: 136,
+    cache_write_tokens: 0,
+    cache_read_tokens: 16000,
+  });
+});
+
+test("ChatGPT Codex SSE with no content-type still streams and reports usage", async () => {
+  const frames = [
+    'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_1"}}\n\n',
+    'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":17227,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":17024},"output_tokens":9,"total_tokens":17236}}}\n\n',
+  ];
+  const codexProvider = await listenMock((req, res) => {
+    req.on("data", () => {});
+    req.on("end", () => {
+      // The real backend sends chunked SSE with no content-type header.
+      res.writeHead(200, { "x-codex-plan-type": "pro" });
+      res.write(frames[0]);
+      setTimeout(() => res.end(frames[1]), 400);
+    });
+  });
+  const logs = [];
+  const proxy = await listenProxy(
+    { host: "127.0.0.1", port: 0 },
+    {
+      codexUpstream: `${codexProvider.url}/backend-api/codex`,
+      cwd: "/Users/team/billing",
+      homeDir: "/Users/team",
+      log: (line) => logs.push(line),
+      linked: false,
+      fetchLiveOthers: async () => [],
+      workCachePath: tempWorkCachePath(),
+    },
+  );
+  try {
+    const started = Date.now();
+    const response = await fetch(`${proxy.url}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${fakeChatGptJwt("acct_live")}`,
+      },
+      body: JSON.stringify({ model: "gpt-6-astra", input: "hi", stream: true }),
+    });
+    assert.equal(response.status, 200);
+    const reader = response.body.getReader();
+    const first = await reader.read();
+    assert.ok(Date.now() - started < 350, "the first frame is not held until the stream ends");
+    assert.match(Buffer.from(first.value).toString("utf8"), /response\.created/);
+    while (!(await reader.read()).done) {}
+    await proxy.reported;
+    assert.ok(
+      logs.some((line) => line.includes("in=17227") && line.includes("out=9")),
+      `usage was not parsed: ${logs.join(" | ")}`,
+    );
+  } finally {
+    await proxy.close();
+    await codexProvider.close();
+  }
+});

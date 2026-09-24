@@ -371,6 +371,10 @@ function usageFromUnknown(provider: ProxiedProvider, payload: unknown): Provider
   if (isPlainRecord(payload.message) && isPlainRecord(payload.message.usage)) {
     return usageFromUsageObject(provider, payload.message.usage);
   }
+  // OpenAI Responses API (Codex): `response.completed` carries response.usage.
+  if (isPlainRecord(payload.response) && isPlainRecord(payload.response.usage)) {
+    return usageFromUsageObject(provider, payload.response.usage);
+  }
   return null;
 }
 
@@ -390,7 +394,11 @@ function usageFromUsageObject(provider: ProxiedProvider, usage: Record<string, u
       cache_read_tokens: cacheRead,
     };
   }
-  const details = isPlainRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : null;
+  const details = isPlainRecord(usage.prompt_tokens_details)
+    ? usage.prompt_tokens_details
+    : isPlainRecord(usage.input_tokens_details)
+      ? usage.input_tokens_details
+      : null;
   const input = finiteCount(usage.prompt_tokens ?? usage.input_tokens);
   const output = finiteCount(usage.completion_tokens ?? usage.output_tokens);
   const cacheRead = finiteCount(details?.cached_tokens ?? usage.cache_read_tokens);

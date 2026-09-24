@@ -49,10 +49,13 @@ Status 2026-09-10: **implemented, pending live validation.**
   backend path drifts. API-key traffic keeps the normal OpenAI base URL.
 - Tests: `test/codex-provider.test.mjs`, `test/codex-routing.test.mjs`, and the
   updated `test/wrap.test.mjs`. Full suite green.
-- **Still to validate live:** the exact ChatGPT backend path and that Codex
-  attaches the subscription bearer under a custom provider with
-  `requires_openai_auth = true`. Do not treat Codex as shipped until a real
-  Codex session routes through the proxy end to end.
+- **Validated live 2026-09-23** (codex-cli 0.156.1, ChatGPT Pro login): Codex
+  attaches the subscription bearer under the custom provider, `/models` and
+  `/responses` reach `chatgpt.com/backend-api/codex` with 200s, and the answer
+  comes back. The backend streams SSE with **no content-type**; the proxy now
+  treats an untyped 2xx on a `stream: true` request as SSE (it had buffered the
+  whole reply and recorded no usage in 1.3.28) and reads `response.usage` from
+  `response.completed` (live: in=17829 out=9).
 - **Accept:** unit tests cover block build/merge/remove, auth branch, and proxy
   backend routing against a mock upstream; `helm doctor` reports Codex as wrapped.
 

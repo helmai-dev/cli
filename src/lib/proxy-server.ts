@@ -855,7 +855,12 @@ async function handleProxyRequest(
 
   const responseHeaders = forwardResponseHeaders(upstream.headers);
   const contentType = upstream.headers.get("content-type") ?? "";
-  const isEventStream = contentType.includes("text/event-stream");
+  // ChatGPT's Codex backend streams SSE with no content-type at all; a
+  // streamed request with an untyped 2xx body is still an event stream.
+  const requestedStream = isPlainRecord(parsed) && parsed.stream === true;
+  const isEventStream =
+    contentType.includes("text/event-stream") ||
+    (contentType === "" && requestedStream && upstream.status >= 200 && upstream.status < 300);
   let responseBytes: Buffer;
   try {
     responseBytes = await writeUpstreamBody({
