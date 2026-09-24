@@ -17,7 +17,7 @@ Helm sits on the laptop, between the coding agent and the model. Developers bare
 | | |
 |---|---|
 | **Proven $** | Reuse receipts. Already on Savings. “We did not send that work to the provider again.” |
-| **Happening, not on the dashboard yet** | Compression. MCP tool-search (the Crossbeam / 20-tools story). |
+| **Estimated, on the dashboard as “Trimmed by Helm”** | Compression, spent tool results dropped (Jev), MCP tool schemas deferred (the Crossbeam / 20-tools story). Tokens are measured per request; dollars are a labeled estimate, never a receipt. |
 | **Conversation, not an invoice** | Model mix. Overlapping work. Apply records a decision; Helm does not flip the model. |
 
 **Do not say**
@@ -80,10 +80,11 @@ These are the rows you can talk about as “Helm saved money,” with the caveat
 | # | What it does | Status | Honest savings | Dashboard today | Phrase-this-as (starter; rewrite) |
 |---|---|---|---|---|---|
 | A1 | **Verified reuse.** If this laptop already paid for the same project + files + tools in the last 24h, skip the provider and replay the stored response. Exact match only. | Partial (same laptop). Team-wide skip is not built. | Dollars only when the original request stored a cost. Receipt-backed. | `/usage/savings` ledger (“Saved by Helm”). | “We did not pay twice for the same tool work on this machine.” |
-| A2 | **Lossless compression.** Shrink the *newest* turn (JSON minify, strip junk, collapse repeated log lines) so the frozen prefix still hits the provider cache. On by default for wrap. Originals stay on the laptop and can be retrieved. | Shipped locally. Not uploaded to Helm Web. | Bytes + tokens on `helm audit`. Dollar there is an **estimate** at list rates, labeled as such. | Not on `/usage`. | “We sent less of the same answer without changing the work.” |
-| A3 | **Tool-output summaries.** Test / lint / docker / terraform dumps get a compact summary when that is smaller. Same reversible store. | Shipped on wrap. | Folded into A2’s local ledger. | Not on `/usage`. | “The model did not have to re-read 40k lines of passing tests.” |
-| A4 | **Claude MCP tool search + relevance.** Wrap turns on on-demand tool search so schemas are not stuffed into every prompt. On UserPromptSubmit Helm also injects which connected MCP servers this project has *not* used, from the local work cache — so Crossbeam is not searched on a coding turn unless the user asks. Does **not** strip tools from the wrap request (that would break the provider cache). | Shipped for Claude wrap (search) + inject (relevance). Not measured as tokens. | Real, but we do not have a dollar yet. | Nothing on `/usage`. | “Your 20 integrations are not stuffed into every prompt. Helm tells the model which ones this work actually uses.” |
+| A2 | **Lossless compression.** Shrink the *newest* turn (JSON minify, strip junk, collapse repeated log lines) so the frozen prefix still hits the provider cache. On by default for wrap. Originals stay on the laptop and can be retrieved. | Shipped on wrap. Tokens upload per request in `helm_activity.savings`. | Tokens (exact for OpenAI-family, calibrated estimate for Claude). Server prices at the input rate as an **estimate**. | “Trimmed by Helm” on Overview. | “We sent less of the same answer without changing the work.” |
+| A3 | **Tool-output summaries.** Test / lint / docker / terraform dumps get a compact summary when that is smaller. Same reversible store. | Shipped on wrap. | Folded into A2’s savings (same `compression` tokens). | Under “Compressed” in Trimmed by Helm. | “The model did not have to re-read 40k lines of passing tests.” |
+| A4 | **Claude MCP tool search + relevance.** Wrap turns on on-demand tool search so schemas are not stuffed into every prompt. On UserPromptSubmit Helm also injects which connected MCP servers this project has *not* used, from the local work cache — so Crossbeam is not searched on a coding turn unless the user asks. Does **not** strip tools from the wrap request (that would break the provider cache). | Shipped for Claude wrap (search) + inject (relevance). The proxy counts tool definitions sent with `defer_loading` and their schema size. | Tokens estimated from schema bytes; server prices at the cache-read rate (lower bound) as an **estimate**. | “MCP tools deferred” under Trimmed by Helm. | “Your 20 integrations are not stuffed into every prompt. Helm tells the model which ones this work actually uses.” |
 | A5 | **Provider prefix cache hygiene.** We only rewrite the last message so Anthropic/OpenAI KV cache still hits. | Shipped as an invariant on wrap. | Shows up as cache-read tokens in scan/audit (provider’s own number). | Spend rollups include cache-read tokens; we do not label this as a Helm save. | “We did not break the cache the provider already gives you.” |
+| A6 | **Drop spent tool results (Jev).** Wrap sends Helm Web a bounded catalog (goal, tool name, input preview, size, head/tail). Jev scores each result; below 0.35 the result is replaced by a stub and the original stays on the laptop. Fail-open keeps everything. | Shipped (v1.3.27). **Needs `TYPESAFE_API_KEY` on production Helm Web; without it Jev fails open and nothing is dropped.** | Tokens estimated from dropped characters; server prices at the cache-read rate (lower bound) as an **estimate**. | “Spent tool results dropped” under Trimmed by Helm. | “Your agent stops re-reading tool output the task is done with, so sessions last longer before they compact.” |
 
 **Not a save, even though it feels like one:** injecting team context (B1). That *adds* a small pack. We never count injected tokens as free.
 
@@ -143,8 +144,7 @@ Useful, not the savings story.
 | Autopilot | North-star phase 4. Later. |
 | Team-wide verified reuse (skip the provider because a *teammate* already did it) | Retrieval exists. Wrap skip is still **same laptop**. |
 | Wrap for OpenCode, Grok, Cursor, Gemini, Copilot, Claude desktop, ChatGPT app | Hooks/scan in places; **no live intercept.** |
-| Compression $ on `/usage` | Local ledger only. |
-| MCP tool-search $ on `/usage` | Happens; not measured. |
+| Compression / tool-search as receipts | They show as a labeled estimate under Trimmed by Helm, never inside Saved by Helm or the savings header. |
 | CFO vs EM dashboard modes | One page for everyone. |
 | Invoicing / take-rate machinery | Savings receipts are the step toward it. |
 
