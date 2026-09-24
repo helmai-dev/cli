@@ -3,7 +3,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+// node:sqlite ships in Node 22.5+; older runtimes skip these tests the same
+// way the scanner itself fails open there.
+let DatabaseSync = null;
+try {
+  ({ DatabaseSync } = await import("node:sqlite"));
+} catch {
+  DatabaseSync = null;
+}
+const sqliteTest = DatabaseSync ? test : test.skip;
 
 import { UsageAggregator } from "../dist/lib/claude-scan.js";
 import {
@@ -39,7 +47,7 @@ test("opencodeProjectHint uses the directory basename", () => {
   assert.equal(opencodeProjectHint(""), "opencode");
 });
 
-test("collectOpenCodeUsage aggregates assistant messages with reported cost", async () => {
+sqliteTest("collectOpenCodeUsage aggregates assistant messages with reported cost", async () => {
   const dbPath = tempDb();
   const now = new Date("2026-09-10T12:00:00.000Z");
   try {
