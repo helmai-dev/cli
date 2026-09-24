@@ -3,7 +3,10 @@ import * as os from 'os';
 import * as path from 'path';
 import pkg from '../../package.json';
 
-const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 1 day
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+// A cached notice older than this also refreshes in the background, so the
+// next notice names the real latest version, not whatever was out yesterday.
+const NOTICE_REFRESH_MS = 60 * 60 * 1000;
 const CACHE_FILE = path.join(os.homedir(), '.helm', 'update-check.json');
 
 interface UpdateCache {
@@ -54,6 +57,11 @@ function isNewerVersion(current: string, latest: string): boolean {
  * banner entirely: the "run helm update" advice is wrong for a desktop-managed
  * binary, and stderr noise corrupts NDJSON pipes and hook transcripts.
  */
+/** After `helm update`, the version just installed is the latest we know of. */
+export function recordInstalledVersion(version: string): void {
+    saveCache({ last_check_at: new Date().toISOString(), latest_version: version });
+}
+
 export function isUpdateCheckSuppressed(env: NodeJS.ProcessEnv = process.env): boolean {
     return env.HELM_SUPPRESS_UPDATE_CHECK === '1';
 }
@@ -117,6 +125,9 @@ export function checkForUpdate(): void {
                     process.stderr.write(
                         `[helm] Update available: ${getOwnVersion()} -> ${cache.latest_version}. Run "helm update" to update.\n`,
                     );
+                    if (elapsed > NOTICE_REFRESH_MS) {
+                        fetchLatestVersion({ announce: false }).catch(() => {});
+                    }
                 }
                 return;
             }

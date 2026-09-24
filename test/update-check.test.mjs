@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -9,7 +9,9 @@ import path from "node:path";
 // test on the cached branch, so nothing here ever touches the network.
 const sandbox = mkdtempSync(path.join(os.tmpdir(), "helm-update-check-"));
 process.env.HOME = sandbox;
-const { checkForUpdate, isUpdateCheckSuppressed } = await import("../dist/lib/update-check.js");
+const { checkForUpdate, isUpdateCheckSuppressed, readAvailableUpdate, recordInstalledVersion } = await import(
+  "../dist/lib/update-check.js",
+);
 
 function seedCache(latestVersion) {
   const dir = path.join(sandbox, ".helm");
@@ -62,4 +64,16 @@ test("suppression writes nothing to stderr even with a newer cached version", ()
   } finally {
     delete process.env.HELM_SUPPRESS_UPDATE_CHECK;
   }
+});
+
+test("helm update records the installed version so the stale notice stops", () => {
+  delete process.env.HELM_SUPPRESS_UPDATE_CHECK;
+  seedCache("999.0.0");
+  assert.notEqual(readAvailableUpdate(), null);
+  const pkg = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  recordInstalledVersion(pkg.version);
+  assert.equal(readAvailableUpdate(), null);
+  assert.equal(captureStderr(() => checkForUpdate()), "");
 });

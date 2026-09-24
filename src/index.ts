@@ -359,7 +359,30 @@ program
         stdio: "inherit",
         env: { ...process.env, HELM_UPDATE_ONLY: "1" },
       });
-      console.log(chalk.green("\n  ✓ Update complete"));
+      let installed: string | null = null;
+      try {
+        installed = execSync("helm --version", {
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "ignore"],
+          env: { ...process.env, HELM_SUPPRESS_UPDATE_CHECK: "1" },
+        }).trim().split(/\s+/).pop() ?? null;
+      } catch {
+        installed = null;
+      }
+      if (installed && /^\d+\.\d+\.\d+$/.test(installed)) {
+        const { recordInstalledVersion } = await import("./lib/update-check.js");
+        recordInstalledVersion(installed);
+        if (installed === pkg.version) {
+          console.log(chalk.green(`\n  ✓ Already up to date (${installed})`));
+        } else {
+          console.log(chalk.green(`\n  ✓ Updated ${pkg.version} → ${installed}`));
+          console.log(
+            chalk.gray("  Wrapped agents switch to the new proxy at their next session start."),
+          );
+        }
+      } else {
+        console.log(chalk.green("\n  ✓ Update complete"));
+      }
     } catch {
       console.log(chalk.red("\n  ✗ Update failed"));
       console.log(chalk.gray(`  Run manually: ${updateCommand}`));
@@ -381,7 +404,8 @@ if (process.env.HELM_EXCERPT_SYNC_MODE === "1") {
 } else if (process.env.HELM_DAEMON_MODE === "1") {
   import("./lib/daemon-loop-web.js").then((m) => m.runWebDaemonLoop());
 } else {
-  if (!process.argv.includes("mcp")) {
+  // `mcp` speaks JSON-RPC on stdio; `update` is already doing the update.
+  if (!process.argv.includes("mcp") && process.argv[2] !== "update") {
     checkForUpdate();
   }
   program.parseAsync().then(
