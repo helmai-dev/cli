@@ -989,6 +989,8 @@ export interface HelmActivity {
     readonly applied: boolean;
     readonly bytes: number;
     readonly source_excerpt_ids: readonly string[];
+    /** Present and true only when Helm withheld these sources (control group). */
+    readonly holdout?: true;
   };
   readonly replay: {
     readonly source_request_id: string | null;

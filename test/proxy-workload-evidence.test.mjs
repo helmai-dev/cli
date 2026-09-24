@@ -501,3 +501,32 @@ test("newest-turn compression reports saved tokens on the evidence envelope", as
   assert.equal(typeof savings.compression.tokens_exact, "boolean");
   assert.equal(savings.tool_search, null);
 });
+
+test("control-group work records the prior work it withheld and sends none of it", async (t) => {
+  const id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+  const marker = "WITHHELD_PRIOR_WORK_MARKER";
+  const f = await fixture(t, {
+    hooks: {
+      contextHoldoutRate: 1,
+      deviceUlid: "01J3ZB4YJQWERTYUIOPASDFGHJ",
+      fetchPriorWork: async () => ({
+        status: "hit",
+        candidates: [
+          {
+            id,
+            project_hint: "billing",
+            path_hints: ["src/Foo.php"],
+            tool_names: ["Read"],
+            occurred_at: "2026-09-05T00:00:00Z",
+            author_name: "Teammate",
+            tool_excerpts: [{ tool_name: "Read", path_hint: "src/Foo.php", content: marker }],
+          },
+        ],
+      }),
+    },
+  });
+  await f.send(withTools());
+  const context = f.excerpts[0].helm_activity.context;
+  assert.equal(JSON.stringify(f.hits[0]).includes(marker), false);
+  assert.deepEqual(context, { applied: false, bytes: 0, source_excerpt_ids: [id], holdout: true });
+});

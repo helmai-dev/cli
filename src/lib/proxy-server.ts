@@ -32,6 +32,7 @@ import {
 } from "./api-web.js";
 import { dropSpentToolResults, restoreToolResultText } from "./jev-tool-drop.js";
 import { buildTrimSavings, deferredToolSchemas } from "./trim-savings.js";
+import { isContextHoldout } from "./context-holdout.js";
 import {
   defaultToolResultStorePath,
   readToolResultStore,
@@ -157,6 +158,8 @@ const MAX_REPLAY_RESPONSE_BYTES = 256_000;
 export interface ProxyHooks {
   anthropicUpstream?: string;
   openaiUpstream?: string;
+  /** Team-context control-group rate; defaults to HELM_CONTEXT_HOLDOUT / 10%. */
+  contextHoldoutRate?: number;
   /** ChatGPT-OAuth Codex backend (subscription auth). */
   codexUpstream?: string;
   cwd?: string;
@@ -605,7 +608,23 @@ async function handleProxyRequest(
       workKey?.path_hints ?? [],
       projectHint,
     );
-    if (reference) {
+    const holdout =
+      reference !== null &&
+      isContextHoldout({
+        deviceUlid: hooks.deviceUlid ?? loadMachineIdentity()?.ulid ?? null,
+        projectHint,
+        now,
+        rate: hooks.contextHoldoutRate,
+      });
+    if (reference && holdout) {
+      // Control group: record what would have been injected, send nothing.
+      activity.context = {
+        applied: false,
+        bytes: 0,
+        source_excerpt_ids: reference.ids,
+        holdout: true,
+      };
+    } else if (reference) {
       const injected = appendPriorWorkContext(next, reference.text);
       if (injected) {
         next = injected;

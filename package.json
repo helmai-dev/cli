@@ -10,7 +10,7 @@
         "build": "tsc",
         "dev": "tsc --watch",
         "lint": "eslint src/**/*.ts",
-        "test": "npm run build && node --test test/*.test.mjs",
+        "test": "npm run build && HELM_CONTEXT_HOLDOUT=0 node --test test/*.test.mjs",
         "prepublishOnly": "npm run build"
     },
     "keywords": [

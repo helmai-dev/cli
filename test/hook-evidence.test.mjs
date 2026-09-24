@@ -255,3 +255,37 @@ test("hook context rejects malformed envelopes and ignores other projects", asyn
   assert.equal(wrongProject.activity.status, "miss");
   assert.equal(wrongProject.text, null);
 });
+
+test("hook context records teammate work only when it was emitted, and holdout ids without applying", async () => {
+  const shared = {
+    text: null,
+    ids: [],
+    activity: { status: "miss", duration_ms: 5, candidate_count: 0 },
+  };
+  const team = { text: "<helm-team-work>Maya</helm-team-work>", ids: ["01ARZ3NDEKTSV4RRFFQ69G5FAV"] };
+  const base = { rendered: "pack", actions: ["context"], shared, hasProject: true, teamWork: team };
+  const activity = emptyHookActivity("context_emitted");
+
+  const emitted = finalizeHookActivity(activity, { ...base, modelContext: `pack\n\n${team.text}` });
+  assert.deepEqual(emitted.context, {
+    applied: true,
+    bytes: Buffer.byteLength(team.text),
+    source_excerpt_ids: team.ids,
+  });
+
+  const unchanged = finalizeHookActivity(activity, { ...base, modelContext: null, actions: [] });
+  assert.deepEqual(unchanged.context, { applied: false, bytes: 0, source_excerpt_ids: [] });
+
+  const held = finalizeHookActivity(activity, {
+    ...base,
+    teamWork: { text: null, ids: team.ids },
+    modelContext: "pack",
+    holdout: true,
+  });
+  assert.deepEqual(held.context, {
+    applied: false,
+    bytes: 0,
+    source_excerpt_ids: team.ids,
+    holdout: true,
+  });
+});

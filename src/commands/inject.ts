@@ -1,5 +1,5 @@
 import { sanitizeCaptureText } from "../lib/capture-sanitization.js";
-import { pathHintsFromPrompt } from "../lib/fingerprints.js";
+import { pathHintsFromPrompt, projectHintFromCwd } from "../lib/fingerprints.js";
 import {
   readBoundedHookInput,
   emptyHookActivity,
@@ -38,6 +38,7 @@ import {
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import * as os from "node:os";
 import { fetchHelmWebProjects } from "../lib/api-web.js";
 import { decideAmbientIntervention } from "../lib/ambient-intervention.js";
 import { formatUpdateNotice } from "../lib/update-check.js";
@@ -46,6 +47,7 @@ import {
   getApiUrl,
   getEnvironmentDir,
   loadCredentials,
+  loadMachineIdentity,
 } from "../lib/config.js";
 import {
   formatInterventionOutput,
@@ -53,7 +55,8 @@ import {
 } from "../lib/host-presentation.js";
 import { maybeLiveOverlapNotice } from "../lib/live-overlap.js";
 import { maybeMcpRelevanceBlock } from "../lib/mcp-relevance.js";
-import { joinInjectedContext, maybeTeamWorkBlock } from "../lib/team-work.js";
+import { joinInjectedContext, maybeTeamWork } from "../lib/team-work.js";
+import { isContextHoldout } from "../lib/context-holdout.js";
 import {
   inspectLocalRepository,
   matchProjectForRepository,
@@ -471,20 +474,44 @@ export function projectLabelFor(
   return base !== "" && base !== "." && base !== "/" ? base : null;
 }
 
+/** Helm evidence that cannot reach Helm Web is invisible unless the human sees it. */
+export const DELIVERY_BACKLOG_NOTICE_AT = 200;
+
+export function deliveryBacklogNotice(status: { pending: number; rejected: number }): string | null {
+  if (status.rejected > 0) {
+    return `Helm Web rejected ${status.rejected} usage ${status.rejected === 1 ? "record" : "records"}. Run \`helm doctor\`.`;
+  }
+  if (status.pending >= DELIVERY_BACKLOG_NOTICE_AT) {
+    return `Helm can't deliver usage to Helm Web (${status.pending} queued). Run \`helm doctor\`.`;
+  }
+  return null;
+}
+
 async function collectRepairs(
   eventName: string | undefined,
 ): Promise<string[]> {
   if (eventName !== "SessionStart") {
     return [];
   }
+  const notices: string[] = [];
   try {
     const { reconcileLiveRuntime } =
       await import("../lib/runtime-reconciler.js");
     const repairs = await reconcileLiveRuntime();
-    return repairs.map((repair) => repair.summary);
+    notices.push(...repairs.map((repair) => repair.summary));
   } catch {
-    return [];
+    // Repair is best-effort.
   }
+  try {
+    const { usageExcerptDeliveryStatus } = await import("../lib/api-web.js");
+    const notice = deliveryBacklogNotice(usageExcerptDeliveryStatus());
+    if (notice) {
+      notices.push(notice);
+    }
+  } catch {
+    // A notice is never worth failing the hook.
+  }
+  return notices;
 }
 
 export async function injectCommand(
@@ -505,11 +532,18 @@ export async function injectCommand(
       prompt: normalized.prompt,
       cwd: normalized.cwd,
     });
-    const teamWork = maybeTeamWorkBlock({
+    const holdout = isContextHoldout({
+      deviceUlid: loadMachineIdentity()?.ulid ?? null,
+      projectHint: projectHintFromCwd(normalized.cwd, os.homedir()),
+      now: new Date(),
+    });
+    const teamWorkLookup = maybeTeamWork({
       eventName: normalized.eventName,
       prompt: normalized.prompt,
       cwd: normalized.cwd,
+      holdout,
     });
+    const teamWork = teamWorkLookup.then((result) => result?.text ?? null);
     const mcpRelevance = maybeMcpRelevanceBlock({
       eventName: normalized.eventName,
       prompt: normalized.prompt,
@@ -569,7 +603,10 @@ export async function injectCommand(
     if (decided.acknowledgeSession) {
       rememberSessionAck(normalized.sessionId);
     }
-    const shared = await priorWork;
+    const looked = await priorWork;
+    // Control group: the lookup ran and its sources are recorded, but the
+    // agent does not get them.
+    const shared = holdout ? { ...looked, text: null } : looked;
     if (shared.text) {
       decided = {
         ...decided,
@@ -583,6 +620,8 @@ export async function injectCommand(
       modelContext: decided.modelContext,
       actions: decided.actions.map((action) => action.kind),
       shared,
+      teamWork: await teamWorkLookup,
+      holdout,
       hasProject: Boolean(projectId),
     });
     emitIntervention(decided, output, normalized.eventName);

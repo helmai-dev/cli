@@ -4,6 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
 import type { UsageExcerptUploadBody } from "./api-web.js";
 
 const MAX_FILES = 1000;
+// Enough to clear a real backlog in a few flushes without hogging a hook.
+const FLUSH_BATCH = 25;
 const MAX_DISK_BYTES = 32 * 1024 * 1024;
 const MAX_BODY_BYTES = 256 * 1024;
 interface Entry {
@@ -131,7 +133,7 @@ export class UsageExcerptOutbox {
           await send(entry.body);
           fs.unlinkSync(file);
           delivered++;
-          if (delivered >= 4) break;
+          if (delivered >= FLUSH_BATCH) break;
         } catch (error) {
           const status = (error as { status?: number }).status;
           entry.attempts++;

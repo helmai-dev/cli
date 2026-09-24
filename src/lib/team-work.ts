@@ -48,6 +48,7 @@ export const liveTeamWorkEnvironment: TeamWorkEnvironment = {
       token,
       projectHint: query.projectHint,
       pathHint: query.pathHint,
+      excludeRecentSelf: true,
     });
     return result.excerpts;
   },
@@ -82,6 +83,15 @@ export function renderTeamWorkBlock(
   excerpts: readonly TeamWorkExcerpt[],
   input: { pathHint?: string; now?: Date } = {},
 ): string | null {
+  return renderTeamWork(excerpts, input)?.text ?? null;
+}
+
+/** The rendered block plus the evidence ids it actually included. */
+export function renderTeamWork(
+  excerpts: readonly TeamWorkExcerpt[],
+  input: { pathHint?: string; now?: Date } = {},
+): { text: string; ids: string[] } | null {
+  const ids: string[] = [];
   const now = input.now ?? new Date();
   const chosen = excerpts.slice(0, MAX_EXCERPTS);
   if (chosen.length === 0) {
@@ -125,13 +135,24 @@ export function renderTeamWorkBlock(
     }
     parts.push(block);
     used += block.length;
+    if (excerpt.id) {
+      ids.push(excerpt.id);
+    }
   }
 
   if (parts.length < 3) {
     return null;
   }
   parts.push("</helm-team-work>");
-  return parts.join("\n");
+  return { text: parts.join("\n"), ids };
+}
+
+export interface TeamWorkResult {
+  /** Injected text; null when nothing matched or the work was held out. */
+  readonly text: string | null;
+  /** Sources included, or that would have been for a holdout. */
+  readonly ids: string[];
+  readonly holdout: boolean;
 }
 
 export async function maybeTeamWorkBlock(
@@ -142,6 +163,18 @@ export async function maybeTeamWorkBlock(
   },
   env: TeamWorkEnvironment = liveTeamWorkEnvironment,
 ): Promise<string | null> {
+  return (await maybeTeamWork(input, env))?.text ?? null;
+}
+
+export async function maybeTeamWork(
+  input: {
+    eventName: string | undefined;
+    prompt: string | null;
+    cwd: string;
+    holdout?: boolean;
+  },
+  env: TeamWorkEnvironment = liveTeamWorkEnvironment,
+): Promise<TeamWorkResult | null> {
   try {
     if (input.eventName !== "UserPromptSubmit") {
       return null;
@@ -161,7 +194,13 @@ export async function maybeTeamWorkBlock(
         setTimeout(() => reject(new Error("team-work lookup timed out")), TEAM_WORK_TIMEOUT_MS);
       }),
     ]);
-    return renderTeamWorkBlock(excerpts, { pathHint, now: env.now?.() ?? new Date() });
+    const rendered = renderTeamWork(excerpts, { pathHint, now: env.now?.() ?? new Date() });
+    if (rendered === null) {
+      return null;
+    }
+    return input.holdout
+      ? { text: null, ids: rendered.ids, holdout: true }
+      : { text: rendered.text, ids: rendered.ids, holdout: false };
   } catch {
     return null;
   }

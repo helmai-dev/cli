@@ -212,6 +212,8 @@ export async function fetchLiveTeammates(
 export const TEAM_WORK_LOOKUP_PATH = "/api/usage/excerpts/lookup";
 
 export interface TeamWorkExcerpt {
+  /** Evidence row id; null from a Helm Web that predates it on the lookup. */
+  readonly id: string | null;
   readonly project_hint: string;
   readonly path_hints: readonly string[];
   readonly tool_names: readonly string[];
@@ -230,6 +232,8 @@ export function buildTeamWorkLookupRequest(input: {
   projectHint: string;
   pathHint?: string;
   toolName?: string;
+  /** Ambient injection: skip the caller's own last hours (their agent has them). */
+  excludeRecentSelf?: boolean;
 }): WebRequest {
   const url = new URL(`${trimSlash(input.apiUrl)}${TEAM_WORK_LOOKUP_PATH}`);
   url.searchParams.set("project_hint", input.projectHint);
@@ -240,6 +244,9 @@ export function buildTeamWorkLookupRequest(input: {
     url.searchParams.set("tool_names[]", input.toolName);
   }
   url.searchParams.set("limit", "3");
+  if (input.excludeRecentSelf) {
+    url.searchParams.set("exclude_recent_self", "1");
+  }
   return {
     method: "GET",
     url: url.toString(),
@@ -251,11 +258,14 @@ export function buildTeamWorkLookupRequest(input: {
   };
 }
 
+const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
+
 function excerptsFromPayload(payload: unknown): TeamWorkExcerpt[] {
   if (!isRecord(payload) || !Array.isArray(payload.excerpts)) {
     return [];
   }
   return payload.excerpts.filter(isRecord).map((row) => ({
+    id: typeof row.id === "string" && ULID_PATTERN.test(row.id) ? row.id : null,
     project_hint: typeof row.project_hint === "string" ? row.project_hint : "",
     path_hints: Array.isArray(row.path_hints)
       ? row.path_hints.filter((item): item is string => typeof item === "string")
@@ -284,6 +294,7 @@ export async function fetchTeamWorkExcerpts(
     projectHint: string;
     pathHint?: string;
     toolName?: string;
+    excludeRecentSelf?: boolean;
   },
   requester: WebRequester = fetchWebRequest,
 ): Promise<{ excerpts: TeamWorkExcerpt[] }> {

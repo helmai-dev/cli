@@ -34,7 +34,13 @@ export interface HookActivity {
     duration_ms: number;
     candidate_count: number;
   };
-  context: { applied: boolean; bytes: number; source_excerpt_ids: string[] };
+  context: {
+    applied: boolean;
+    bytes: number;
+    source_excerpt_ids: string[];
+    /** Present and true only when Helm withheld these sources (control group). */
+    holdout?: true;
+  };
   actions: ("active" | "overlap" | "context" | "repair" | "update")[];
 }
 export function hookHost(value: string | undefined): HookHost {
@@ -72,6 +78,10 @@ export async function readBoundedHookInput(
   }
   return Buffer.concat(chunks).toString("utf8");
 }
+/** Helm Web's bounds for the hook's context record (prior work + teammate work). */
+export const HOOK_CONTEXT_SOURCES_MAX = 6;
+export const HOOK_CONTEXT_BYTES_MAX = 16_384;
+
 export function emptyHookActivity(
   event: HookActivity["event_type"],
 ): HookActivity {
@@ -96,12 +106,32 @@ export function finalizeHookActivity(
       ids: string[];
       activity: HookActivity["shared_lookup"];
     };
+    /** Teammate work the hook rendered into the context pack. */
+    teamWork?: { text: string | null; ids: string[] } | null;
+    /** This work is in the control group: sources were looked up, not injected. */
+    holdout?: boolean;
     hasProject: boolean;
   },
 ): HookActivity {
   const supplied = Boolean(
     input.shared.text || (input.rendered && input.actions.includes("context")),
   );
+  // Teammate work only counts as delivered when the emitted context carries
+  // it; an unchanged pack is not re-emitted.
+  const teamText =
+    input.teamWork?.text && input.modelContext?.includes(input.teamWork.text)
+      ? input.teamWork.text
+      : null;
+  const applied = !input.holdout && Boolean(input.shared.text || teamText);
+  const sourceIds = [
+    ...new Set([
+      ...(input.holdout || input.shared.text ? input.shared.ids : []),
+      ...(input.holdout || teamText ? (input.teamWork?.ids ?? []) : []),
+    ]),
+  ].slice(0, HOOK_CONTEXT_SOURCES_MAX);
+  const appliedBytes = applied
+    ? Buffer.byteLength(input.shared.text ?? "") + Buffer.byteLength(teamText ?? "")
+    : 0;
   return {
     ...activity,
     shared_lookup: input.shared.activity,
@@ -114,9 +144,10 @@ export function finalizeHookActivity(
           : activity.context_status,
     context_bytes: Buffer.byteLength(input.modelContext ?? ""),
     context: {
-      applied: Boolean(input.shared.text),
-      bytes: Buffer.byteLength(input.shared.text ?? ""),
-      source_excerpt_ids: input.shared.ids,
+      applied,
+      bytes: Math.min(HOOK_CONTEXT_BYTES_MAX, appliedBytes),
+      source_excerpt_ids: sourceIds,
+      ...(input.holdout && sourceIds.length > 0 ? { holdout: true as const } : {}),
     },
     actions: [
       ...new Set([

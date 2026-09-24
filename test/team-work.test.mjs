@@ -136,3 +136,35 @@ test("lookup failures fail open", async () => {
   );
   assert.equal(block, null);
 });
+
+test("ambient lookup asks Helm Web to skip the caller's own recent work", async () => {
+  const { buildTeamWorkLookupRequest } = await import("../dist/lib/mcp-web.js");
+  const ambient = new URL(
+    buildTeamWorkLookupRequest({ apiUrl: "https://tryhelm.ai", token: "t", projectHint: "billing", excludeRecentSelf: true }).url,
+  );
+  const explicit = new URL(
+    buildTeamWorkLookupRequest({ apiUrl: "https://tryhelm.ai", token: "t", projectHint: "billing" }).url,
+  );
+  assert.equal(ambient.searchParams.get("exclude_recent_self"), "1");
+  assert.equal(explicit.searchParams.has("exclude_recent_self"), false);
+});
+
+test("team work reports the ids it rendered, and a holdout withholds the text but keeps the ids", async () => {
+  const { maybeTeamWork } = await import("../dist/lib/team-work.js");
+  const id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+  const env = {
+    isLinked: () => true,
+    fetchExcerpts: async () => [excerpt({ id })],
+    now: () => NOW,
+    homeDir: "/Users/team",
+  };
+  const input = { eventName: "UserPromptSubmit", prompt: "keep going", cwd: "/Users/team/helm-cli" };
+
+  const delivered = await maybeTeamWork(input, env);
+  assert.match(delivered.text, /helm-team-work/);
+  assert.deepEqual(delivered.ids, [id]);
+  assert.equal(delivered.holdout, false);
+
+  const held = await maybeTeamWork({ ...input, holdout: true }, env);
+  assert.deepEqual(held, { text: null, ids: [id], holdout: true });
+});
