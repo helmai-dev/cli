@@ -85,6 +85,85 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function base64UrlDecode(segment: string): string | null {
+  const padded =
+    segment.replace(/-/g, "+").replace(/_/g, "/") +
+    "=".repeat((4 - (segment.length % 4)) % 4);
+  try {
+    return Buffer.from(padded, "base64").toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Best-effort decode of an OpenAI OAuth bearer payload. The signature is not
+ * verified; the payload is only a routing hint and upstream still authorises.
+ */
+export function decodeOpenAiBearerPayload(
+  headers: Record<string, string>,
+): Record<string, unknown> | null {
+  const raw = headers["authorization"] ?? headers["Authorization"];
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const [scheme, token] = raw.split(" ");
+  if (!scheme || scheme.toLowerCase() !== "bearer" || !token) {
+    return null;
+  }
+  const parts = token.split(".");
+  const encoded = parts[1];
+  if (parts.length < 3 || encoded === undefined) {
+    return null;
+  }
+  const json = base64UrlDecode(encoded);
+  if (json === null) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(json);
+    return isPlainRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface CodexRouting {
+  headers: Record<string, string>;
+  isChatGptAuth: boolean;
+}
+
+/**
+ * Resolve ChatGPT Codex routing from an explicit account-id header or the
+ * subscription bearer's JWT claim, mirroring how Codex tags its own requests.
+ */
+export function resolveCodexRouting(headers: Record<string, string>): CodexRouting {
+  const resolved = { ...headers };
+  const lower = new Set(Object.keys(headers).map((key) => key.toLowerCase()));
+  if (lower.has("chatgpt-account-id")) {
+    return { headers: resolved, isChatGptAuth: true };
+  }
+  const payload = decodeOpenAiBearerPayload(headers);
+  const claims = payload ? payload["https://api.openai.com/auth"] : null;
+  const accountId = isPlainRecord(claims) ? claims["chatgpt_account_id"] : null;
+  if (typeof accountId === "string" && accountId.trim() !== "") {
+    resolved["ChatGPT-Account-ID"] = accountId.trim();
+    return { headers: resolved, isChatGptAuth: true };
+  }
+  return { headers: resolved, isChatGptAuth: false };
+}
+
+export const DEFAULT_CODEX_UPSTREAM = "https://chatgpt.com/backend-api/codex";
+
+/** Map an inbound Codex/OpenAI path to the ChatGPT backend path. */
+export function codexBackendPath(pathname: string): string {
+  const lower = pathname.toLowerCase();
+  if (lower.endsWith("/responses") || lower.endsWith("/models")) {
+    return pathname.slice(pathname.lastIndexOf("/"));
+  }
+  return pathname;
+}
+
 function finiteCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }

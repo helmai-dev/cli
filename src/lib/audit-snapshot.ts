@@ -11,6 +11,7 @@
 import { providerCacheSavingsUsd, type ScanSummary } from "./claude-scan.js";
 import type { PromptFactsSummary } from "./prompt-facts.js";
 import type { WorkReuseSummary } from "./proxy-work-cache.js";
+import type { CompressionLedgerSummary } from "./compression-ledger.js";
 
 export interface AuditSnapshotDerived {
   cache_read_share: number;
@@ -159,6 +160,8 @@ export interface LocalAuditSnapshot extends AuditSnapshotBase {
   local_reuse?: WorkReuseSummary;
   /** Repeated-context measured at this machine's wrap proxy. Tokens only. */
   local_prompt_facts?: PromptFactsSummary;
+  /** Cumulative local compression savings. Bytes + estimated tokens only. */
+  local_compression?: CompressionLedgerSummary;
 }
 
 export interface TeamAuditSnapshot extends AuditSnapshotBase {
@@ -201,6 +204,7 @@ export function auditSnapshotFromScan(
   inputs: AuditTeamInputs = ABSENT_INPUTS,
   localReuse: WorkReuseSummary | null = null,
   promptFacts: PromptFactsSummary | null = null,
+  compression: CompressionLedgerSummary | null = null,
 ): LocalAuditSnapshot {
   const promptTokens =
     summary.totals.input + summary.totals.cacheWrite + summary.totals.cacheRead;
@@ -242,6 +246,7 @@ export function auditSnapshotFromScan(
     ...(promptFacts != null && promptFacts.observations > 0
       ? { local_prompt_facts: promptFacts }
       : {}),
+    ...(compression != null ? { local_compression: compression } : {}),
   };
 }
 

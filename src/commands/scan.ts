@@ -131,12 +131,16 @@ export async function scanCommand(options: ScanCommandOptions): Promise<void> {
     error: null,
   };
 
-  if (decision.kind === "proceed" && summary.events.length > 0) {
+  // helm-web accepts claude/codex rows; OpenCode rows are local-report only
+  // until the server contract widens.
+  const uploadable = summary.events.filter((event) => (event.provider === "claude" || event.provider === "codex"));
+
+  if (decision.kind === "proceed" && uploadable.length > 0) {
     upload.attempted = true;
     const machine = loadMachineIdentity();
     try {
-      for (let i = 0; i < summary.events.length; i += UPLOAD_BATCH_SIZE) {
-        const batch = summary.events.slice(i, i + UPLOAD_BATCH_SIZE);
+      for (let i = 0; i < uploadable.length; i += UPLOAD_BATCH_SIZE) {
+        const batch = uploadable.slice(i, i + UPLOAD_BATCH_SIZE);
         const response = await sendUsageEvents({
           source: "scan",
           device_ulid: machine?.ulid ?? null,

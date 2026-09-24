@@ -26,9 +26,13 @@ import {
  *
  * On UserPromptSubmit, a linked machine also GETs live teammate overlap
  * (project_hint + optional path_hint only). The context-pack query and
- * observed activity use sanitized, bounded ask excerpts. A
- * non-empty `others` list adds one short notice on the same output channel
- * as the pack. Pack-hash dedupe never swallows that notice. Fail-open.
+ * observed activity use sanitized, bounded ask excerpts, plus bounded
+ * teammate work excerpts for this project. Overlap is one short
+ * notice. Excerpts are model context so the agent can reuse paid-for work
+ * without calling retrieve_team_work. A local MCP-relevance block names
+ * connected servers this project has not used (the Crossbeam case) so the
+ * model does not ToolSearch them unless the user asks. Pack-hash dedupe
+ * never swallows the overlap notice. Fail-open.
  */
 
 import * as fs from "node:fs";
@@ -48,6 +52,8 @@ import {
   type HostOutput,
 } from "../lib/host-presentation.js";
 import { maybeLiveOverlapNotice } from "../lib/live-overlap.js";
+import { maybeMcpRelevanceBlock } from "../lib/mcp-relevance.js";
+import { joinInjectedContext, maybeTeamWorkBlock } from "../lib/team-work.js";
 import {
   inspectLocalRepository,
   matchProjectForRepository,
@@ -499,6 +505,16 @@ export async function injectCommand(
       prompt: normalized.prompt,
       cwd: normalized.cwd,
     });
+    const teamWork = maybeTeamWorkBlock({
+      eventName: normalized.eventName,
+      prompt: normalized.prompt,
+      cwd: normalized.cwd,
+    });
+    const mcpRelevance = maybeMcpRelevanceBlock({
+      eventName: normalized.eventName,
+      prompt: normalized.prompt,
+      cwd: normalized.cwd,
+    });
     const repairs = collectRepairs(normalized.eventName);
     const projectId = await resolveProjectId(normalized.cwd);
 
@@ -529,7 +545,9 @@ export async function injectCommand(
           activity.context_source = "stale_cache";
         }
       }
-      rendered = renderContextPack(pack);
+      rendered = joinInjectedContext(renderContextPack(pack), await teamWork, await mcpRelevance);
+    } else {
+      rendered = joinInjectedContext(null, await teamWork, await mcpRelevance);
     }
 
     let decided = decideAmbientIntervention({

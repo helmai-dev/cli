@@ -32,6 +32,11 @@ import {
   readPromptFacts,
   summarizePromptFacts,
 } from "../lib/prompt-facts.js";
+import {
+  defaultCompressionLedgerPath,
+  readCompressionLedger,
+  summarizeCompressionLedger,
+} from "../lib/compression-ledger.js";
 
 const UPLOAD_BATCH_SIZE = 500;
 const MAX_TEAM_USERS = 10000;
@@ -133,6 +138,7 @@ function formatLocalAuditHuman(snapshot: LocalAuditSnapshot): string {
     lines.push("");
     appendLocalReuse(lines, snapshot);
     appendPromptFacts(lines, snapshot);
+    appendCompression(lines, snapshot);
     appendTeamSections(lines, snapshot);
     return lines.join("\n");
   }
@@ -156,6 +162,7 @@ function formatLocalAuditHuman(snapshot: LocalAuditSnapshot): string {
   lines.push("");
   appendLocalReuse(lines, snapshot);
   appendPromptFacts(lines, snapshot);
+  appendCompression(lines, snapshot);
   appendTeamSections(lines, snapshot);
   appendNotComputed(lines, snapshot);
   return lines.join("\n");
@@ -344,6 +351,25 @@ function appendPromptFacts(lines: string[], snapshot: LocalAuditSnapshot): void 
   lines.push("");
 }
 
+/** Cumulative local compression savings. Bytes and an estimate, never a dollar. */
+function appendCompression(lines: string[], snapshot: LocalAuditSnapshot): void {
+  const compression = snapshot.local_compression;
+  if (compression == null || compression.saved_bytes <= 0) {
+    return;
+  }
+  lines.push(chalk.bold("  Compression (local)"));
+  const tokensLabel = compression.tokens_exact ? "tokens" : "tokens est";
+  lines.push(
+    `    ${fmt(compression.saved_bytes)} bytes saved (~${fmt(compression.saved_tokens)} ${tokensLabel}, ~${usd(compression.saved_usd_est)} API-equivalent) across ${compression.saved_blocks} compressed blocks`,
+  );
+  lines.push(
+    chalk.gray(
+      "    Tokens are exact for OpenAI models and estimated for others. Not a refund; Helm Web prices the delta.",
+    ),
+  );
+  lines.push("");
+}
+
 function appendTeamSections(lines: string[], snapshot: LocalAuditSnapshot): void {
   const { inputs, scenario } = snapshot;
   if (inputs.team_users == null && inputs.team_count == null) {
@@ -430,25 +456,29 @@ export async function auditCommand(options: AuditCommandOptions): Promise<void> 
     now: new Date(),
     windowDays: days,
   });
-  const snapshot = auditSnapshotFromScan(summary, days, inputs, reuse, promptFacts);
+  const compression = summarizeCompressionLedger(
+    readCompressionLedger(defaultCompressionLedgerPath()),
+  );
+  const snapshot = auditSnapshotFromScan(summary, days, inputs, reuse, promptFacts, compression);
 
   if (!options.json) {
     console.log(formatAuditHuman(snapshot));
   }
 
+  const uploadable = summary.events.filter((event) => (event.provider === "claude" || event.provider === "codex"));
   if (
     shouldUploadAudit({
       linked,
       upload: options.upload !== false,
     }) &&
-    summary.events.length > 0
+    uploadable.length > 0
   ) {
     const say = options.json ? (msg: string) => console.error(msg) : (msg: string) => console.log(msg);
     const machine = loadMachineIdentity();
     try {
       let accepted = 0;
-      for (let i = 0; i < summary.events.length; i += UPLOAD_BATCH_SIZE) {
-        const batch = summary.events.slice(i, i + UPLOAD_BATCH_SIZE);
+      for (let i = 0; i < uploadable.length; i += UPLOAD_BATCH_SIZE) {
+        const batch = uploadable.slice(i, i + UPLOAD_BATCH_SIZE);
         const response = await sendUsageEvents({
           source: "scan",
           device_ulid: machine?.ulid ?? null,

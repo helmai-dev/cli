@@ -5,3 +5,4 @@ dist/
 .helm/
 .amp/portals/*
 .DS_Store
+.gstack/

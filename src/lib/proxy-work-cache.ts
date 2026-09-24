@@ -35,7 +35,7 @@ export interface WorkRecord {
   readonly cache_read_tokens: number | null;
   readonly occurred_at: string;
   readonly payload: ToolResultPayload | null;
-  /** SHA-256 of project_hint + sorted path_hints + sorted tool_names. Lookup does not require this to match. */
+  /** SHA-256 of project_hint + sorted path_hints + sorted tool_names. Reuse requires this to match exactly. */
   readonly request_hash: string | null;
   /** Exact outbound provider request signature. Legacy records have none. */
   readonly request_signature?: string | null;
@@ -491,6 +491,11 @@ export function lookupWork(input: {
   }
   const windowMs = input.windowMs ?? WORK_CACHE_WINDOW_MS;
   const nowMs = input.now.getTime();
+  // Replay only an exact workload identity. Overlap on a single path or tool is
+  // not enough: accumulated conversation facts grow turn over turn, so overlap
+  // matches almost every request and replays a stale response for the wrong
+  // turn. Exact project + full path set + full tool set is the safe bar.
+  const wantedHash = hashWorkloadKey(input.key);
   let latest: WorkRecord | null = null;
   for (const record of input.cache.records) {
     if (record.project_hint !== input.key.project_hint) {

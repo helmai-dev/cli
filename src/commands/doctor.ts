@@ -10,6 +10,7 @@ import {
   type WrapAgent,
 } from "../lib/proxy-state.js";
 import { reservedOpenaiProviderPresent } from "../lib/codex-proxy-env.js";
+import { codexProviderInstalled } from "../lib/codex-provider.js";
 import { ANTHROPIC_BASE_URL, claudeToolSearchEnabled } from "../lib/claude-proxy-env.js";
 import { readClaudeSettings } from "../lib/claude-settings.js";
 import { loadWebProjects } from "../lib/web-projects.js";
@@ -60,13 +61,14 @@ function wrapCheck(agent: WrapAgent): DoctorCheck {
           : record.proxy_url,
     };
   }
-  const reserved = reservedOpenaiProviderPresent(readCodexConfigFile() ?? "");
+  const toml = readCodexConfigFile() ?? "";
+  const pointing = codexProviderInstalled(toml) && !reservedOpenaiProviderPresent(toml);
   return {
     name: "wrap codex",
-    ok: !reserved,
-    detail: reserved
-      ? "reserved [model_providers.openai] override is present — this breaks Codex ChatGPT login"
-      : "not intercepting — ChatGPT login cannot use a /v1 wrap",
+    ok: pointing,
+    detail: pointing
+      ? record.proxy_url
+      : `record says ${record.proxy_url} but the Codex config does not`,
   };
 }
 

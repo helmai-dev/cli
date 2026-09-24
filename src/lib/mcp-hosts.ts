@@ -389,3 +389,69 @@ export function helmOpenCodeMcpInstalled(config: OpenCodeMcpConfig): boolean {
   const entry = config.mcp?.[HELM_MCP_CONFIG_KEY];
   return Array.isArray(entry?.command) && entry!.command!.includes("mcp");
 }
+
+function jsonObject(filePath: string): Record<string, unknown> {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return {};
+    }
+    const parsed: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function keysOfMap(value: unknown): string[] {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+  return Object.keys(value).filter((key) => key.trim() !== "");
+}
+
+function codexMcpServerNames(source: string): string[] {
+  const names: string[] = [];
+  for (const match of source.matchAll(/\[mcp_servers\.([^\]]+)\]/g)) {
+    const name = match[1]?.trim();
+    if (name) {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * Names of MCP servers configured on this machine (Claude, Cursor, Codex,
+ * Gemini, OpenCode). Fail-open: a broken host file is skipped, never thrown.
+ * Used to tell a turn which connected servers this project has not used.
+ */
+export function listConnectedMcpServerNames(input: McpHostPaths = {}): string[] {
+  const names = new Set<string>();
+  const claude = jsonObject(input.claudePath ?? getClaudeMcpConfigPath());
+  for (const name of keysOfMap(claude.mcpServers)) {
+    names.add(name);
+  }
+  const cursor = jsonObject(input.cursorPath ?? getCursorMcpConfigPath());
+  for (const name of keysOfMap(cursor.mcpServers)) {
+    names.add(name);
+  }
+  const gemini = jsonObject(input.geminiPath ?? getGeminiMcpConfigPath());
+  for (const name of keysOfMap(gemini.mcpServers)) {
+    names.add(name);
+  }
+  const openCode = jsonObject(input.openCodePath ?? getOpenCodeMcpConfigPath());
+  for (const name of keysOfMap(openCode.mcp)) {
+    names.add(name);
+  }
+  try {
+    const source = readCodexMcpSource(input.codexPath ?? getCodexMcpConfigPath());
+    for (const name of codexMcpServerNames(source)) {
+      names.add(name);
+    }
+  } catch {
+    // Codex file unreadable — skip.
+  }
+  return [...names].sort((a, b) => a.localeCompare(b));
+}

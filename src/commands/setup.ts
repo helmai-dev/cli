@@ -106,26 +106,39 @@ async function isConnected(): Promise<boolean> {
   }
 }
 
-export async function setupCommand(): Promise<void> {
-  const promptInput = openPromptInput();
-  if (!promptInput) {
+export interface SetupOptions {
+  /** Non-interactive: accept every default (wrap, hooks) without prompting. */
+  yes?: boolean;
+}
+
+export async function setupCommand(options: SetupOptions = {}): Promise<void> {
+  const yes = options.yes === true;
+  const promptInput = yes ? null : openPromptInput();
+  if (!yes && !promptInput) {
     const { registerUrl } = accountUrls(getApiUrl());
     console.log(chalk.yellow("\nhelm setup is interactive — run it in a terminal.\n"));
     console.log("Create a Helm Web account first, then link this CLI:");
     console.log(`  ${registerUrl}`);
     console.log("  helm wrap claude    point Claude Code at the local Helm proxy");
-    console.log("  helm wrap codex     decline ChatGPT intercept; strip leftover [model_providers.openai]");
+    console.log("  helm wrap codex     route Codex (including ChatGPT login) through the Helm provider");
     console.log("  helm connect        link this machine to that account");
     console.log("  helm hooks install  enable team context in supported coding agents");
     console.log("  helm scan           report + sync your AI usage\n");
     return;
   }
 
+  const confirm = async (question: string, defaultYes = true): Promise<boolean> => {
+    if (yes) {
+      return defaultYes;
+    }
+    return ask(promptInput!.input, question, defaultYes);
+  };
+
   try {
     console.log(chalk.cyan.bold("\n  ⎈ Helm Setup\n"));
     console.log(
       chalk.gray(
-        "  Point Claude Code at Helm on this laptop (Codex ChatGPT login cannot be wrapped), then connect and scan.\n" +
+        "  Point Claude Code and Codex at Helm on this laptop, then connect and scan.\n" +
           "  Each step asks first; nothing is silent. Linked wraps send only bounded receipt excerpts.\n",
       ),
     );
@@ -138,12 +151,7 @@ export async function setupCommand(): Promise<void> {
           "  Claude Code / Codex not on PATH. After you install one: `helm wrap claude` or `helm wrap codex`.\n",
         ),
       );
-    } else if (
-      await ask(
-        promptInput.input,
-        `Point ${wrapAgents.join(" and ")} at Helm on this laptop?`,
-      )
-    ) {
+    } else if (await confirm(`Point ${wrapAgents.join(" and ")} at Helm on this laptop?`)) {
       const { wrapCommand } = await import("./wrap.js");
       for (const agent of wrapAgents) {
         try {
@@ -164,7 +172,8 @@ export async function setupCommand(): Promise<void> {
     if (await isConnected()) {
       console.log(chalk.green("  ✓ Already connected to helm-web\n"));
     } else if (
-      await ask(promptInput.input, "Connect this machine to your Helm team (opens your browser)?")
+      !yes &&
+      (await confirm("Connect this machine to your Helm team (opens your browser)?"))
     ) {
       const { connectCommand } = await import("./connect.js");
       await connectCommand({});
@@ -191,8 +200,7 @@ export async function setupCommand(): Promise<void> {
         chalk.green("  ✓ Coding-agent integrations already installed\n"),
       );
     } else if (
-      await ask(
-        promptInput.input,
+      await confirm(
         "Enable shared team context in supported coding agents? (fail-open; removable with `helm hooks uninstall`)",
       )
     ) {
@@ -208,10 +216,8 @@ export async function setupCommand(): Promise<void> {
         chalk.gray("  Skipped scan — link this machine with `helm connect`, then `helm scan`.\n"),
       );
     } else if (
-      await ask(
-        promptInput.input,
-        "Scan your last 30 days of local AI usage and sync your team dashboard?",
-      )
+      !yes &&
+      (await confirm("Scan your last 30 days of local AI usage and sync your team dashboard?"))
     ) {
       const { scanCommand } = await import("./scan.js");
       await scanCommand({});
@@ -227,6 +233,6 @@ export async function setupCommand(): Promise<void> {
     );
     console.log(`  Your team dashboard: ${chalk.underline(`${getApiUrl()}/usage`)}\n`);
   } finally {
-    promptInput.close();
+    promptInput?.close();
   }
 }

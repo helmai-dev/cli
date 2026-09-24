@@ -62,6 +62,21 @@ export function getProxyToolResultStorePath(): string {
   return envFile("tool-results.json");
 }
 
+/** Reversible originals for compressed tool output. Local only. */
+export function getProxyCompressStorePath(): string {
+  return envFile("compress-store.json");
+}
+
+/** Cumulative local counter of compression savings. */
+export function getProxyCompressionLedgerPath(): string {
+  return envFile("compression.json");
+}
+
+/** Per-model tokens-per-byte calibration measured at the proxy. */
+export function getProxyTokenCalibrationPath(): string {
+  return envFile("token-calibration.json");
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }

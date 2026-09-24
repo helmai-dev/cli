@@ -10,6 +10,15 @@ import {
   stripReservedOpenaiProvider,
 } from "../lib/codex-proxy-env.js";
 import {
+  buildCodexProviderBlock,
+  codexProviderBaseUrl,
+  codexProviderInstalled,
+  codexRequiresOpenaiAuth,
+  HELM_CODEX_PROVIDER_ID,
+  mergeCodexProviderBlock,
+  removeCodexProviderBlock,
+} from "../lib/codex-provider.js";
+import {
   claudeToolSearchEnabled,
   mergeClaudeProxyEnv,
   restoreClaudeProxyEnv,
@@ -116,9 +125,9 @@ export function agentIsPointingAtProxy(
   }
   const toml = runtime.readCodexConfig();
   if (toml === null) {
-    return true;
+    return false;
   }
-  return !reservedOpenaiProviderPresent(toml);
+  return codexProviderInstalled(toml) && !reservedOpenaiProviderPresent(toml);
 }
 
 function proxyUrlFor(agent: WrapAgent, host: string, port: number, wrapToken?: string | null): string {
@@ -126,35 +135,53 @@ function proxyUrlFor(agent: WrapAgent, host: string, port: number, wrapToken?: s
   return wrapToken ? applyWrapBind(base, wrapToken) : base;
 }
 
-function wrapCodex(runtime: WrapRuntime): WrapResult {
+function wrapCodex(
+  runtime: WrapRuntime,
+  proxy: { host: string; port: number; wrapToken?: string | null },
+  proxyUrl: string,
+): WrapResult {
   const existing = runtime.readWrap("codex");
   const currentToml = runtime.readCodexConfig();
-  const nextToml = stripReservedOpenaiProvider(currentToml ?? "");
-  const configChanged = currentToml !== null && currentToml !== nextToml;
-  if (configChanged) {
+  const auth = runtime.readCodexAuth();
+  const block = buildCodexProviderBlock({
+    host: proxy.host,
+    port: proxy.port,
+    wrapToken: proxy.wrapToken ?? null,
+    requiresOpenaiAuth: codexRequiresOpenaiAuth(auth),
+  });
+  const nextToml = mergeCodexProviderBlock(stripReservedOpenaiProvider(currentToml ?? ""), block);
+  const changed = currentToml !== nextToml;
+  if (changed) {
     runtime.writeCodexConfig(nextToml);
   }
-  if (existing) {
-    runtime.clearWrap("codex");
+  if (existing === null || changed) {
+    runtime.writeWrap({
+      agent: "codex",
+      proxy_url: proxyUrl,
+      wrapped_at: existing?.wrapped_at ?? new Date().toISOString(),
+      previous: existing?.previous ?? {
+        created_codex_config: currentToml === null,
+        codex_config_toml: currentToml,
+      },
+    });
   }
-  const auth = runtime.readCodexAuth();
   return {
     agent: "codex",
-    proxyUrl: "",
-    alreadyWrapped: false,
-    repaired: configChanged || existing !== null,
-    declinedReason: auth === "chatgpt" ? "chatgpt-auth" : "no-intercept",
+    proxyUrl,
+    alreadyWrapped: existing !== null && !changed,
+    repaired: changed,
   };
 }
 
 export async function wrapAgent(agent: WrapAgent, runtime: WrapRuntime): Promise<WrapResult> {
-  if (agent === "codex") {
-    return wrapCodex(runtime);
-  }
-
   const existing = runtime.readWrap(agent);
   const proxy = await runtime.ensureProxy();
   const proxyUrl = proxyUrlFor(agent, proxy.host, proxy.port, proxy.wrapToken);
+
+  if (agent === "codex") {
+    return wrapCodex(runtime, proxy, proxyUrl);
+  }
+
   if (
     existing &&
     agentIsPointingAtProxy(agent, runtime, proxyUrl) &&
@@ -211,7 +238,7 @@ export async function unwrapAgent(agent: WrapAgent, runtime: WrapRuntime): Promi
   } else {
     const current = runtime.readCodexConfig();
     if (current !== null) {
-      const next = stripReservedOpenaiProvider(current);
+      const next = removeCodexProviderBlock(stripReservedOpenaiProvider(current));
       if (next !== current) {
         runtime.writeCodexConfig(next);
       }
@@ -228,34 +255,26 @@ export async function wrapCommand(rawAgent: string, options: { undo?: boolean } 
     return;
   }
   const result = await wrapAgent(agent, liveWrapRuntime());
-  if (agent === "codex") {
-    if (result.declinedReason === "chatgpt-auth") {
-      console.log(chalk.yellow("\n  Codex is signed in with ChatGPT. Helm cannot intercept it."));
-      console.log(chalk.gray("    ChatGPT tokens do not have api.responses.write, so a loopback"));
-      console.log(chalk.gray("    /v1/responses wrap returns 401. [model_providers.openai] is also"));
-      console.log(chalk.gray("    a reserved Codex table and bricks the CLI."));
-      if (result.repaired) {
-        console.log(chalk.gray("    Removed leftover wrap config. Hooks and MCP stay installed."));
-      } else {
-        console.log(chalk.gray("    Hooks and MCP stay installed."));
-      }
-      console.log(chalk.gray("    Intercept works for Claude Code: helm wrap claude\n"));
-      return;
-    }
-    console.log(chalk.yellow("\n  Helm does not intercept Codex model requests."));
-    console.log(chalk.gray("    [model_providers.openai] is reserved and would brick Codex."));
-    if (result.repaired) {
-      console.log(chalk.gray("    Removed leftover wrap config. Hooks and MCP stay installed.\n"));
-    } else {
-      console.log(chalk.gray("    Hooks and MCP stay installed.\n"));
-    }
-    return;
-  }
-  const envName = "ANTHROPIC_BASE_URL";
   if (result.alreadyWrapped) {
     console.log(chalk.yellow(`\n  ${agent} is already wrapped through ${result.proxyUrl}\n`));
     return;
   }
+  if (agent === "codex") {
+    console.log(
+      chalk.green(
+        result.repaired
+          ? "\n  ✓ Repaired the Codex wrap through Helm"
+          : "\n  ✓ Codex now sends model requests through Helm",
+      ),
+    );
+    console.log(
+      chalk.gray(`    model_provider = "${HELM_CODEX_PROVIDER_ID}" -> ${result.proxyUrl}`),
+    );
+    console.log(chalk.gray(`    Restart any running Codex session.`));
+    console.log(chalk.gray(`    Undo: helm unwrap codex\n`));
+    return;
+  }
+  const envName = "ANTHROPIC_BASE_URL";
   if (result.repaired) {
     console.log(chalk.green(`\n  ✓ Repaired ${agent} wrap through Helm`));
     console.log(chalk.gray(`    ${envName}=${result.proxyUrl}`));

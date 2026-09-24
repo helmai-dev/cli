@@ -36,7 +36,28 @@ import {
   readToolResultStore,
   writeToolResultStore,
 } from "./tool-result-store.js";
-import { usageCostUsd } from "./claude-scan.js";
+import { modelRates, usageCostUsd } from "./claude-scan.js";
+import { compressLastMessage, estimateTokens } from "./compress.js";
+import {
+  defaultCompressStorePath,
+  readCompressStore,
+  retrieveCompressOriginal,
+  storeCompressOriginal,
+  writeCompressStore,
+} from "./compress-store.js";
+import {
+  defaultCompressionLedgerPath,
+  readCompressionLedger,
+  recordCompression,
+  writeCompressionLedger,
+} from "./compression-ledger.js";
+import {
+  calibrate,
+  defaultTokenCalibrationPath,
+  readTokenCalibration,
+  tokensPerByteFor,
+  writeTokenCalibration,
+} from "./token-calibration.js";
 import {
   getActiveEnvironment,
   loadCredentials,
@@ -53,6 +74,8 @@ import {
 import {
   appendInterceptNote,
   buildLiveUsageRecord,
+  codexBackendPath,
+  DEFAULT_CODEX_UPSTREAM,
   DEFAULT_PROXY_HOST,
   DEFAULT_PROXY_PORT,
   extractJsonModel,
@@ -64,6 +87,7 @@ import {
   normalizeWrapToken,
   pathFactsFromRequestBody,
   requestWrapBound,
+  resolveCodexRouting,
   routeProxiedProvider,
   stripWrapBindPath,
   usageFromProviderPayload,
@@ -132,6 +156,8 @@ const MAX_REPLAY_RESPONSE_BYTES = 256_000;
 export interface ProxyHooks {
   anthropicUpstream?: string;
   openaiUpstream?: string;
+  /** ChatGPT-OAuth Codex backend (subscription auth). */
+  codexUpstream?: string;
   cwd?: string;
   homeDir?: string;
   now?: () => Date;
@@ -161,6 +187,9 @@ export interface ProxyHooks {
     goal: string,
     tools: readonly ToolContextCatalogItem[],
   ) => Promise<readonly ToolContextDecision[] | null>;
+  compressStorePath?: string;
+  compressionLedgerPath?: string;
+  tokenCalibrationPath?: string;
   wrapToken?: string | null;
 }
 
@@ -450,6 +479,23 @@ async function handleProxyRequest(
     }
   }
 
+  // Reversible compression: recover an original block by key or unique prefix.
+  if (req.method === "GET" && url.pathname.startsWith("/helm/retrieve/")) {
+    const ref = decodeURIComponent(url.pathname.slice("/helm/retrieve/".length)).trim();
+    const storePath = hooks.compressStorePath;
+    const text =
+      storePath !== undefined ? retrieveCompressOriginal(readCompressStore(storePath), ref) : null;
+    if (text === null) {
+      writeJson(res, 404, {
+        error: { type: "not_found", message: "no compressed original for that key" },
+      });
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+    res.end(text);
+    return;
+  }
+
   const raw = await readRequestBody(req);
   const parsed = parseJsonBody(raw);
   const bindPath = stripWrapBindPath(url.pathname);
@@ -510,14 +556,25 @@ async function handleProxyRequest(
     headerToken: headerWrapToken(req),
   });
 
-  const upstreamBase =
+  let requestHeaders = forwardRequestHeaders(req.headers);
+  let upstreamBase =
     provider === "anthropic"
       ? (hooks.anthropicUpstream ?? "https://api.anthropic.com")
       : (hooks.openaiUpstream ?? "https://api.openai.com");
-  const target = new URL(
-    bindPath.pathname + url.search,
-    upstreamBase.endsWith("/") ? upstreamBase : `${upstreamBase}/`,
-  );
+  let targetPath = bindPath.pathname;
+  // ChatGPT-OAuth Codex authenticates against chatgpt.com, not api.openai.com.
+  // Detect the subscription bearer and forward to the ChatGPT backend instead.
+  if (provider === "openai") {
+    const routing = resolveCodexRouting(requestHeaders);
+    if (routing.isChatGptAuth) {
+      requestHeaders = routing.headers;
+      upstreamBase = hooks.codexUpstream ?? DEFAULT_CODEX_UPSTREAM;
+      targetPath = codexBackendPath(bindPath.pathname);
+    }
+  }
+  const baseWithSlash = upstreamBase.endsWith("/") ? upstreamBase : `${upstreamBase}/`;
+  const relativePath = targetPath.startsWith("/") ? targetPath.slice(1) : targetPath;
+  const target = new URL(relativePath + url.search, baseWithSlash);
   let outbound: Buffer = raw;
   const preflight = await resolvePreflight(hooks, {
     project_hint: projectHint,
@@ -557,15 +614,77 @@ async function handleProxyRequest(
       next = dropped.body;
       writeToolResultStore(storePath, dropped.store);
     }
+    // Compress only the newest turn so the frozen prefix (provider cache) is
+    // never rewritten. Opt-in until validated on real traffic; fail-open.
+    // Lossless compression is on by default; HELM_COMPRESS=0 opts out.
+    // Aggressive (lossy) structural crush stays behind an explicit flag.
+    if (process.env.HELM_COMPRESS !== "0") {
+      try {
+        // State paths are explicit hooks so library/test consumers never write
+        // to the real environment dir; the daemon passes the defaults.
+        const calibrationPath = hooks.tokenCalibrationPath;
+        const measuredRatio =
+          calibrationPath !== undefined
+            ? tokensPerByteFor(readTokenCalibration(calibrationPath), model)
+            : null;
+        const compressed = compressLastMessage(next, {
+          aggressive: process.env.HELM_COMPRESS_AGGRESSIVE === "1",
+          model,
+          ...(measuredRatio !== null ? { tokensPerByte: measuredRatio } : {}),
+        });
+        if (compressed.savedBytes > 0) {
+          next = compressed.body;
+          const storePath = hooks.compressStorePath;
+          if (storePath !== undefined) {
+            let store = readCompressStore(storePath);
+            for (const original of compressed.originals) {
+              store = storeCompressOriginal(store, original.text, now).store;
+            }
+            writeCompressStore(storePath, store);
+          }
+          const savedTokens =
+            compressed.savedTokens > 0
+              ? compressed.savedTokens
+              : estimateTokens(compressed.savedBytes);
+          const tokensExact = compressed.tokensExact && compressed.savedTokens > 0;
+          const [inRate] = modelRates(model);
+          const savedUsdEst = (savedTokens * inRate) / 1e6;
+          const ledgerPath = hooks.compressionLedgerPath;
+          if (ledgerPath !== undefined) {
+            writeCompressionLedger(
+              ledgerPath,
+              recordCompression(
+                readCompressionLedger(ledgerPath),
+                {
+                  savedBytes: compressed.savedBytes,
+                  savedBlocks: compressed.originals.length,
+                  savedTokens,
+                  savedUsdEst,
+                  exact: tokensExact,
+                },
+                now,
+              ),
+            );
+          }
+          logHarness(
+            hooks,
+            `helm compress  saved ${compressed.savedBytes} bytes (${savedTokens} tokens${tokensExact ? "" : " est"}, ~$${savedUsdEst.toFixed(6)}, ${compressed.originals.length} recoverable)`,
+          );
+        }
+      } catch {
+        // Forward the uncompressed body.
+      }
+    }
     outbound = Buffer.from(JSON.stringify(next), "utf8");
   }
+  const sentBytes = outbound.length;
   const requestHash = hashProviderRequest({
     provider,
     upstreamTarget: target.toString(),
     model,
     body: outbound,
     method: req.method ?? "POST",
-    headers: forwardRequestHeaders(req.headers),
+    headers: requestHeaders,
   });
   const localStarted = Date.now();
   let lookup: ReturnType<typeof lookupWork> = {
@@ -671,13 +790,16 @@ async function handleProxyRequest(
     const method = req.method ?? "POST";
     const init: RequestInit = {
       method,
-      headers: forwardRequestHeaders(req.headers),
+      headers: requestHeaders,
       redirect: "manual",
     };
     if (method !== "GET" && method !== "HEAD") {
       init.body = outbound;
     }
     upstream = await fetch(target, init);
+    if (process.env.HELM_DEBUG_UPSTREAM === "1") {
+      (hooks.log ?? console.error)(`[upstream] ${method} ${target.toString()} -> ${upstream.status}`);
+    }
   } catch {
     writeJson(res, 502, {
       error: { type: "proxy_error", message: "upstream request failed" },
@@ -755,6 +877,29 @@ async function handleProxyRequest(
       : success
         ? extractJsonModel(parseJsonBody(responseBytes))
         : "unknown";
+  // Calibrate tokens-per-byte from the provider's own prompt-token count over
+  // the bytes we sent, so Claude saved-token estimates use real tokenization.
+  if (usage && sentBytes > 0 && resolvedModel !== "unknown") {
+    const promptTokens =
+      usage.input_tokens + usage.cache_write_tokens + usage.cache_read_tokens;
+    const calibrationPath = hooks.tokenCalibrationPath;
+    if (calibrationPath !== undefined) {
+      try {
+        writeTokenCalibration(
+          calibrationPath,
+          calibrate(
+            readTokenCalibration(calibrationPath),
+            resolvedModel,
+            promptTokens,
+            sentBytes,
+            now,
+          ),
+        );
+      } catch {
+        // Calibration is best-effort.
+      }
+    }
+  }
   logLine(hooks, provider, resolvedModel, projectHint, pathHint, usage);
   track.report = reportAfterResponse({
     lifecycle: lifecycle(
@@ -1366,17 +1511,28 @@ export async function runProxyProcess(options: {
     wrapToken: string;
   }) => void;
 }): Promise<RunningProxy> {
-  const running = await listenProxy({
-    host: options.host ?? process.env.HELM_PROXY_HOST ?? DEFAULT_PROXY_HOST,
-    port:
-      options.port ??
-      (process.env.HELM_PROXY_PORT
-        ? Number(process.env.HELM_PROXY_PORT)
-        : DEFAULT_PROXY_PORT),
-    // The real proxy daemon opts into bounded receipt uploads after 2xx.
-    // Upload failures never break the provider path.
-    enableTeamStore: true,
-  });
+  const running = await listenProxy(
+    {
+      host: options.host ?? process.env.HELM_PROXY_HOST ?? DEFAULT_PROXY_HOST,
+      port: options.port ?? (process.env.HELM_PROXY_PORT ? Number(process.env.HELM_PROXY_PORT) : DEFAULT_PROXY_PORT),
+      // The real proxy daemon opts into bounded receipt uploads after 2xx.
+      // Upload failures never break the provider path.
+      enableTeamStore: true,
+    },
+    {
+      // The ChatGPT Codex backend path is not a documented contract; allow an
+      // operator to correct it without a rebuild if it drifts.
+      codexUpstream: process.env.HELM_CODEX_UPSTREAM,
+      // Real state paths, so library/test consumers that omit them stay
+      // hermetic while the daemon persists work cache, compression, and
+      // calibration.
+      workCachePath: defaultWorkCachePath(),
+      promptFactsPath: defaultPromptFactsPath(),
+      compressStorePath: defaultCompressStorePath(),
+      compressionLedgerPath: defaultCompressionLedgerPath(),
+      tokenCalibrationPath: defaultTokenCalibrationPath(),
+    },
+  );
   options.onListening?.({
     host: running.host,
     port: running.port,

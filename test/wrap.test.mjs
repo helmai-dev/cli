@@ -12,6 +12,7 @@ import {
   reservedOpenaiProviderPresent,
   stripReservedOpenaiProvider,
 } from "../dist/lib/codex-proxy-env.js";
+import { codexProviderInstalled } from "../dist/lib/codex-provider.js";
 import {
   mergeClaudeProxyEnv,
   restoreClaudeProxyEnv,
@@ -211,7 +212,7 @@ test("wrap twice keeps the same bind URL", async () => {
   assert.equal(second.proxyUrl, `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}`);
 });
 
-test("ChatGPT Codex wrap declines intercept, strips reserved openai, and does not start the proxy", async () => {
+test("ChatGPT Codex wrap installs the Helm provider and starts the proxy", async () => {
   const { state, runtime } = memoryRuntime({
     codexAuth: "chatgpt",
     wraps: {
@@ -231,12 +232,15 @@ test("ChatGPT Codex wrap declines intercept, strips reserved openai, and does no
     ].join("\n"),
   });
   const result = await wrapAgent("codex", runtime);
-  assert.equal(result.declinedReason, "chatgpt-auth");
-  assert.equal(result.repaired, true);
-  assert.equal(state.proxyCalls, 0);
-  assert.equal(state.wraps.codex, undefined);
-  assert.equal(reservedOpenaiProviderPresent(state.codex), false);
+  assert.equal(result.declinedReason, undefined);
+  assert.equal(result.proxyUrl, `http://127.0.0.1:8787/wrap/${WRAP_TOKEN}/v1`);
+  assert.equal(state.proxyCalls, 1);
+  assert.equal(codexProviderInstalled(state.codex), true);
+  assert.match(state.codex, /^model_provider = "helm"$/m);
+  assert.match(state.codex, /^requires_openai_auth = true$/m);
   assert.match(state.codex, /later_edit = true/);
+  assert.equal(reservedOpenaiProviderPresent(state.codex), false);
+  assert.equal(state.wraps.codex.proxy_url, result.proxyUrl);
 });
 
 test("strip and unwrap keep adjacent TOML sections that have no blank line between them", async () => {

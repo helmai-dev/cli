@@ -2,8 +2,10 @@
 
 Helm sits between coding agents and model providers on this laptop.
 `helm wrap claude` starts a loopback proxy and points Claude Code at it.
-`helm wrap codex` declines intercept when Codex is signed in with ChatGPT
-and strips leftover `[model_providers.openai]` so the CLI can start.
+`helm wrap codex` points Codex at the proxy through a Helm-managed provider
+(a custom provider id, never the reserved `[model_providers.openai]`),
+including ChatGPT-subscription logins, which Helm forwards to the ChatGPT
+backend.
 When linked, Helm Web gets usage, fingerprints, and bounded receipt
 excerpts: the last user ask and tool-result bytes already present on
 the request. Full transcripts never leave the machine.
@@ -131,7 +133,7 @@ and their output streams back into the Helm canvas.
 | `helm scan` | Report local Claude Code and Codex usage and sync it to the team dashboard (requires a linked account) |
 | `helm audit` | Observed API-equivalent spend from local transcripts, plus realized provider-cache savings. `--team <id>` prints the Helm Web team rollup after `helm connect`. `shared_projects` and `shared_paths` print as observed overlap when the rollup includes them. `avoidable_spend` and `diagnose_buckets` print as observed Diagnose when the rollup includes them. Optional `--users` / `--teams` add an unshared-replay ceiling on the local path. Does not compute identified savings. |
 | `helm proxy` | Loopback model proxy on 127.0.0.1 (port 8787 or a free port). Passes Anthropic Messages and OpenAI-compatible chat through with the client's own auth headers. A wrap-bound request matching a recent project/path/tool record with a stored provider body may replay it. `--daemon` backgrounds it. |
-| `helm wrap claude\|codex` | Start the proxy if needed. Claude Code is pointed at it via `ANTHROPIC_BASE_URL`. Codex ChatGPT login is left on the official backend; Helm strips reserved `[model_providers.openai]` instead of writing it. Undo with `helm unwrap`. Does not touch Kubernetes Helm. |
+| `helm wrap claude\|codex` | Start the proxy if needed. Claude Code is pointed at it via `ANTHROPIC_BASE_URL`. Codex is pointed at it through a Helm-managed `[model_providers.helm]` block (never the reserved `[model_providers.openai]`); ChatGPT-subscription logins are forwarded to the ChatGPT backend. Undo with `helm unwrap`. Does not touch Kubernetes Helm. |
 | `helm unwrap claude\|codex` | Restore Claude's previous provider URL; for Codex, remove Helm's wrap record without restoring a stale `config.toml` snapshot |
 | `helm map <project-id> [path]` | Register a local checkout for a project |
 | `helm daemon start` | Start the background agent-runner daemon (`--foreground` runs it in-process for supervisors) |
@@ -180,10 +182,12 @@ Wrap also sets `ENABLE_TOOL_SEARCH=true`: Claude Code otherwise loads every
 MCP tool schema up front when `ANTHROPIC_BASE_URL` is not Anthropic, which
 can fill the context window before the first turn. The proxy forwards
 `tool_reference` blocks and `anthropic-beta` headers unchanged.
-Codex ChatGPT login cannot use a reserved `[model_providers.openai]`
-override — Helm strips that table so Codex can start, and leaves ChatGPT
-auth on the official Codex backend. `helm unwrap` removes Helm's wrap
-record without restoring a stale snapshot of `config.toml`. The
+Codex cannot use the reserved `[model_providers.openai]` override, so Helm
+writes its own `[model_providers.helm]` block and sets the root
+`model_provider`. ChatGPT-subscription logins carry `requires_openai_auth`
+and are forwarded to the ChatGPT backend; API-key logins use the normal
+OpenAI base URL. `helm unwrap` removes Helm's block without restoring a
+stale snapshot of `config.toml`. The
 proxy forwards the client's own provider tokens; Helm does not need those
 keys. On each request it can see the prompt locally, then POST usage events,
 fingerprints, and on a wrap reuse the metadata in `POST /api/usage/reuses`.

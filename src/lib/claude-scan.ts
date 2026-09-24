@@ -14,7 +14,7 @@ import * as os from "node:os";
 import * as readline from "node:readline";
 
 export interface UsageEventRow {
-  provider: "claude" | "codex";
+  provider: "claude" | "codex" | "opencode" | "grok";
   model: string;
   project_hint: string;
   project_id: string | null;
@@ -57,6 +57,7 @@ const PRICING: Array<[RegExp, [number, number]]> = [
   [/haiku-3-5/, [0.8, 4]],
   [/haiku/, [0.25, 1.25]],
   [/gpt-5|codex/, [1.25, 10]], // gpt-5-family estimate; cached input at 0.1x
+  [/grok/, [3, 15]], // grok list-rate estimate; cached input at 0.1x
 ];
 
 export function modelRates(model: string): [number, number] {
@@ -97,7 +98,7 @@ export function projectHintFromDir(dirName: string): string {
 }
 
 interface CellKey {
-  provider: "claude" | "codex";
+  provider: "claude" | "codex" | "opencode" | "grok";
   project: string;
   model: string;
   day: string;
@@ -111,16 +112,21 @@ interface Cell {
   output: number;
   cacheW: number;
   cacheR: number;
+  /** Sum of provider-reported costs, when every sample carried one. */
+  costOverrideSum: number;
+  costOverrideCount: number;
 }
 
 export interface UsageSample {
-  provider: "claude" | "codex";
+  provider: "claude" | "codex" | "opencode" | "grok";
   model: string;
   timestamp: string | undefined;
   input: number;
   output: number;
   cacheW: number;
   cacheR: number;
+  /** When set, used instead of pricing tokens at list rates. */
+  costUsd?: number;
   /** When set, repeated samples with the same key are counted once. */
   dedupeKey?: string;
 }
@@ -154,6 +160,8 @@ export class UsageAggregator {
         output: 0,
         cacheW: 0,
         cacheR: 0,
+        costOverrideSum: 0,
+        costOverrideCount: 0,
       } satisfies Cell);
     this.cells.set(cellId, cell);
 
@@ -163,6 +171,10 @@ export class UsageAggregator {
     cell.output += sample.output;
     cell.cacheW += sample.cacheW;
     cell.cacheR += sample.cacheR;
+    if (typeof sample.costUsd === "number" && Number.isFinite(sample.costUsd)) {
+      cell.costOverrideSum += sample.costUsd;
+      cell.costOverrideCount += 1;
+    }
     return true;
   }
 
@@ -212,7 +224,10 @@ export class UsageAggregator {
     const allSessions = new Set<string>();
 
     for (const cell of this.cells.values()) {
-      const cost = usageCostUsd(cell.key.model, cell);
+      const cost =
+        cell.costOverrideCount === cell.calls
+          ? cell.costOverrideSum
+          : usageCostUsd(cell.key.model, cell);
       events.push({
         provider: cell.key.provider,
         model: cell.key.model,

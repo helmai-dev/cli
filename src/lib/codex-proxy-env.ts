@@ -57,7 +57,9 @@ export function reservedOpenaiProviderPresent(toml: string): boolean {
  * Codex treats `openai` as a built-in provider id. Writing
  * `[model_providers.openai]` is ignored on 0.151 and is a hard config error
  * on current Codex. Helm must never add that table. ChatGPT login talks to
- * chatgpt.com, not api.openai.com; a loopback wrap URL would 401.
+ * chatgpt.com, not api.openai.com, so Helm routes it through its own provider
+ * id and forwards subscription traffic to the ChatGPT backend
+ * (see `codex-provider.ts`).
  */
 export function stripReservedOpenaiProvider(toml: string): string {
   const sections = splitSections(toml);

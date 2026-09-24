@@ -44,9 +44,10 @@ program
 program
   .command("setup")
   .description("Guided setup: connect, enable team context hooks, and run your first scan")
-  .action(async () => {
+  .option("--yes", "Non-interactive: wrap detected agents and install hooks without prompting")
+  .action(async (options: { yes?: boolean }) => {
     const { setupCommand } = await import("./commands/setup.js");
-    await setupCommand();
+    await setupCommand(options);
   });
 
 program

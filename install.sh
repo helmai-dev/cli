@@ -425,16 +425,15 @@ else
 fi
 
 if [[ "${HELM_UPDATE_ONLY:-}" != "1" ]]; then
-  # Chain straight into guided setup. Under `curl | bash` stdin is the pipe,
-  # so re-attach the terminal explicitly; skip cleanly when headless.
-  if [[ "${HELM_SKIP_SETUP:-}" != "1" ]] && [[ -e /dev/tty ]] && [[ -r /dev/tty ]]; then
-    "$install_dir/$HELM_BIN_NAME" setup < /dev/tty || true
-  else
-    echo ""
-    echo "Next steps:"
-    echo "  helm wrap claude      point Claude Code at the local Helm proxy"
-    echo "  helm wrap codex       point Codex at the local Helm proxy"
-    echo "  helm setup            connect, wrap, context hooks, first scan"
-    echo ""
+  # Install once, run normally: wrap detected agents and install hooks with no
+  # prompts. Always fail open; skip the auto-setup with HELM_SKIP_SETUP=1.
+  if [[ "${HELM_SKIP_SETUP:-}" != "1" ]]; then
+    "$install_dir/$HELM_BIN_NAME" setup --yes || true
   fi
+  echo ""
+  echo "Next steps:"
+  echo "  helm connect          link this machine to your Helm team"
+  echo "  helm wrap claude      point Claude Code at the local Helm proxy"
+  echo "  helm wrap codex       point Codex at the local Helm proxy"
+  echo ""
 fi
