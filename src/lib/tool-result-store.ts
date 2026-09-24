@@ -14,6 +14,8 @@ import { getProxyToolResultStorePath } from "./proxy-state.js";
 export const TOOL_RESULT_STORE_KIND = "helm.tool-result.store.v1";
 const MAX_ENTRIES = 256;
 const MAX_ENTRY_CHARS = 400_000;
+const MAX_DROPPED = 2048;
+const MAX_SESSIONS = 256;
 
 export interface ToolResultEntry {
   readonly key: string;
@@ -26,6 +28,14 @@ export interface ToolResultEntry {
 export interface ToolResultStore {
   readonly kind: typeof TOOL_RESULT_STORE_KIND;
   readonly entries: readonly ToolResultEntry[];
+  /**
+   * Results already dropped, keyed by `dropDecisionKey`. A drop is sticky:
+   * every later turn re-stubs the same bytes so the provider prefix cache
+   * built after the drop keeps hitting.
+   */
+  readonly dropped?: Readonly<Record<string, string>>;
+  /** Last request time (epoch ms) per conversation, to tell a cold cache. */
+  readonly sessions?: Readonly<Record<string, number>>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -37,7 +47,45 @@ export function toolResultKey(text: string): string {
 }
 
 export function emptyToolResultStore(): ToolResultStore {
-  return { kind: TOOL_RESULT_STORE_KIND, entries: [] };
+  return { kind: TOOL_RESULT_STORE_KIND, entries: [], dropped: {}, sessions: {} };
+}
+
+/** One tool call's exact result: the id alone could be reused with new bytes. */
+export function dropDecisionKey(id: string, text: string): string {
+  return `${id}:${toolResultKey(text)}`;
+}
+
+function newestEntries<T>(record: Record<string, T>, max: number, order: (value: T) => number): Record<string, T> {
+  const pairs = Object.entries(record);
+  if (pairs.length <= max) {
+    return record;
+  }
+  return Object.fromEntries(pairs.sort((a, b) => order(b[1]) - order(a[1])).slice(0, max));
+}
+
+export function recordDrops(store: ToolResultStore, keys: readonly string[], now: Date): ToolResultStore {
+  if (keys.length === 0) {
+    return store;
+  }
+  const dropped: Record<string, string> = { ...(store.dropped ?? {}) };
+  for (const key of keys) {
+    dropped[key] = now.toISOString();
+  }
+  return { ...store, dropped: newestEntries(dropped, MAX_DROPPED, (at) => Date.parse(at) || 0) };
+}
+
+export function isDropped(store: ToolResultStore, key: string): boolean {
+  return store.dropped?.[key] !== undefined;
+}
+
+export function sessionLastSeen(store: ToolResultStore, session: string): number | null {
+  const at = store.sessions?.[session];
+  return typeof at === "number" ? at : null;
+}
+
+export function touchSession(store: ToolResultStore, session: string, now: Date): ToolResultStore {
+  const sessions = { ...(store.sessions ?? {}), [session]: now.getTime() };
+  return { ...store, sessions: newestEntries(sessions, MAX_SESSIONS, (at) => at) };
 }
 
 export function parseToolResultStore(value: unknown): ToolResultStore {
@@ -69,7 +117,19 @@ export function parseToolResultStore(value: unknown): ToolResultStore {
       at: raw.at,
     });
   }
-  return { kind: TOOL_RESULT_STORE_KIND, entries };
+  const dropped: Record<string, string> = {};
+  if (isRecord(value.dropped)) {
+    for (const [key, at] of Object.entries(value.dropped)) {
+      if (typeof at === "string") dropped[key] = at;
+    }
+  }
+  const sessions: Record<string, number> = {};
+  if (isRecord(value.sessions)) {
+    for (const [key, at] of Object.entries(value.sessions)) {
+      if (typeof at === "number" && Number.isFinite(at)) sessions[key] = at;
+    }
+  }
+  return { kind: TOOL_RESULT_STORE_KIND, entries, dropped, sessions };
 }
 
 export function readToolResultStore(filePath: string): ToolResultStore {
@@ -107,6 +167,7 @@ export function storeToolResult(
   const rest = store.entries.filter((existing) => existing.key !== key);
   return {
     store: {
+      ...store,
       kind: TOOL_RESULT_STORE_KIND,
       entries: [entry, ...rest].slice(0, MAX_ENTRIES),
     },

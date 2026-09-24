@@ -623,9 +623,15 @@ async function handleProxyRequest(
       ask: toolContextAsk(hooks),
       now,
     });
+    if (dropped.changed) {
+      try {
+        writeToolResultStore(storePath, dropped.store);
+      } catch {
+        // The store is best-effort; the request still goes out.
+      }
+    }
     if (dropped.dropped > 0) {
       next = dropped.body;
-      writeToolResultStore(storePath, dropped.store);
       dropStat = { dropped: dropped.dropped, savedChars: dropped.savedChars };
     }
     // Compress only the newest turn so the frozen prefix (provider cache) is

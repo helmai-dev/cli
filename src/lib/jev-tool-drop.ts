@@ -15,9 +15,15 @@ import {
   type ToolContextItem,
 } from "./tool-context.js";
 import {
+  dropDecisionKey,
+  isDropped,
   lookupToolResult,
+  recordDrops,
+  sessionLastSeen,
   storeToolResult,
+  toolResultKey,
   toolResultStub,
+  touchSession,
   type ToolResultStore,
 } from "./tool-result-store.js";
 
@@ -49,8 +55,13 @@ export interface ToolContextAsker {
 export interface ToolDropResult {
   readonly body: Record<string, unknown>;
   readonly store: ToolResultStore;
+  /** Results stubbed on this request (sticky plus new). */
   readonly dropped: number;
+  /** Results Jev dropped for the first time on this request. */
+  readonly newlyDropped: number;
   readonly savedChars: number;
+  /** The store needs writing (drops or the conversation's last-seen time). */
+  readonly changed: boolean;
 }
 
 const HEAD_CHARS = 240;
@@ -117,6 +128,35 @@ export function idsToDrop(
   return drop;
 }
 
+/** Anthropic's default prompt-cache TTL; `ttl: "1h"` blocks extend it. */
+export const PROMPT_CACHE_TTL_MS = 5 * 60_000;
+export const PROMPT_CACHE_LONG_TTL_MS = 60 * 60_000;
+
+/** One conversation: its first message is stable for the life of the prefix. */
+export function conversationKey(body: Record<string, unknown>): string | null {
+  if (!Array.isArray(body.messages) || body.messages.length === 0) {
+    return null;
+  }
+  return toolResultKey(JSON.stringify([body.model ?? null, body.messages[0]]));
+}
+
+function promptCacheTtlMs(body: Record<string, unknown>): number {
+  return /"ttl"\s*:\s*"1h"/.test(JSON.stringify(body.system ?? null) + JSON.stringify(body.messages ?? null))
+    ? PROMPT_CACHE_LONG_TTL_MS
+    : PROMPT_CACHE_TTL_MS;
+}
+
+/**
+ * Stub spent tool results without costing the provider cache.
+ *
+ * - A result dropped once stays dropped: every turn re-stubs identical bytes,
+ *   so the prefix cached after the drop keeps hitting.
+ * - New drops (and the Jev call) happen only when this conversation's prompt
+ *   cache has already expired from idleness. A warm cache is never broken to
+ *   drop something, and warm turns add no Jev latency.
+ * - A conversation this proxy has not seen counts as warm (a proxy restart
+ *   mid-session must not break a live cache).
+ */
 export async function dropSpentToolResults(input: {
   body: Record<string, unknown>;
   store: ToolResultStore;
@@ -127,37 +167,58 @@ export async function dropSpentToolResults(input: {
     body: input.body,
     store: input.store,
     dropped: 0,
+    newlyDropped: 0,
     savedChars: 0,
+    changed: false,
   };
-  if (input.ask === undefined) {
+  const session = conversationKey(input.body);
+  if (session === null) {
     return unchanged;
   }
-  const candidates = dropCandidates(collectToolContext(input.body));
-  if (candidates.length === 0) {
-    return unchanged;
+  const lastSeen = sessionLastSeen(input.store, session);
+  const cold =
+    lastSeen !== null && input.now.getTime() - lastSeen > promptCacheTtlMs(input.body);
+  let store = touchSession(input.store, session, input.now);
+
+  const items = collectToolContext(input.body);
+  const toStub = new Map<string, ToolContextItem>();
+  for (const item of items) {
+    if (isDropped(store, dropDecisionKey(item.id, item.resultText))) {
+      toStub.set(item.id, item);
+    }
   }
-  let decisions: readonly ToolContextDecision[] | null;
-  try {
-    decisions = await input.ask(lastUserGoal(input.body), catalogFromItems(candidates));
-  } catch {
-    return unchanged;
+
+  let newlyDropped = 0;
+  if (cold && input.ask !== undefined) {
+    const candidates = dropCandidates(items).filter((item) => !toStub.has(item.id));
+    if (candidates.length > 0) {
+      let decisions: readonly ToolContextDecision[] | null = null;
+      try {
+        decisions = await input.ask(lastUserGoal(input.body), catalogFromItems(candidates));
+      } catch {
+        decisions = null;
+      }
+      if (decisions !== null && decisions.length > 0) {
+        const byId = new Map(candidates.map((item) => [item.id, item]));
+        const fresh: string[] = [];
+        for (const id of idsToDrop(candidates, decisions)) {
+          const item = byId.get(id);
+          if (item === undefined) continue;
+          toStub.set(id, item);
+          fresh.push(dropDecisionKey(item.id, item.resultText));
+        }
+        newlyDropped = fresh.length;
+        store = recordDrops(store, fresh, input.now);
+      }
+    }
   }
-  if (decisions === null || decisions.length === 0) {
-    return unchanged;
+
+  if (toStub.size === 0) {
+    return { ...unchanged, store, changed: true };
   }
-  const dropIds = idsToDrop(candidates, decisions);
-  if (dropIds.length === 0) {
-    return unchanged;
-  }
-  const byId = new Map(candidates.map((item) => [item.id, item]));
-  let store = input.store;
   const stubs = new Map<string, string>();
   let savedChars = 0;
-  for (const id of dropIds) {
-    const item = byId.get(id);
-    if (item === undefined) {
-      continue;
-    }
+  for (const [id, item] of toStub) {
     const stored = storeToolResult(store, {
       id: item.id,
       tool: item.tool,
@@ -165,17 +226,17 @@ export async function dropSpentToolResults(input: {
       now: input.now,
     });
     store = stored.store;
-    stubs.set(id, toolResultStub({ tool: item.tool, chars: item.resultChars, key: stored.key }));
-    savedChars += Math.max(0, item.resultChars - (stubs.get(id)?.length ?? 0));
-  }
-  if (stubs.size === 0) {
-    return unchanged;
+    const stub = toolResultStub({ tool: item.tool, chars: item.resultChars, key: stored.key });
+    stubs.set(id, stub);
+    savedChars += Math.max(0, item.resultChars - stub.length);
   }
   return {
     body: applyToolResultStubs(input.body, stubs),
     store,
     dropped: stubs.size,
+    newlyDropped,
     savedChars,
+    changed: true,
   };
 }
 

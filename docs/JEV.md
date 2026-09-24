@@ -14,6 +14,14 @@ Compaction (an LLM summary of the thread) is waste. Before that happens, wrap in
 4. Drop only when that probability is **below 0.35**. Uncertain (~0.5) keeps the result. Fail-open keeps everything.
 5. The original is stored on this laptop. The request carries a stub with the store key so the model can re-run the tool or restore via `GET /helm/tool-result/:key` on the loopback proxy.
 
+### Cache-safe timing (2026-09-23)
+
+Dropping a result rewrites the request from that message on, which breaks the provider prompt cache and re-bills the rest of the prefix as cache writes. So:
+
+- **Drops are sticky.** Once a result is dropped (keyed by tool id + sha256 of the result), every later turn re-stubs the identical bytes, even with no Jev asker. The prefix cached after the drop keeps hitting.
+- **New drops only on a cold cache.** Jev is asked only when this conversation (model + first message) was last seen longer ago than the prompt-cache TTL (5 minutes, or 1 hour when the request carries `ttl: "1h"`). A cold cache is rebuilt anyway, so the drop costs nothing extra. Warm turns never call Jev and add no latency.
+- **Unknown conversations count as warm.** A proxy restart mid-session must not break a live cache; the first cold gap after that can drop.
+
 The TypeSafe / Jev API key lives on Helm Web (`TYPESAFE_API_KEY` / `JEV_AI_API_KEY`). It must not go to the CLI, Inertia, Vite, or Desktop.
 
 If dropping spent results is not enough and the session is still about to compact, `/handoff` then `/handon` (`docs/HANDOFF.md`).

@@ -8,6 +8,7 @@ import { createServer } from "node:http";
 import {
   KEEP_RESULT_MIN,
   catalogFromItems,
+  conversationKey,
   dropSpentToolResults,
   idsToDrop,
 } from "../dist/lib/jev-tool-drop.js";
@@ -25,6 +26,8 @@ import {
   readToolResultStore,
   storeToolResult,
   toolResultKey,
+  touchSession,
+  writeToolResultStore,
 } from "../dist/lib/tool-result-store.js";
 import { listenProxy } from "../dist/lib/proxy-server.js";
 
@@ -33,6 +36,11 @@ const BIG = "x".repeat(MIN_RESULT_CHARS + 200);
 
 function bigResult(id, extra = 0) {
   return `${id}:${"y".repeat(MIN_CANDIDATE_CHARS + extra)}`;
+}
+
+/** A conversation last seen long enough ago that its prompt cache expired. */
+function coldStore(body, idleMs = 10 * 60_000) {
+  return touchSession(emptyToolResultStore(), conversationKey(body), new Date(NOW.getTime() - idleMs));
 }
 
 function anthropicBody() {
@@ -119,7 +127,7 @@ test("dropSpentToolResults stores the original and stubs the request", async () 
   const original = body.messages[2].content[0].content;
   const result = await dropSpentToolResults({
     body,
-    store: emptyToolResultStore(),
+    store: coldStore(body),
     ask: async () => [{ id: "toolu_old", keep_result: false, noul: 0.12 }],
     now: NOW,
   });
@@ -136,7 +144,7 @@ test("dropSpentToolResults is fail-open when Jev throws or returns nothing", asy
   const body = anthropicBody();
   const thrown = await dropSpentToolResults({
     body,
-    store: emptyToolResultStore(),
+    store: coldStore(body),
     ask: async () => {
       throw new Error("network");
     },
@@ -146,7 +154,7 @@ test("dropSpentToolResults is fail-open when Jev throws or returns nothing", asy
   assert.equal(thrown.body, body);
   const silent = await dropSpentToolResults({
     body,
-    store: emptyToolResultStore(),
+    store: coldStore(body),
     ask: async () => null,
     now: NOW,
   });
@@ -183,6 +191,7 @@ function listenMock(handler) {
 test("wrap drops a spent tool result, stores it, and serves the original", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "helm-jev-drop-"));
   const storePath = path.join(dir, "tool-results.json");
+  writeToolResultStore(storePath, coldStore(anthropicBody()));
   const captured = [];
   const provider = await listenMock((req, res) => {
     const chunks = [];
@@ -241,4 +250,115 @@ test("wrap drops a spent tool result, stores it, and serves the original", async
     await provider.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a conversation seen for the first time is never trimmed and Jev is not asked", async () => {
+  const body = anthropicBody();
+  let asked = 0;
+  const result = await dropSpentToolResults({
+    body,
+    store: emptyToolResultStore(),
+    ask: async () => {
+      asked++;
+      return [{ id: "toolu_old", keep_result: false, noul: 0.01 }];
+    },
+    now: NOW,
+  });
+  assert.equal(asked, 0);
+  assert.equal(result.dropped, 0);
+  assert.equal(result.body, body);
+  assert.equal(result.changed, true, "the conversation's last-seen time is recorded");
+});
+
+test("a warm prompt cache is never broken to drop something, and Jev is not asked", async () => {
+  const body = anthropicBody();
+  let asked = 0;
+  const result = await dropSpentToolResults({
+    body,
+    store: coldStore(body, 60_000),
+    ask: async () => {
+      asked++;
+      return [{ id: "toolu_old", keep_result: false, noul: 0.01 }];
+    },
+    now: NOW,
+  });
+  assert.equal(asked, 0);
+  assert.equal(result.dropped, 0);
+  assert.equal(result.body, body);
+});
+
+test("a 1h cache_control TTL keeps a 20-minute gap warm", async () => {
+  const body = anthropicBody();
+  body.system = [{ type: "text", text: "sys", cache_control: { type: "ephemeral", ttl: "1h" } }];
+  let asked = 0;
+  const result = await dropSpentToolResults({
+    body,
+    store: coldStore(body, 20 * 60_000),
+    ask: async () => {
+      asked++;
+      return [];
+    },
+    now: NOW,
+  });
+  assert.equal(asked, 0);
+  assert.equal(result.dropped, 0);
+});
+
+test("a drop is sticky: later warm turns re-stub identical bytes without asking Jev", async () => {
+  const body = anthropicBody();
+  const first = await dropSpentToolResults({
+    body,
+    store: coldStore(body),
+    ask: async () => [{ id: "toolu_old", keep_result: false, noul: 0.1 }],
+    now: NOW,
+  });
+  assert.equal(first.newlyDropped, 1);
+  const stub = first.body.messages[2].content[0].content;
+
+  // The agent resends its own history (original bytes) one minute later.
+  const later = new Date(NOW.getTime() + 60_000);
+  const next = anthropicBody();
+  next.messages.push({ role: "assistant", content: "done" }, { role: "user", content: "ship it" });
+  let asked = 0;
+  const second = await dropSpentToolResults({
+    body: next,
+    store: first.store,
+    ask: async () => {
+      asked++;
+      return [{ id: "toolu_old", keep_result: true, noul: 0.99 }];
+    },
+    now: later,
+  });
+  assert.equal(asked, 0);
+  assert.equal(second.dropped, 1);
+  assert.equal(second.newlyDropped, 0);
+  assert.equal(second.body.messages[2].content[0].content, stub);
+
+  // Unlinked later (no asker): the prefix still keeps the same stub.
+  const third = await dropSpentToolResults({
+    body: next,
+    store: second.store,
+    ask: undefined,
+    now: new Date(later.getTime() + 60_000),
+  });
+  assert.equal(third.body.messages[2].content[0].content, stub);
+});
+
+test("a reused tool id with different bytes is not treated as already dropped", async () => {
+  const body = anthropicBody();
+  const first = await dropSpentToolResults({
+    body,
+    store: coldStore(body),
+    ask: async () => [{ id: "toolu_old", keep_result: false, noul: 0.1 }],
+    now: NOW,
+  });
+  const changed = anthropicBody();
+  changed.messages[2].content[0].content = bigResult("toolu_old", 500);
+  const second = await dropSpentToolResults({
+    body: changed,
+    store: first.store,
+    ask: undefined,
+    now: new Date(NOW.getTime() + 60_000),
+  });
+  assert.equal(second.dropped, 0);
 });
